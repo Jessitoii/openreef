@@ -1,0 +1,26 @@
+# =============================================================================
+# OpenReef - Codex config.toml
+# =============================================================================
+
+# ====================== CORE MODEL ======================
+model = "gpt-5.4"                    # veya gpt-5.4-mini, o4-mini vs.
+model_provider = "openai"
+
+# Reasoning kalitesi (Flutter gibi kompleks projelerde yüksek önerilir)
+model_reasoning_effort = "medium"
+model_reasoning_summary = "detailed"
+model_verbosity = "medium"
+
+# ====================== APPROVAL & GÜVENLIK ======================
+
+# workspace-write ekstra ayarları
+[sandbox_workspace_write]
+network_access = true               # Güvenlik için kapalı tut (gerekirse true yap)
+
+# ====================== PROJE DOKÜMANLARI ======================
+project_doc_max_bytes = 65536        # AGENTS.md + docs klasörü için yeterli alan
+project_doc_fallback_filenames = ["AGENTS.md", "README.md"]
+
+# ====================== CONTEXT & HISTORY YÖNETİMİ ======================
+model_auto_compact_token_limit = 32000   # Context dolunca otomatik sıkıştırma (çok önemli!)
+tool_output_token_limit = 8000           # Tool çıktılarını sınırlı tut
