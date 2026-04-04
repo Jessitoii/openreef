@@ -1,13 +1,29 @@
 package com.openreef.app.openreef.litert
 
+import android.content.Context
+import com.google.ai.edge.litertlm.Backend
+import com.google.ai.edge.litertlm.Conversation
+import com.google.ai.edge.litertlm.Engine
+import com.google.ai.edge.litertlm.EngineConfig
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
-import java.util.concurrent.Future
+import java.io.File
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlin.math.max
 
 class LiteRtLmBridge(
     messenger: BinaryMessenger,
@@ -17,13 +33,13 @@ class LiteRtLmBridge(
         MethodChannel(messenger, METHOD_CHANNEL_NAME)
     private val eventChannel =
         EventChannel(messenger, EVENT_CHANNEL_NAME)
-    private val executor: ExecutorService = Executors.newSingleThreadExecutor()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     @Volatile
     private var eventSink: EventChannel.EventSink? = null
 
     @Volatile
-    private var generationTask: Future<*>? = null
+    private var generationJob: Job? = null
 
     init {
         methodChannel.setMethodCallHandler(this)
@@ -58,29 +74,25 @@ class LiteRtLmBridge(
                     null,
                 )
 
-        runCatching { engine.loadModel(path, useNpu) }
-            .onSuccess(result::success)
-            .onFailure { throwable -> result.fromThrowable(throwable) }
+        scope.launch {
+            runCatching { engine.loadModel(path, useNpu) }
+                .onSuccess(result::success)
+                .onFailure { throwable -> result.fromThrowable(throwable) }
+        }
     }
 
     private fun handleGenerateStream(call: MethodCall, result: MethodChannel.Result) {
-        val promptArg =
-            call.argument<String>("context")
+        val prompt =
+            call.argument<String>("prompt")
+                ?: call.argument<String>("context")
                 ?: return result.error(
                     ErrorCodes.INVALID_CONTEXT,
-                    "Missing required argument: context",
-                    null,
-                )
-        val maxTokens =
-            call.argument<Int>("maxTokens")
-                ?: return result.error(
-                    ErrorCodes.INVALID_CONTEXT,
-                    "Missing required argument: maxTokens",
+                    "Missing required argument: prompt",
                     null,
                 )
 
         synchronized(this) {
-            if (generationTask?.isDone == false) {
+            if (generationJob?.isActive == true) {
                 result.error(
                     ErrorCodes.INFERENCE_FAIL,
                     "Generation is already in progress",
@@ -90,25 +102,20 @@ class LiteRtLmBridge(
             }
         }
 
-        var prompt: String? = promptArg
-        val context = prompt ?: ""
-        prompt = null
-
-        val task =
-            executor.submit {
-                runCatching {
-                    engine.startInference(
-                        context = context,
-                        maxTokens = maxTokens,
-                        onToken = { chunk ->
-                            emitEvent(
-                                chunk = chunk,
-                                isFinished = false,
-                                metrics = null,
-                            )
-                        },
-                    )
-                }.onSuccess { metrics ->
+        val job =
+            scope.launch {
+                try {
+                    val metrics =
+                        engine.startInference(
+                            prompt = prompt,
+                            onToken = { chunk ->
+                                emitEvent(
+                                    chunk = chunk,
+                                    isFinished = false,
+                                    metrics = null,
+                                )
+                            },
+                        )
                     emitEvent(
                         chunk = "",
                         isFinished = true,
@@ -118,41 +125,53 @@ class LiteRtLmBridge(
                                 "tps" to metrics.tps,
                             ),
                     )
-                }.onFailure { throwable ->
+                } catch (_: CancellationException) {
+                    // stopGeneration owns explicit cancellation lifecycle.
+                } catch (throwable: Throwable) {
                     eventSink?.error(
                         throwable.toFlutterCode(),
                         throwable.message,
                         null,
                     )
+                } finally {
+                    synchronized(this@LiteRtLmBridge) {
+                        if (generationJob === this@launch) {
+                            generationJob = null
+                        }
+                    }
                 }
             }
 
         synchronized(this) {
-            generationTask = task
+            generationJob = job
         }
         result.success(null)
     }
 
     private fun handleStopGeneration(result: MethodChannel.Result) {
-        runCatching {
-            synchronized(this) {
-                generationTask?.cancel(true)
-                generationTask = null
-            }
-            engine.cancelInference()
-        }.onSuccess(result::success)
-            .onFailure { throwable -> result.fromThrowable(throwable) }
+        scope.launch {
+            runCatching {
+                synchronized(this@LiteRtLmBridge) {
+                    generationJob?.cancel()
+                    generationJob = null
+                }
+                engine.cancelInference()
+            }.onSuccess(result::success)
+                .onFailure { throwable -> result.fromThrowable(throwable) }
+        }
     }
 
     private fun handleUnloadModel(result: MethodChannel.Result) {
-        runCatching {
-            synchronized(this) {
-                generationTask?.cancel(true)
-                generationTask = null
-            }
-            engine.closeModel()
-        }.onSuccess(result::success)
-            .onFailure { throwable -> result.fromThrowable(throwable) }
+        scope.launch {
+            runCatching {
+                synchronized(this@LiteRtLmBridge) {
+                    generationJob?.cancel()
+                    generationJob = null
+                }
+                engine.closeModel()
+            }.onSuccess(result::success)
+                .onFailure { throwable -> result.fromThrowable(throwable) }
+        }
     }
 
     private fun handleGetDeviceStats(result: MethodChannel.Result) {
@@ -191,10 +210,13 @@ class LiteRtLmBridge(
         methodChannel.setMethodCallHandler(null)
         eventChannel.setStreamHandler(null)
         synchronized(this) {
-            generationTask?.cancel(true)
-            generationTask = null
+            generationJob?.cancel()
+            generationJob = null
         }
-        executor.shutdownNow()
+        runBlocking {
+            runCatching { engine.closeModel() }
+        }
+        scope.cancel()
     }
 
     private fun emitEvent(
@@ -240,17 +262,16 @@ class LiteRtLmBridge(
 }
 
 interface LiteRtLmEngine {
-    fun loadModel(path: String, useNpu: Boolean): Boolean
+    suspend fun loadModel(path: String, useNpu: Boolean): Boolean
 
-    fun startInference(
-        context: String,
-        maxTokens: Int,
-        onToken: (String) -> Unit,
+    suspend fun startInference(
+        prompt: String,
+        onToken: suspend (String) -> Unit,
     ): LiteRtGenerationMetrics
 
-    fun cancelInference(): Boolean
+    suspend fun cancelInference(): Boolean
 
-    fun closeModel(): Boolean
+    suspend fun closeModel(): Boolean
 
     fun checkRamAndNpu(): LiteRtDeviceStats
 
@@ -275,67 +296,178 @@ data class LiteRtGenerationMetrics(
 class LiteRtInferenceException(message: String, cause: Throwable? = null) :
     RuntimeException(message, cause)
 
-class NpuNotSupportedException(message: String) : RuntimeException(message)
+class NpuNotSupportedException(message: String, cause: Throwable? = null) :
+    RuntimeException(message, cause)
 
-class UnavailableLiteRtLmEngine : LiteRtLmEngine {
+class LiteRtAndroidLmEngine(
+    private val appContext: Context,
+) : LiteRtLmEngine {
+    private val stateMutex = Mutex()
+
     @Volatile
-    private var isLoaded = false
+    private var engine: Engine? = null
+
+    @Volatile
+    private var conversation: Conversation? = null
 
     @Volatile
     private var lastStats = LiteRtInferenceStats(tps = 0.0, latencyMs = 0)
 
-    override fun loadModel(path: String, useNpu: Boolean): Boolean {
-        if (useNpu) {
-            throw NpuNotSupportedException(
-                "NPU path is not available until the LiteRT JNI engine is wired.",
-            )
-        }
-        if (path.isBlank()) {
-            throw IllegalArgumentException("Model path cannot be blank.")
-        }
-        isLoaded = true
-        return true
-    }
+    override suspend fun loadModel(path: String, useNpu: Boolean): Boolean =
+        withContext(Dispatchers.IO) {
+            val modelFile = File(path)
+            require(path.isNotBlank()) { "Model path cannot be blank." }
+            require(modelFile.exists()) { "Model path does not exist: $path" }
+            require(modelFile.isFile) { "Model path is not a file: $path" }
 
-    override fun startInference(
-        context: String,
-        maxTokens: Int,
-        onToken: (String) -> Unit,
+            stateMutex.withLock {
+                closeLocked()
+
+                val backend =
+                    if (useNpu) {
+                        Backend.NPU(nativeLibraryDir = appContext.applicationInfo.nativeLibraryDir)
+                    } else {
+                        Backend.GPU()
+                    }
+
+                val engineConfig =
+                    EngineConfig(
+                        modelPath = modelFile.absolutePath,
+                        backend = backend,
+                        cacheDir = appContext.cacheDir.absolutePath,
+                    )
+
+                val newEngine = Engine(engineConfig)
+                try {
+                    newEngine.initialize()
+                    val newConversation = newEngine.createConversation()
+                    engine = newEngine
+                    conversation = newConversation
+                    lastStats = LiteRtInferenceStats(tps = 0.0, latencyMs = 0)
+                    true
+                } catch (throwable: Throwable) {
+                    runCatching { newEngine.close() }
+                    if (useNpu) {
+                        throw NpuNotSupportedException(
+                            "Failed to initialize LiteRT-LM with NPU backend.",
+                            throwable,
+                        )
+                    }
+                    throw LiteRtInferenceException(
+                        "Failed to initialize LiteRT-LM engine.",
+                        throwable,
+                    )
+                }
+            }
+        }
+
+    override suspend fun startInference(
+        prompt: String,
+        onToken: suspend (String) -> Unit,
     ): LiteRtGenerationMetrics {
-        if (!isLoaded) {
-            throw IllegalStateException("Model is not loaded.")
-        }
-        if (context.isBlank()) {
-            throw IllegalArgumentException("Context cannot be blank.")
-        }
-        if (maxTokens <= 0) {
-            throw IllegalArgumentException("maxTokens must be greater than zero.")
-        }
+        require(prompt.isNotBlank()) { "Prompt cannot be blank." }
 
-        val metrics = LiteRtGenerationMetrics(totalTokens = 0, tps = 0.0)
-        lastStats = LiteRtInferenceStats(tps = metrics.tps, latencyMs = 0)
-        return metrics
+        val activeConversation =
+            stateMutex.withLock {
+                conversation ?: throw IllegalStateException("Model is not loaded.")
+            }
+
+        return try {
+            withContext(Dispatchers.IO) {
+                val startedAt = System.nanoTime()
+                var totalTokens = 0
+
+                activeConversation.sendMessageAsync(prompt).collect { chunk ->
+                    val text = chunk.toString()
+                    if (text.isNotEmpty()) {
+                        totalTokens += estimateTokenCount(text)
+                        onToken(text)
+                    }
+                }
+
+                val elapsedNanos = max(1L, System.nanoTime() - startedAt)
+                val elapsedSeconds = elapsedNanos / 1_000_000_000.0
+                val tps = if (totalTokens == 0) 0.0 else totalTokens / elapsedSeconds
+                val latencyMs = (elapsedNanos / 1_000_000L).toInt()
+                val metrics = LiteRtGenerationMetrics(totalTokens = totalTokens, tps = tps)
+
+                stateMutex.withLock {
+                    lastStats = LiteRtInferenceStats(tps = tps, latencyMs = latencyMs)
+                }
+
+                metrics
+            }
+        } catch (cancellation: CancellationException) {
+            synchronized(this) {
+                runBlocking {
+                    runCatching { cancelInference() }
+                }
+            }
+            throw cancellation
+        } catch (throwable: Throwable) {
+            throw LiteRtInferenceException("LiteRT-LM generation failed.", throwable)
+        }
     }
 
-    override fun cancelInference(): Boolean = true
+    override suspend fun cancelInference(): Boolean =
+        withContext(Dispatchers.IO) {
+            stateMutex.withLock {
+                val activeEngine = engine ?: return@withContext true
+                closeConversationLocked()
+                conversation = activeEngine.createConversation()
+                true
+            }
+        }
 
-    override fun closeModel(): Boolean {
-        isLoaded = false
-        lastStats = LiteRtInferenceStats(tps = 0.0, latencyMs = 0)
-        return true
+    override suspend fun closeModel(): Boolean =
+        withContext(Dispatchers.IO) {
+            stateMutex.withLock {
+                closeLocked()
+                lastStats = LiteRtInferenceStats(tps = 0.0, latencyMs = 0)
+                true
+            }
+        }
+
+    override fun checkRamAndNpu(): LiteRtDeviceStats {
+        val runtime = Runtime.getRuntime()
+        val freeRam = runtime.maxMemory().toDouble() - (runtime.totalMemory() - runtime.freeMemory())
+        val nativeLibraryDir = appContext.applicationInfo.nativeLibraryDir
+        val npuReady = !nativeLibraryDir.isNullOrBlank() && File(nativeLibraryDir).exists()
+        return LiteRtDeviceStats(freeRam = freeRam, npuReady = npuReady)
     }
-
-    override fun checkRamAndNpu(): LiteRtDeviceStats =
-        LiteRtDeviceStats(freeRam = Runtime.getRuntime().freeMemory().toDouble(), npuReady = false)
 
     override fun getLastRunStats(): LiteRtInferenceStats = lastStats
+
+    private fun closeLocked() {
+        closeConversationLocked()
+        closeEngineLocked()
+    }
+
+    private fun closeConversationLocked() {
+        runCatching { conversation?.close() }
+        conversation = null
+    }
+
+    private fun closeEngineLocked() {
+        runCatching { engine?.close() }
+        engine = null
+    }
+
+    private fun estimateTokenCount(text: String): Int {
+        val pieces = text.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        return if (pieces.isEmpty()) 1 else pieces.size
+    }
 }
 
 class LiteRtLmBridgePlugin : FlutterPlugin {
     private var bridge: LiteRtLmBridge? = null
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
-        bridge = LiteRtLmBridge(binding.binaryMessenger, UnavailableLiteRtLmEngine())
+        bridge =
+            LiteRtLmBridge(
+                binding.binaryMessenger,
+                LiteRtAndroidLmEngine(binding.applicationContext),
+            )
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {

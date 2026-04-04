@@ -4,7 +4,7 @@ import android.content.Context
 import android.media.AudioManager
 import android.os.BatteryManager
 import com.openreef.app.openreef.litert.LiteRtLmBridge
-import com.openreef.app.openreef.litert.UnavailableLiteRtLmEngine
+import com.openreef.app.openreef.litert.LiteRtAndroidLmEngine
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -19,7 +19,7 @@ class MainActivity : FlutterActivity() {
             liteRtBridge =
                 LiteRtLmBridge(
                     messenger = flutterEngine.dartExecutor.binaryMessenger,
-                    engine = UnavailableLiteRtLmEngine(),
+                    engine = LiteRtAndroidLmEngine(applicationContext),
                 )
         }
         if (nativeToolsChannel == null) {
