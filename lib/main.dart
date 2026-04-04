@@ -63,7 +63,16 @@ class _MyAppState extends State<MyApp> {
         _modelReady = true;
       });
     } catch (error) {
+      await widget.bootstrap.modelDownloadController.recoverFromCorruptInstalledModel(
+        installedModel,
+      );
       widget.bootstrap.modelDownloadController.setInitializationError(error);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _modelReady = false;
+      });
     }
   }
 
@@ -155,8 +164,16 @@ class OpenReefBootstrap {
     var modelReady = false;
     final installedModel = modelDownloadController.state.installedModel;
     if (installedModel != null) {
-      await initializeLiteRtBridge(liteRtBridge, path: installedModel.path);
-      modelReady = true;
+      try {
+        await initializeLiteRtBridge(liteRtBridge, path: installedModel.path);
+        modelReady = true;
+      } catch (error) {
+        await modelDownloadController.recoverFromCorruptInstalledModel(
+          installedModel,
+        );
+        modelDownloadController.setInitializationError(error);
+        modelReady = false;
+      }
     }
 
     final contextAssembler = ContextAssembler(

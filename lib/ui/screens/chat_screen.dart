@@ -3,9 +3,18 @@ import 'package:openreef/ui/app_theme.dart';
 import 'package:openreef/ui/chat_session_port.dart';
 
 class ChatScreen extends StatefulWidget {
-  const ChatScreen({required this.chatSession, super.key});
+  const ChatScreen({
+    required this.chatSession,
+    required this.sessionTitle,
+    required this.lastModified,
+    required this.onSendMessage,
+    super.key,
+  });
 
   final ChatSessionPort chatSession;
+  final String sessionTitle;
+  final DateTime lastModified;
+  final Future<void> Function(String message) onSendMessage;
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -45,12 +54,16 @@ class _ChatScreenState extends State<ChatScreen> {
         }
 
         return Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _StartupHeader(status: widget.chatSession.status),
-              const SizedBox(height: 12),
+              _SessionHeader(
+                status: widget.chatSession.status,
+                sessionTitle: widget.sessionTitle,
+                lastModified: widget.lastModified,
+              ),
+              const SizedBox(height: 8),
               Expanded(
                 child: Card(
                   clipBehavior: Clip.antiAlias,
@@ -84,7 +97,7 @@ class _ChatScreenState extends State<ChatScreen> {
                               ),
                               const Spacer(),
                               Text(
-                                'session: main',
+                                'session: ${widget.sessionTitle}',
                                 style: theme.textTheme.labelMedium?.copyWith(
                                   color: theme.colorScheme.onSurfaceVariant,
                                 ),
@@ -293,140 +306,113 @@ class _ChatScreenState extends State<ChatScreen> {
     }
 
     _composerController.clear();
-    await widget.chatSession.sendMessage(text);
+    await widget.onSendMessage(text);
   }
 }
 
-class _StartupHeader extends StatelessWidget {
-  const _StartupHeader({required this.status});
+class _SessionHeader extends StatelessWidget {
+  const _SessionHeader({
+    required this.status,
+    required this.sessionTitle,
+    required this.lastModified,
+  });
 
   final ChatSessionStatus status;
+  final String sessionTitle;
+  final DateTime lastModified;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final lines = <String>[
-      'BOOT> reef.ui.shell :: online',
-      'BOOT> agent_loop_adapter :: live',
-      'BOOT> terminal_renderer :: streaming-ready',
-    ];
-
-    return TweenAnimationBuilder<double>(
-      tween: Tween<double>(begin: 0, end: 1),
-      duration: const Duration(milliseconds: 700),
-      curve: Curves.easeOutCubic,
-      builder: (context, value, child) {
-        return Transform.translate(
-          offset: Offset(0, (1 - value) * 16),
-          child: Opacity(
-            opacity: value,
-            child: Card(
-              clipBehavior: Clip.antiAlias,
-              child: Stack(
-                children: [
-                  Positioned.fill(
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: [
-                            ReefPalette.coral.withValues(alpha: 0.10),
-                            Colors.transparent,
-                            ReefPalette.darkSuccess.withValues(alpha: 0.08),
-                          ],
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                        ),
-                      ),
-                    ),
-                  ),
-                  Positioned.fill(
-                    child: IgnorePointer(
-                      child: CustomPaint(painter: _ScanlinePainter()),
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Text(
-                              '> OPENREEF_TERMINAL',
-                              style: theme.textTheme.titleLarge?.copyWith(
-                                fontWeight: FontWeight.w800,
-                                color: theme.colorScheme.primary,
-                                letterSpacing: 0.6,
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 6,
-                              ),
-                              decoration: BoxDecoration(
-                                borderRadius: BorderRadius.circular(999),
-                                border: Border.all(
-                                  color: ReefPalette.darkSuccess.withValues(
-                                    alpha: 0.6,
-                                  ),
-                                ),
-                                color: ReefPalette.darkSuccess.withValues(
-                                  alpha: 0.10,
-                                ),
-                              ),
-                              child: Text(
-                                'root@device',
-                                style: theme.textTheme.labelSmall?.copyWith(
-                                  color: ReefPalette.darkSuccess,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 10),
-                        ...lines.map(
-                          (line) => Padding(
-                            padding: const EdgeInsets.only(bottom: 4),
-                            child: Text(
-                              line,
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                color: theme.colorScheme.onSurfaceVariant,
-                                height: 1.45,
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 14),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: [
-                            _HeaderChip(
-                              label: 'model: offline',
-                              accent: theme.colorScheme.primary,
-                            ),
-                            _HeaderChip(
-                              label: 'voice: local',
-                              accent: ReefPalette.darkSuccess,
-                            ),
-                            _HeaderChip(
-                              label:
-                                  'status: ${_statusLabel(status).toLowerCase()}',
-                              accent: theme.colorScheme.onSurfaceVariant,
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [
+                    ReefPalette.coral.withValues(alpha: 0.10),
+                    Colors.transparent,
+                    ReefPalette.darkSuccess.withValues(alpha: 0.08),
+                  ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
               ),
             ),
           ),
-        );
-      },
+          Positioned.fill(
+            child: IgnorePointer(
+              child: CustomPaint(painter: _ScanlinePainter()),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '> $sessionTitle',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w800,
+                          color: theme.colorScheme.primary,
+                          letterSpacing: 0.4,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(999),
+                        border: Border.all(
+                          color: ReefPalette.darkSuccess.withValues(alpha: 0.6),
+                        ),
+                        color: ReefPalette.darkSuccess.withValues(alpha: 0.10),
+                      ),
+                      child: Text(
+                        _statusLabel(status).toLowerCase(),
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: ReefPalette.darkSuccess,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _HeaderChip(
+                      label: 'boot: online',
+                      accent: theme.colorScheme.primary,
+                    ),
+                    _HeaderChip(
+                      label: 'voice: local',
+                      accent: ReefPalette.darkSuccess,
+                    ),
+                    _HeaderChip(
+                      label: 'updated: ${_formatStamp(lastModified)}',
+                      accent: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -659,4 +645,12 @@ String _formatTimestamp(DateTime timestamp) {
   final hour = timestamp.hour.toString().padLeft(2, '0');
   final minute = timestamp.minute.toString().padLeft(2, '0');
   return '$hour:$minute';
+}
+
+String _formatStamp(DateTime timestamp) {
+  final month = timestamp.month.toString().padLeft(2, '0');
+  final day = timestamp.day.toString().padLeft(2, '0');
+  final hour = timestamp.hour.toString().padLeft(2, '0');
+  final minute = timestamp.minute.toString().padLeft(2, '0');
+  return '$month/$day $hour:$minute';
 }

@@ -1,18 +1,26 @@
 import 'package:flutter/foundation.dart';
 import 'package:openreef/ui/chat_session_port.dart';
 
-class MockChatSession extends ChangeNotifier implements ChatSessionPort {
-  MockChatSession()
-      : _messages = <ChatTranscriptMessage>[
-          ChatTranscriptMessage(
-            id: 'boot-1',
-            sender: ChatMessageSender.system,
-            text:
-                'OPENREEF READY\nOffline agent shell initialized. AgentLoop bridge is mocked for UI work.',
-            timestamp: DateTime.now(),
-          ),
-        ],
-        _activities = const <SubAgentActivity>[];
+class MockChatSession extends ChangeNotifier
+    implements ChatSessionPort, ChatSessionFactory {
+  MockChatSession({
+    String? sessionId,
+    List<ChatTranscriptMessage> initialMessages = const <ChatTranscriptMessage>[],
+  }) : sessionId = sessionId ?? 'mock:main',
+       _messages = initialMessages.isEmpty
+           ? <ChatTranscriptMessage>[
+               ChatTranscriptMessage(
+                 id: 'boot-1',
+                 sender: ChatMessageSender.system,
+                 text:
+                     'OPENREEF READY\nOffline agent shell initialized. AgentLoop bridge is mocked for UI work.',
+                 timestamp: DateTime.now(),
+               ),
+             ]
+           : List<ChatTranscriptMessage>.from(initialMessages),
+       _activities = const <SubAgentActivity>[];
+
+  final String sessionId;
 
   final List<ChatTranscriptMessage> _messages;
   List<SubAgentActivity> _activities;
@@ -257,5 +265,16 @@ class MockChatSession extends ChangeNotifier implements ChatSessionPort {
   void dispose() {
     _isDisposed = true;
     super.dispose();
+  }
+
+  @override
+  ChatSessionPort createSession({
+    required String sessionId,
+    List<ChatTranscriptMessage> initialMessages = const <ChatTranscriptMessage>[],
+  }) {
+    return MockChatSession(
+      sessionId: sessionId,
+      initialMessages: initialMessages,
+    );
   }
 }

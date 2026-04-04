@@ -3,20 +3,27 @@ import 'package:openreef/agent/agent_loop.dart';
 import 'package:openreef/agent/agent_models.dart';
 import 'package:openreef/ui/chat_session_port.dart';
 
-class AgentLoopChatSession extends ChangeNotifier implements ChatSessionPort {
+class AgentLoopChatSession extends ChangeNotifier
+    implements ChatSessionPort, ChatSessionFactory {
   AgentLoopChatSession({
     required AgentLoop agentLoop,
     this.sessionKey = 'agent:main',
+    List<ChatTranscriptMessage> initialMessages = const <ChatTranscriptMessage>[],
   }) : _agentLoop = agentLoop,
-       _messages = <ChatTranscriptMessage>[
-         ChatTranscriptMessage(
-           id: 'boot-1',
-           sender: ChatMessageSender.system,
-           text:
-               'OPENREEF READY\nOffline agent shell initialized. AgentLoop bridge is live.',
-           timestamp: DateTime.now(),
-         ),
-       ];
+       _messages = initialMessages.isEmpty
+           ? <ChatTranscriptMessage>[
+               ChatTranscriptMessage(
+                 id: 'boot-1',
+                 sender: ChatMessageSender.system,
+                 text:
+                     'OPENREEF READY\nOffline agent shell initialized. AgentLoop bridge is live.',
+                 timestamp: DateTime.now(),
+               ),
+             ]
+           : List<ChatTranscriptMessage>.from(initialMessages) {
+    _conversationHistory.addAll(_buildConversationHistory(_messages));
+    _nextId = _deriveNextId(_messages);
+  }
 
   final AgentLoop _agentLoop;
   final String sessionKey;
@@ -193,5 +200,64 @@ class AgentLoopChatSession extends ChangeNotifier implements ChatSessionPort {
   void dispose() {
     _isDisposed = true;
     super.dispose();
+  }
+
+  @override
+  ChatSessionPort createSession({
+    required String sessionId,
+    List<ChatTranscriptMessage> initialMessages = const <ChatTranscriptMessage>[],
+  }) {
+    return AgentLoopChatSession(
+      agentLoop: _agentLoop,
+      sessionKey: sessionId,
+      initialMessages: initialMessages,
+    );
+  }
+
+  List<AgentMessage> _buildConversationHistory(
+    List<ChatTranscriptMessage> messages,
+  ) {
+    final history = <AgentMessage>[];
+    var turnNumber = 0;
+    for (final message in messages) {
+      if (message.sender == ChatMessageSender.user) {
+        turnNumber += 1;
+        history.add(
+          AgentMessage(
+            role: AgentMessageRole.user,
+            content: message.text,
+            turnNumber: turnNumber,
+          ),
+        );
+        continue;
+      }
+
+      if (message.sender == ChatMessageSender.assistant) {
+        final assistantTurn = turnNumber == 0 ? 1 : turnNumber;
+        history.add(
+          AgentMessage(
+            role: AgentMessageRole.assistant,
+            content: message.text,
+            turnNumber: assistantTurn,
+          ),
+        );
+      }
+    }
+    return history;
+  }
+
+  int _deriveNextId(List<ChatTranscriptMessage> messages) {
+    var highest = -1;
+    for (final message in messages) {
+      final id = message.id;
+      if (!id.startsWith('msg-')) {
+        continue;
+      }
+      final parsed = int.tryParse(id.substring(4));
+      if (parsed != null && parsed > highest) {
+        highest = parsed;
+      }
+    }
+    return highest + 1;
   }
 }

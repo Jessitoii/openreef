@@ -189,6 +189,26 @@ class ModelDownloadController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> recoverFromCorruptInstalledModel(
+    InstalledModelRecord installedModel,
+  ) async {
+    await _storage.clearInstalled(installedModel.descriptor);
+    await _storage.clearPartial(installedModel.descriptor);
+
+    _state = _state.copyWith(
+      status: ModelDownloadStatus.idle,
+      clearInstalledModel: true,
+      selectedModel: installedModel.descriptor,
+      downloadedBytes: 0,
+      totalBytes: 0,
+      bytesPerSecond: 0,
+      clearErrorMessage: true,
+    );
+    notifyListeners();
+
+    await refreshInstalledModel();
+  }
+
   ModelDescriptor _pickRecommendedModel(LiteRtDeviceStats? stats) {
     if (stats == null) {
       return _registry.models.first;

@@ -1,49 +1,312 @@
 import 'package:flutter/material.dart';
+import 'package:openreef/memory/chat_session_record.dart';
+import 'package:openreef/memory/chat_session_repository.dart';
+import 'package:openreef/models/model_download_controller.dart';
 import 'package:openreef/settings/settings_controller.dart';
 import 'package:openreef/ui/chat_session_port.dart';
+import 'package:openreef/ui/chat_workspace_controller.dart';
 import 'package:openreef/ui/screens/chat_screen.dart';
+import 'package:openreef/ui/screens/mcp_connections_screen.dart';
+import 'package:openreef/ui/screens/model_download_screen.dart';
 import 'package:openreef/ui/screens/settings_screen.dart';
+import 'package:openreef/ui/screens/skills_screen.dart';
 
 class AppShell extends StatefulWidget {
   const AppShell({
     required this.settingsController,
     required this.chatSession,
+    required this.modelDownloadController,
+    required this.onModelReady,
+    this.chatSessionRepository,
     super.key,
   });
 
   final SettingsController settingsController;
   final ChatSessionPort chatSession;
+  final ModelDownloadController modelDownloadController;
+  final Future<void> Function() onModelReady;
+  final ChatSessionRepository? chatSessionRepository;
 
   @override
   State<AppShell> createState() => _AppShellState();
 }
 
 class _AppShellState extends State<AppShell> {
-  int _selectedIndex = 0;
+  late final ChatWorkspaceController _workspaceController;
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+
+  @override
+  void initState() {
+    super.initState();
+    _workspaceController = ChatWorkspaceController(
+      prototypeSession: widget.chatSession,
+      repository: widget.chatSessionRepository ?? ChatSessionRepository(),
+    );
+    _workspaceController.initialize();
+  }
+
+  @override
+  void dispose() {
+    _workspaceController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final screens = <Widget>[
-      ChatScreen(chatSession: widget.chatSession),
-      SettingsScreen(settingsController: widget.settingsController),
-    ];
+    return AnimatedBuilder(
+      animation: _workspaceController,
+      builder: (context, child) {
+        final activeSession = _workspaceController.activeSession;
+        return Scaffold(
+          key: _scaffoldKey,
+          drawer: Drawer(
+            child: SafeArea(
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: FilledButton.icon(
+                        key: const Key('new-chat-button'),
+                        onPressed: () async {
+                          Navigator.of(context).pop();
+                          await _workspaceController.createNewSession();
+                        },
+                        icon: const Icon(Icons.add_comment_outlined),
+                        label: const Text('New Chat'),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: ListView(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      children: [
+                        const _DrawerSectionLabel(label: 'Recent Chats'),
+                        for (final session in _workspaceController.recentSessions)
+                          _RecentChatTile(
+                            session: session,
+                            selected: activeSession?.record.id == session.id,
+                            onTap: () async {
+                              Navigator.of(context).pop();
+                              await _workspaceController.switchToSession(
+                                session.id,
+                              );
+                            },
+                          ),
+                        const SizedBox(height: 12),
+                        const _DrawerSectionLabel(label: 'Navigate'),
+                        ListTile(
+                          key: const Key('drawer-models'),
+                          leading: const Icon(Icons.memory_outlined),
+                          title: const Text('Models'),
+                          onTap: () async {
+                            Navigator.of(context).pop();
+                            await Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (context) => ModelDownloadScreen(
+                                  controller: widget.modelDownloadController,
+                                  onModelReady: widget.onModelReady,
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                        ListTile(
+                          key: const Key('drawer-skills'),
+                          leading: const Icon(Icons.auto_awesome_outlined),
+                          title: const Text('Skills'),
+                          selected:
+                              _workspaceController.destination ==
+                              AppShellDestination.skills,
+                          onTap: () {
+                            Navigator.of(context).pop();
+                            _workspaceController.showDestination(
+                              AppShellDestination.skills,
+                            );
+                          },
+                        ),
+                        ListTile(
+                          key: const Key('drawer-mcp'),
+                          leading: const Icon(Icons.hub_outlined),
+                          title: const Text('MCP Connections'),
+                          selected:
+                              _workspaceController.destination ==
+                              AppShellDestination.mcp,
+                          onTap: () {
+                            Navigator.of(context).pop();
+                            _workspaceController.showDestination(
+                              AppShellDestination.mcp,
+                            );
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        key: const Key('drawer-settings'),
+                        onPressed: () {
+                          Navigator.of(context).pop();
+                          _workspaceController.showDestination(
+                            AppShellDestination.settings,
+                          );
+                        },
+                        icon: const Icon(Icons.settings_outlined),
+                        label: const Text('Settings'),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          body: SafeArea(
+            child: Column(
+              children: [
+                _ShellTopBar(
+                  title: _titleForDestination(_workspaceController.destination),
+                  onMenuPressed: () => _scaffoldKey.currentState?.openDrawer(),
+                  onChatPressed: activeSession == null
+                      ? null
+                      : () => _workspaceController.showDestination(
+                            AppShellDestination.chat,
+                          ),
+                ),
+                Expanded(
+                  child: _buildBody(activeSession),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
 
-    return Scaffold(
-      body: SafeArea(
-        child: IndexedStack(index: _selectedIndex, children: screens),
-      ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _selectedIndex,
-        destinations: const <NavigationDestination>[
-          NavigationDestination(icon: Icon(Icons.terminal), label: 'Chat'),
-          NavigationDestination(icon: Icon(Icons.tune), label: 'Settings'),
+  Widget _buildBody(ChatWorkspaceSession? activeSession) {
+    switch (_workspaceController.destination) {
+      case AppShellDestination.chat:
+        if (activeSession == null) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        return ChatScreen(
+          chatSession: activeSession.chatSession,
+          sessionTitle: activeSession.record.title,
+          lastModified: activeSession.record.lastModified,
+          onSendMessage: _workspaceController.sendMessage,
+        );
+      case AppShellDestination.settings:
+        return SettingsScreen(settingsController: widget.settingsController);
+      case AppShellDestination.skills:
+        return const SkillsScreen();
+      case AppShellDestination.mcp:
+        return const McpConnectionsScreen();
+    }
+  }
+
+  String _titleForDestination(AppShellDestination destination) {
+    switch (destination) {
+      case AppShellDestination.chat:
+        return 'OpenReef';
+      case AppShellDestination.settings:
+        return 'Settings';
+      case AppShellDestination.skills:
+        return 'Skills';
+      case AppShellDestination.mcp:
+        return 'MCP Connections';
+    }
+  }
+}
+
+class _ShellTopBar extends StatelessWidget {
+  const _ShellTopBar({
+    required this.title,
+    required this.onMenuPressed,
+    required this.onChatPressed,
+  });
+
+  final String title;
+  final VoidCallback onMenuPressed;
+  final VoidCallback? onChatPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 8, 12, 4),
+      child: Row(
+        children: [
+          IconButton(
+            key: const Key('open-drawer-button'),
+            onPressed: onMenuPressed,
+            icon: const Icon(Icons.menu),
+          ),
+          Expanded(
+            child: Text(
+              title,
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: onChatPressed,
+            child: const Text('Chat'),
+          ),
         ],
-        onDestinationSelected: (index) {
-          setState(() {
-            _selectedIndex = index;
-          });
-        },
       ),
+    );
+  }
+}
+
+class _DrawerSectionLabel extends StatelessWidget {
+  const _DrawerSectionLabel({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
+      child: Text(
+        label.toUpperCase(),
+        style: Theme.of(context).textTheme.labelLarge,
+      ),
+    );
+  }
+}
+
+class _RecentChatTile extends StatelessWidget {
+  const _RecentChatTile({
+    required this.session,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final ChatSessionRecord session;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final subtitle =
+        '${session.lastModified.month.toString().padLeft(2, '0')}/${session.lastModified.day.toString().padLeft(2, '0')} ${session.lastModified.hour.toString().padLeft(2, '0')}:${session.lastModified.minute.toString().padLeft(2, '0')}';
+    return ListTile(
+      selected: selected,
+      selectedTileColor: theme.colorScheme.primary.withValues(alpha: 0.08),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      title: Text(
+        session.title,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      subtitle: Text(subtitle),
+      onTap: onTap,
     );
   }
 }

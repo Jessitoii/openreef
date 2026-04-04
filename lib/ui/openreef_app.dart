@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:openreef/memory/chat_session_repository.dart';
 import 'package:openreef/models/model_download_controller.dart';
 import 'package:openreef/settings/settings_controller.dart';
 import 'package:openreef/ui/app_shell.dart';
@@ -13,6 +14,7 @@ class OpenReefApp extends StatelessWidget {
     required this.modelDownloadController,
     required this.modelReady,
     required this.onModelReady,
+    this.chatSessionRepository,
     super.key,
   });
 
@@ -21,6 +23,7 @@ class OpenReefApp extends StatelessWidget {
   final ModelDownloadController modelDownloadController;
   final bool modelReady;
   final Future<void> Function() onModelReady;
+  final ChatSessionRepository? chatSessionRepository;
 
   @override
   Widget build(BuildContext context) {
@@ -37,6 +40,9 @@ class OpenReefApp extends StatelessWidget {
               ? AppShell(
                   settingsController: settingsController,
                   chatSession: chatSession,
+                  modelDownloadController: modelDownloadController,
+                  onModelReady: onModelReady,
+                  chatSessionRepository: chatSessionRepository,
                 )
               : ModelDownloadScreen(
                   controller: modelDownloadController,

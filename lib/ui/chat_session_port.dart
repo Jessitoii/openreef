@@ -87,3 +87,10 @@ abstract class ChatSessionPort extends Listenable {
 
   Future<void> sendMessage(String message);
 }
+
+abstract class ChatSessionFactory {
+  ChatSessionPort createSession({
+    required String sessionId,
+    List<ChatTranscriptMessage> initialMessages = const <ChatTranscriptMessage>[],
+  });
+}

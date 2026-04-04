@@ -322,40 +322,28 @@ class LiteRtAndroidLmEngine(
 
             stateMutex.withLock {
                 closeLocked()
-
-                val backend =
-                    if (useNpu) {
-                        Backend.NPU(nativeLibraryDir = appContext.applicationInfo.nativeLibraryDir)
-                    } else {
-                        Backend.GPU()
-                    }
-
-                val engineConfig =
-                    EngineConfig(
+                if (useNpu) {
+                    return@withLock initializeEngine(
                         modelPath = modelFile.absolutePath,
-                        backend = backend,
-                        cacheDir = appContext.cacheDir.absolutePath,
+                        backend = Backend.NPU(
+                            nativeLibraryDir = appContext.applicationInfo.nativeLibraryDir,
+                        ),
+                        npuMode = true,
                     )
+                }
 
-                val newEngine = Engine(engineConfig)
                 try {
-                    newEngine.initialize()
-                    val newConversation = newEngine.createConversation()
-                    engine = newEngine
-                    conversation = newConversation
-                    lastStats = LiteRtInferenceStats(tps = 0.0, latencyMs = 0)
-                    true
-                } catch (throwable: Throwable) {
-                    runCatching { newEngine.close() }
-                    if (useNpu) {
-                        throw NpuNotSupportedException(
-                            "Failed to initialize LiteRT-LM with NPU backend.",
-                            throwable,
-                        )
-                    }
-                    throw LiteRtInferenceException(
-                        "Failed to initialize LiteRT-LM engine.",
-                        throwable,
+                    initializeEngine(
+                        modelPath = modelFile.absolutePath,
+                        backend = Backend.GPU(),
+                        npuMode = false,
+                    )
+                } catch (_: Throwable) {
+                    closeLocked()
+                    initializeEngine(
+                        modelPath = modelFile.absolutePath,
+                        backend = Backend.CPU(),
+                        npuMode = false,
                     )
                 }
             }
@@ -451,6 +439,41 @@ class LiteRtAndroidLmEngine(
     private fun closeEngineLocked() {
         runCatching { engine?.close() }
         engine = null
+    }
+
+    private fun initializeEngine(
+        modelPath: String,
+        backend: Backend,
+        npuMode: Boolean,
+    ): Boolean {
+        val engineConfig =
+            EngineConfig(
+                modelPath = modelPath,
+                backend = backend,
+                cacheDir = appContext.cacheDir.absolutePath,
+            )
+
+        val newEngine = Engine(engineConfig)
+        try {
+            newEngine.initialize()
+            val newConversation = newEngine.createConversation()
+            engine = newEngine
+            conversation = newConversation
+            lastStats = LiteRtInferenceStats(tps = 0.0, latencyMs = 0)
+            return true
+        } catch (throwable: Throwable) {
+            runCatching { newEngine.close() }
+            if (npuMode) {
+                throw NpuNotSupportedException(
+                    "Failed to initialize LiteRT-LM with NPU backend.",
+                    throwable,
+                )
+            }
+            throw LiteRtInferenceException(
+                "Failed to initialize LiteRT-LM engine.",
+                throwable,
+            )
+        }
     }
 
     private fun estimateTokenCount(text: String): Int {
