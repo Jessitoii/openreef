@@ -1,5 +1,6 @@
 import 'package:openreef/agent/agent_models.dart';
 import 'package:openreef/agent/mailbox.dart';
+import 'package:openreef/agent/subagent_runner.dart';
 
 class ToolDefinition {
   const ToolDefinition({
@@ -45,7 +46,14 @@ class ToolRouter {
     required Future<bool> Function(ToolCall call) confirmToolCall,
   })  : _catalog = catalog,
         _mailbox = mailbox,
-        _confirmToolCall = confirmToolCall;
+        _confirmToolCall = confirmToolCall {
+    SubAgentRootBridgeRegistry.registerToolExecutor(
+      (call, {required sessionKey}) => dispatch(
+        call,
+        sessionKey: sessionKey,
+      ),
+    );
+  }
 
   final ToolCatalog _catalog;
   final AgentMailbox _mailbox;

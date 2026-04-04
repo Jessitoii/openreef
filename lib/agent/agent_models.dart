@@ -123,6 +123,32 @@ class ToolResult {
   bool get isRejected => status == ToolResultStatus.rejected;
 
   String toContextString() => content;
+
+  factory ToolResult.fromMap(Map<String, Object?> map) {
+    final rawMetadata = map['metadata'];
+    return ToolResult(
+      status: map['status'] == 'rejected'
+          ? ToolResultStatus.rejected
+          : ToolResultStatus.success,
+      content: map['content'] as String? ?? '',
+      metadata: rawMetadata is Map<String, Object?>
+          ? rawMetadata
+          : rawMetadata is Map
+              ? Map<String, Object?>.from(rawMetadata)
+              : const <String, Object?>{},
+    );
+  }
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      'status': switch (status) {
+        ToolResultStatus.success => 'success',
+        ToolResultStatus.rejected => 'rejected',
+      },
+      'content': content,
+      'metadata': metadata,
+    };
+  }
 }
 
 class AgentResponse {

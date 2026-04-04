@@ -1,6 +1,8 @@
 import 'dart:async';
 
+import 'package:flutter/services.dart';
 import 'package:openreef/agent/agent_models.dart';
+import 'package:openreef/agent/subagent_runner.dart';
 
 enum MailboxDecisionKind {
   approved,
@@ -38,11 +40,27 @@ class DispatchRequest {
     required this.parentSessionKey,
     required this.task,
     this.preferredModel,
+    this.sessionKey,
   });
 
   final String parentSessionKey;
   final String task;
   final String? preferredModel;
+  final String? sessionKey;
+
+  DispatchRequest copyWith({
+    String? parentSessionKey,
+    String? task,
+    String? preferredModel,
+    String? sessionKey,
+  }) {
+    return DispatchRequest(
+      parentSessionKey: parentSessionKey ?? this.parentSessionKey,
+      task: task ?? this.task,
+      preferredModel: preferredModel ?? this.preferredModel,
+      sessionKey: sessionKey ?? this.sessionKey,
+    );
+  }
 }
 
 class DispatchResult {
@@ -67,15 +85,19 @@ class MailboxDispatchConfig {
     this.maxDepth = 2,
     this.maxChildrenPerAgent = 3,
     this.maxConcurrentSubAgents = 2,
+    this.subAgentTimeout = const Duration(minutes: 5),
   });
 
   final int maxDepth;
   final int maxChildrenPerAgent;
   final int maxConcurrentSubAgents;
+  final Duration subAgentTimeout;
 }
 
 abstract class SubAgentDispatcher {
   Future<DispatchResult> dispatch(DispatchRequest request);
+
+  Future<void> dispose() async {}
 }
 
 class AgentMailbox {
@@ -84,14 +106,21 @@ class AgentMailbox {
     MailboxDispatchConfig config = const MailboxDispatchConfig(),
     SubAgentDispatcher? subAgentDispatcher,
   })  : _idGenerator = idGenerator ?? _defaultIdGenerator,
-        _config = config,
-        _subAgentDispatcher = subAgentDispatcher;
+        _config = config {
+    _subAgentDispatcher =
+        subAgentDispatcher ??
+        _DefaultSubAgentDispatcher(
+          timeout: _config.subAgentTimeout,
+          onCompleted: completeDispatch,
+        );
+  }
 
   static int _requestSeed = 0;
+  static int _sessionSeed = 0;
 
   final String Function() _idGenerator;
   final MailboxDispatchConfig _config;
-  final SubAgentDispatcher? _subAgentDispatcher;
+  late final SubAgentDispatcher _subAgentDispatcher;
   final Map<String, Completer<MailboxDecision>> _pending =
       <String, Completer<MailboxDecision>>{};
   final StreamController<ApprovalRequest> _approvalController =
@@ -102,6 +131,7 @@ class AgentMailbox {
   Stream<ApprovalRequest> get approvalRequests => _approvalController.stream;
 
   int get pendingApprovals => _pending.length;
+  int get activeSubAgents => _activeSessions.length;
 
   Future<MailboxDecision> requestApproval({
     required String workerSessionKey,
@@ -142,19 +172,28 @@ class AgentMailbox {
       return DispatchResult.rejected(reason: validationError);
     }
 
-    if (_subAgentDispatcher == null) {
-      return const DispatchResult.rejected(reason: 'dispatcher_unavailable');
+    final sessionKey = request.sessionKey ?? _nextSessionKey(request.parentSessionKey);
+    _reserveDispatch(
+      parentSessionKey: request.parentSessionKey,
+      sessionKey: sessionKey,
+    );
+
+    final result = await _subAgentDispatcher.dispatch(
+      request.copyWith(sessionKey: sessionKey),
+    );
+    if (!result.accepted) {
+      completeDispatch(
+        parentSessionKey: request.parentSessionKey,
+        sessionKey: sessionKey,
+      );
+      return result;
     }
 
-    final result = await _subAgentDispatcher.dispatch(request);
-    if (result.accepted) {
+    if (result.sessionKey != sessionKey) {
+      _activeSessions.remove(sessionKey);
       _activeSessions.add(result.sessionKey);
-      _childrenByParent.update(
-        request.parentSessionKey,
-        (value) => value + 1,
-        ifAbsent: () => 1,
-      );
     }
+
     return result;
   }
 
@@ -195,12 +234,31 @@ class AgentMailbox {
   }
 
   Future<void> dispose() async {
+    await _subAgentDispatcher.dispose();
     await _approvalController.close();
   }
 
   static String _defaultIdGenerator() {
     _requestSeed += 1;
     return 'approval_${_requestSeed.toString().padLeft(4, '0')}';
+  }
+
+  void _reserveDispatch({
+    required String parentSessionKey,
+    required String sessionKey,
+  }) {
+    _activeSessions.add(sessionKey);
+    _childrenByParent.update(
+      parentSessionKey,
+      (value) => value + 1,
+      ifAbsent: () => 1,
+    );
+  }
+
+  static String _nextSessionKey(String parentSessionKey) {
+    _sessionSeed += 1;
+    final suffix = _sessionSeed.toString().padLeft(4, '0');
+    return '$parentSessionKey:sub:$suffix';
   }
 
   static int? _depthOf(String sessionKey) {
@@ -223,5 +281,78 @@ class AgentMailbox {
     }
 
     return (segments.length - 2) ~/ 2;
+  }
+}
+
+class _DefaultSubAgentDispatcher implements SubAgentDispatcher {
+  _DefaultSubAgentDispatcher({
+    required Duration timeout,
+    required this.onCompleted,
+    SubAgentRunner runner = const SubAgentRunner(),
+  })  : _timeout = timeout,
+        _runner = runner;
+
+  final Duration _timeout;
+  final SubAgentRunner _runner;
+  final bool Function({
+    required String parentSessionKey,
+    required String sessionKey,
+  }) onCompleted;
+  final Map<String, Future<SubAgentRunResult>> _running =
+      <String, Future<SubAgentRunResult>>{};
+
+  @override
+  Future<DispatchResult> dispatch(DispatchRequest request) async {
+    final sessionKey = request.sessionKey;
+    if (sessionKey == null || sessionKey.isEmpty) {
+      return const DispatchResult.rejected(reason: 'dispatcher_unavailable');
+    }
+
+    try {
+      final future = _runner.run(
+        SubAgentLaunchRequest(
+          parentSessionKey: request.parentSessionKey,
+          sessionKey: sessionKey,
+          task: request.task,
+          preferredModel: request.preferredModel,
+          timeoutMs: _timeout.inMilliseconds,
+          rootIsolateToken: _rootIsolateToken(),
+        ),
+      );
+      _running[sessionKey] = future;
+      unawaited(
+        future.whenComplete(() {
+          _running.remove(sessionKey);
+          onCompleted(
+            parentSessionKey: request.parentSessionKey,
+            sessionKey: sessionKey,
+          );
+        }),
+      );
+      return DispatchResult(
+        accepted: true,
+        sessionKey: sessionKey,
+      );
+    } catch (_) {
+      return const DispatchResult.rejected(reason: 'dispatch_failed');
+    }
+  }
+
+  @override
+  Future<void> dispose() async {
+    await Future.wait<void>(
+      _running.values.map(
+        (future) => future.then<void>((_) {}).catchError((_) {}),
+      ),
+    );
+    _running.clear();
+  }
+
+  RootIsolateToken? _rootIsolateToken() {
+    try {
+      return RootIsolateToken.instance;
+    } catch (_) {
+      return null;
+    }
   }
 }
