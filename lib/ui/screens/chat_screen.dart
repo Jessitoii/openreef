@@ -3,10 +3,7 @@ import 'package:openreef/ui/app_theme.dart';
 import 'package:openreef/ui/chat_session_port.dart';
 
 class ChatScreen extends StatefulWidget {
-  const ChatScreen({
-    required this.chatSession,
-    super.key,
-  });
+  const ChatScreen({required this.chatSession, super.key});
 
   final ChatSessionPort chatSession;
 
@@ -64,8 +61,9 @@ class _ChatScreenState extends State<ChatScreen> {
                         end: Alignment.bottomCenter,
                         colors: [
                           theme.colorScheme.surface,
-                          theme.colorScheme.surfaceContainerHighest
-                              .withValues(alpha: 0.6),
+                          theme.colorScheme.surfaceContainerHighest.withValues(
+                            alpha: 0.6,
+                          ),
                         ],
                       ),
                     ),
@@ -151,8 +149,10 @@ class _ChatScreenState extends State<ChatScreen> {
                     key: const Key('chat-send-button'),
                     onPressed: _submitMessage,
                     child: const Padding(
-                      padding:
-                          EdgeInsets.symmetric(horizontal: 8, vertical: 16),
+                      padding: EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 16,
+                      ),
                       child: Text('SEND'),
                     ),
                   ),
@@ -307,7 +307,7 @@ class _StartupHeader extends StatelessWidget {
     final theme = Theme.of(context);
     final lines = <String>[
       'BOOT> reef.ui.shell :: online',
-      'BOOT> agent_loop_adapter :: mocked',
+      'BOOT> agent_loop_adapter :: live',
       'BOOT> terminal_renderer :: streaming-ready',
     ];
 
@@ -368,11 +368,13 @@ class _StartupHeader extends StatelessWidget {
                               decoration: BoxDecoration(
                                 borderRadius: BorderRadius.circular(999),
                                 border: Border.all(
-                                  color: ReefPalette.darkSuccess
-                                      .withValues(alpha: 0.6),
+                                  color: ReefPalette.darkSuccess.withValues(
+                                    alpha: 0.6,
+                                  ),
                                 ),
-                                color: ReefPalette.darkSuccess
-                                    .withValues(alpha: 0.10),
+                                color: ReefPalette.darkSuccess.withValues(
+                                  alpha: 0.10,
+                                ),
                               ),
                               child: Text(
                                 'root@device',
@@ -410,7 +412,8 @@ class _StartupHeader extends StatelessWidget {
                               accent: ReefPalette.darkSuccess,
                             ),
                             _HeaderChip(
-                              label: 'status: ${_statusLabel(status).toLowerCase()}',
+                              label:
+                                  'status: ${_statusLabel(status).toLowerCase()}',
                               accent: theme.colorScheme.onSurfaceVariant,
                             ),
                           ],
@@ -451,10 +454,7 @@ class _SignalOrb extends StatelessWidget {
         shape: BoxShape.circle,
         color: active,
         boxShadow: [
-          BoxShadow(
-            blurRadius: 14,
-            color: active.withValues(alpha: 0.55),
-          ),
+          BoxShadow(blurRadius: 14, color: active.withValues(alpha: 0.55)),
         ],
       ),
     );
@@ -462,10 +462,7 @@ class _SignalOrb extends StatelessWidget {
 }
 
 class _HeaderChip extends StatelessWidget {
-  const _HeaderChip({
-    required this.label,
-    required this.accent,
-  });
+  const _HeaderChip({required this.label, required this.accent});
 
   final String label;
   final Color accent;
@@ -522,13 +519,14 @@ class _TranscriptBubble extends StatelessWidget {
     final theme = Theme.of(context);
     final isUser = message.sender == ChatMessageSender.user;
     final isSystem = message.sender == ChatMessageSender.system;
-    final alignment =
-        isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start;
+    final alignment = isUser
+        ? CrossAxisAlignment.end
+        : CrossAxisAlignment.start;
     final bubbleColor = isUser
         ? theme.colorScheme.primary.withValues(alpha: 0.14)
         : isSystem
-            ? theme.colorScheme.secondaryContainer
-            : theme.cardTheme.color ?? theme.colorScheme.surface;
+        ? theme.colorScheme.secondaryContainer
+        : theme.cardTheme.color ?? theme.colorScheme.surface;
 
     return Column(
       crossAxisAlignment: alignment,

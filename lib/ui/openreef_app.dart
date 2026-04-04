@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:openreef/settings/settings_controller.dart';
 import 'package:openreef/ui/app_shell.dart';
 import 'package:openreef/ui/app_theme.dart';
-import 'package:openreef/ui/mock_chat_session.dart';
+import 'package:openreef/ui/chat_session_port.dart';
 
 class OpenReefApp extends StatelessWidget {
   const OpenReefApp({
@@ -12,7 +12,7 @@ class OpenReefApp extends StatelessWidget {
   });
 
   final SettingsController settingsController;
-  final MockChatSession chatSession;
+  final ChatSessionPort chatSession;
 
   @override
   Widget build(BuildContext context) {

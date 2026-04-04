@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:openreef/settings/settings_controller.dart';
-import 'package:openreef/ui/mock_chat_session.dart';
+import 'package:openreef/ui/chat_session_port.dart';
 import 'package:openreef/ui/screens/chat_screen.dart';
 import 'package:openreef/ui/screens/settings_screen.dart';
 
@@ -12,7 +12,7 @@ class AppShell extends StatefulWidget {
   });
 
   final SettingsController settingsController;
-  final MockChatSession chatSession;
+  final ChatSessionPort chatSession;
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -30,22 +30,13 @@ class _AppShellState extends State<AppShell> {
 
     return Scaffold(
       body: SafeArea(
-        child: IndexedStack(
-          index: _selectedIndex,
-          children: screens,
-        ),
+        child: IndexedStack(index: _selectedIndex, children: screens),
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedIndex,
         destinations: const <NavigationDestination>[
-          NavigationDestination(
-            icon: Icon(Icons.terminal),
-            label: 'Chat',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.tune),
-            label: 'Settings',
-          ),
+          NavigationDestination(icon: Icon(Icons.terminal), label: 'Chat'),
+          NavigationDestination(icon: Icon(Icons.tune), label: 'Settings'),
         ],
         onDestinationSelected: (index) {
           setState(() {

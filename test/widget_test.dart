@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:openreef/main.dart';
 import 'package:openreef/settings/settings_controller.dart';
+import 'package:openreef/ui/chat_session_port.dart';
 import 'package:openreef/ui/mock_chat_session.dart';
 
 void main() {
@@ -18,12 +19,9 @@ void main() {
   ) async {
     _setLargeSurface(tester);
     final settingsController = SettingsController();
-    final chatSession = MockChatSession();
+    final ChatSessionPort chatSession = MockChatSession();
     await tester.pumpWidget(
-      MyApp(
-        settingsController: settingsController,
-        chatSession: chatSession,
-      ),
+      MyApp(settingsController: settingsController, chatSession: chatSession),
     );
 
     final sendFuture = chatSession.sendMessage('Check theme status');
@@ -41,24 +39,27 @@ void main() {
   ) async {
     _setLargeSurface(tester);
     final settingsController = SettingsController();
-    final chatSession = MockChatSession();
+    final ChatSessionPort chatSession = MockChatSession();
     await tester.pumpWidget(
-      MyApp(
-        settingsController: settingsController,
-        chatSession: chatSession,
-      ),
+      MyApp(settingsController: settingsController, chatSession: chatSession),
     );
 
     final sendFuture = chatSession.sendMessage('Check voice pipeline');
     await tester.pump();
 
     expect(find.text('planner.daemon'), findsOneWidget);
-    expect(find.textContaining('Input classified as offline chat request.'), findsNothing);
+    expect(
+      find.textContaining('Input classified as offline chat request.'),
+      findsNothing,
+    );
 
     await tester.tap(find.byKey(const Key('activity-planner')));
     await tester.pump(const Duration(milliseconds: 250));
 
-    expect(find.textContaining('Input classified as offline chat request.'), findsOneWidget);
+    expect(
+      find.textContaining('Input classified as offline chat request.'),
+      findsOneWidget,
+    );
 
     await tester.pump(const Duration(milliseconds: 2300));
     await sendFuture;
