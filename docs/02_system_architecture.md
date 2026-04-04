@@ -76,3 +76,20 @@ LiteRT-LM is Google's production-ready, open-source inference framework for on-d
 | **Gemma 3 1B IT** | `.litertlm` | ~700MB | 8k | 2GB | Low-end devices |
 | **Phi-4 Mini IT** | `.litertlm` | ~2.1GB | 16k | 4GB | Reasoning tasks / ULTRAPLAN |
 | **Qwen 3 1.7B IT** | `.litertlm` | ~1.1GB | 8k | 3GB | Multilingual focus |
+
+### Android Model Bootstrap
+
+OpenReef resolves its primary LiteRT model from the Android application's internal documents directory instead of relying on a bundled asset or an ADB sideload path.
+
+Boot flow:
+
+- on startup, the models layer checks the internal `models/` directory for a completed downloaded model
+- if no model is present, the UI is trapped on a dedicated Model Download screen
+- downloads use HTTP range requests with resumable `.part` files so multi-GB transfers can continue safely
+- once a model is present locally, the absolute file path is passed into `LiteRtBridge.initModel(path: ...)`
+
+Ownership remains strict:
+
+- `lib/models/` owns registry metadata, storage resolution, resume logic, and hardware-fit checks
+- `lib/ui/` renders the marketplace and progress UI only
+- agent boot continues only after LiteRT has been initialized with a local on-disk model

@@ -14,6 +14,10 @@ import 'package:openreef/memory/memory_index.dart';
 import 'package:openreef/memory/memory_storage.dart';
 import 'package:openreef/memory/sqlite_memory_storage_backend.dart';
 import 'package:openreef/models/litert_bridge.dart';
+import 'package:openreef/models/model_download_controller.dart';
+import 'package:openreef/models/model_downloader.dart';
+import 'package:openreef/models/model_registry.dart';
+import 'package:openreef/models/model_storage.dart';
 import 'package:openreef/settings/settings_controller.dart';
 import 'package:openreef/tools/mvp_native_tools.dart';
 import 'package:openreef/tools/platform_native_tool_adapters.dart';
@@ -28,41 +32,74 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final bootstrap = await OpenReefBootstrap.initialize();
-  runApp(
-    MyApp(
-      settingsController: bootstrap.settingsController,
-      chatSession: bootstrap.chatSession,
-    ),
-  );
+  runApp(MyApp(bootstrap: bootstrap));
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({
-    required this.settingsController,
-    required this.chatSession,
-    super.key,
-  });
+class MyApp extends StatefulWidget {
+  const MyApp({required this.bootstrap, super.key});
 
-  final SettingsController settingsController;
-  final ChatSessionPort chatSession;
+  final OpenReefBootstrap bootstrap;
+
+  @override
+  State<MyApp> createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> {
+  late bool _modelReady = widget.bootstrap.modelReady;
+
+  Future<void> _handleModelReady() async {
+    final installedModel =
+        widget.bootstrap.modelDownloadController.state.installedModel;
+    if (installedModel == null) {
+      return;
+    }
+    widget.bootstrap.modelDownloadController.markInitializingModel();
+    try {
+      await widget.bootstrap.initializeModelAtPath(installedModel.path);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _modelReady = true;
+      });
+    } catch (error) {
+      widget.bootstrap.modelDownloadController.setInitializationError(error);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return OpenReefApp(
-      settingsController: settingsController,
-      chatSession: chatSession,
+      settingsController: widget.bootstrap.settingsController,
+      chatSession: widget.bootstrap.chatSession,
+      modelDownloadController: widget.bootstrap.modelDownloadController,
+      modelReady: _modelReady,
+      onModelReady: _handleModelReady,
     );
   }
+}
+
+Future<void> initializeLiteRtModelAtPath(
+  LiteRtBridge bridge, {
+  required String path,
+}) {
+  return OpenReefBootstrap.initializeLiteRtBridge(bridge, path: path);
 }
 
 class OpenReefBootstrap {
   OpenReefBootstrap._({
     required this.settingsController,
     required this.chatSession,
+    required this.modelDownloadController,
+    required this.liteRtBridge,
+    required this.modelReady,
   });
 
   final SettingsController settingsController;
   final ChatSessionPort chatSession;
+  final ModelDownloadController modelDownloadController;
+  final LiteRtBridge liteRtBridge;
+  final bool modelReady;
 
   static Future<OpenReefBootstrap> initialize() async {
     final databaseFactory = _resolveDatabaseFactory();
@@ -104,7 +141,23 @@ class OpenReefBootstrap {
     ]);
 
     final liteRtBridge = LiteRtBridge();
-    await _initializeLiteRtBridge(liteRtBridge);
+    final modelRegistry = const ModelRegistry();
+    final modelStorage = ModelStorage();
+    final modelDownloader = ModelDownloader(storage: modelStorage);
+    final modelDownloadController = ModelDownloadController(
+      registry: modelRegistry,
+      storage: modelStorage,
+      downloader: modelDownloader,
+      bridge: liteRtBridge,
+    );
+    await modelDownloadController.initialize();
+
+    var modelReady = false;
+    final installedModel = modelDownloadController.state.installedModel;
+    if (installedModel != null) {
+      await initializeLiteRtBridge(liteRtBridge, path: installedModel.path);
+      modelReady = true;
+    }
 
     final contextAssembler = ContextAssembler(
       memoryIndex: memoryIndex,
@@ -128,11 +181,20 @@ class OpenReefBootstrap {
     return OpenReefBootstrap._(
       settingsController: SettingsController(),
       chatSession: AgentLoopChatSession(agentLoop: agentLoop),
+      modelDownloadController: modelDownloadController,
+      liteRtBridge: liteRtBridge,
+      modelReady: modelReady,
     );
   }
 
-  static Future<void> _initializeLiteRtBridge(LiteRtBridge bridge) async {
-    const modelPath = 'assets/models/openreef_default.litertlm';
+  Future<void> initializeModelAtPath(String path) {
+    return initializeLiteRtBridge(liteRtBridge, path: path);
+  }
+
+  static Future<void> initializeLiteRtBridge(
+    LiteRtBridge bridge, {
+    required String path,
+  }) async {
     var useNpu = false;
 
     try {
@@ -143,12 +205,12 @@ class OpenReefBootstrap {
     }
 
     try {
-      await bridge.initModel(path: modelPath, useNpu: useNpu);
+      await bridge.initModel(path: path, useNpu: useNpu);
     } on PlatformException catch (error) {
       if (error.code != 'ERR_NPU_FALLBACK' || !useNpu) {
         rethrow;
       }
-      await bridge.initModel(path: modelPath, useNpu: false);
+      await bridge.initModel(path: path, useNpu: false);
     }
   }
 

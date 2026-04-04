@@ -1,11 +1,35 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:openreef/main.dart';
+import 'package:openreef/models/litert_bridge.dart';
+import 'package:openreef/models/model_download_controller.dart';
+import 'package:openreef/models/model_downloader.dart';
+import 'package:openreef/models/model_registry.dart';
+import 'package:openreef/models/model_storage.dart';
 import 'package:openreef/settings/settings_controller.dart';
 import 'package:openreef/ui/chat_session_port.dart';
 import 'package:openreef/ui/mock_chat_session.dart';
+import 'package:openreef/ui/openreef_app.dart';
+
+const MethodChannel _modelMethodChannel = MethodChannel(
+  'openreef/litert_channel',
+);
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  setUp(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(_modelMethodChannel, null);
+  });
+
+  tearDown(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(_modelMethodChannel, null);
+  });
+
   testWidgets('app boots into chat screen', (tester) async {
     _setLargeSurface(tester);
     await tester.pumpWidget(_buildApp());
@@ -21,7 +45,10 @@ void main() {
     final settingsController = SettingsController();
     final ChatSessionPort chatSession = MockChatSession();
     await tester.pumpWidget(
-      MyApp(settingsController: settingsController, chatSession: chatSession),
+      _buildApp(
+        settingsController: settingsController,
+        chatSession: chatSession,
+      ),
     );
 
     final sendFuture = chatSession.sendMessage('Check theme status');
@@ -41,7 +68,10 @@ void main() {
     final settingsController = SettingsController();
     final ChatSessionPort chatSession = MockChatSession();
     await tester.pumpWidget(
-      MyApp(settingsController: settingsController, chatSession: chatSession),
+      _buildApp(
+        settingsController: settingsController,
+        chatSession: chatSession,
+      ),
     );
 
     final sendFuture = chatSession.sendMessage('Check voice pipeline');
@@ -100,10 +130,25 @@ void main() {
   });
 }
 
-Widget _buildApp() {
-  return MyApp(
-    settingsController: SettingsController(),
-    chatSession: MockChatSession(),
+Widget _buildApp({
+  SettingsController? settingsController,
+  ChatSessionPort? chatSession,
+}) {
+  final storage = ModelStorage(
+    directoryResolver: () async =>
+        Directory.systemTemp.createTemp('widget-app-'),
+  );
+  return OpenReefApp(
+    settingsController: settingsController ?? SettingsController(),
+    chatSession: chatSession ?? MockChatSession(),
+    modelDownloadController: ModelDownloadController(
+      registry: const ModelRegistry(),
+      storage: storage,
+      downloader: ModelDownloader(storage: storage),
+      bridge: LiteRtBridge(methodChannel: _modelMethodChannel),
+    ),
+    modelReady: true,
+    onModelReady: () async {},
   );
 }
 
