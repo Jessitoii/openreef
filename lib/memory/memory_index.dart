@@ -29,14 +29,34 @@ class MemoryIndex {
 
   Future<String?> resolve(String pointer) async {
     final key = pointer.startsWith('memory:') ? pointer.substring(7) : pointer;
-    final record = await _storage.readRecord(
-      key,
-      store: MemoryStoreKind.longTerm,
-    );
-    return record?.content;
+    for (final store in <MemoryStoreKind>[
+      MemoryStoreKind.longTerm,
+      MemoryStoreKind.episodic,
+      MemoryStoreKind.shortTerm,
+    ]) {
+      final record = await _storage.readRecord(key, store: store);
+      if (record != null) {
+        return record.content;
+      }
+    }
+    return null;
   }
 
   Future<void> updatePointer({
+    required String category,
+    required String memoryKey,
+  }) {
+    return _savePointer(category: category, memoryKey: memoryKey);
+  }
+
+  Future<void> updateSessionPointer({
+    String category = 'last_session',
+    required String memoryKey,
+  }) {
+    return _savePointer(category: category, memoryKey: memoryKey);
+  }
+
+  Future<void> _savePointer({
     required String category,
     required String memoryKey,
   }) {

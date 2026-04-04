@@ -6,6 +6,7 @@ import android.os.BatteryManager
 import com.openreef.app.openreef.litert.LiteRtLmBridge
 import com.openreef.app.openreef.litert.LiteRtAndroidLmEngine
 import com.openreef.app.openreef.service.OpenReefForegroundService
+import com.openreef.app.openreef.triggers.TriggerChannelBridge
 import io.flutter.plugin.common.EventChannel
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -19,6 +20,7 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        TriggerChannelBridge.attachToFlutterEngine(applicationContext, flutterEngine)
         if (liteRtBridge == null) {
             liteRtBridge =
                 LiteRtLmBridge(

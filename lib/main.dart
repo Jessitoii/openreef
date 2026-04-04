@@ -23,6 +23,7 @@ import 'package:openreef/tools/mvp_native_tools.dart';
 import 'package:openreef/tools/platform_native_tool_adapters.dart';
 import 'package:openreef/tools/tool_manifest_bridge.dart';
 import 'package:openreef/tools/tool_manifest_registry.dart';
+import 'package:openreef/triggers/trigger_event_bridge.dart';
 import 'package:openreef/ui/agent_loop_chat_session.dart';
 import 'package:openreef/ui/chat_session_port.dart';
 import 'package:openreef/ui/openreef_app.dart';
@@ -65,9 +66,8 @@ class _MyAppState extends State<MyApp> {
         _modelReady = true;
       });
     } catch (error) {
-      await widget.bootstrap.modelDownloadController.recoverFromCorruptInstalledModel(
-        installedModel,
-      );
+      await widget.bootstrap.modelDownloadController
+          .recoverFromCorruptInstalledModel(installedModel);
       widget.bootstrap.modelDownloadController.setInitializationError(error);
       if (!mounted) {
         return;
@@ -104,6 +104,7 @@ class OpenReefBootstrap {
     required this.modelDownloadController,
     required this.liteRtBridge,
     required this.audioService,
+    required this.triggerEventBridge,
     required this.wakeWordController,
     required this.modelReady,
   });
@@ -113,6 +114,7 @@ class OpenReefBootstrap {
   final ModelDownloadController modelDownloadController;
   final LiteRtBridge liteRtBridge;
   final AudioService audioService;
+  final TriggerEventBridge triggerEventBridge;
   final WakeWordController wakeWordController;
   final bool modelReady;
 
@@ -202,12 +204,14 @@ class OpenReefBootstrap {
     );
 
     final settingsController = SettingsController();
+    final triggerEventBridge = TriggerEventBridge();
     return OpenReefBootstrap._(
       settingsController: settingsController,
       chatSession: AgentLoopChatSession(agentLoop: agentLoop),
       modelDownloadController: modelDownloadController,
       liteRtBridge: liteRtBridge,
       audioService: AudioService(settingsController: settingsController),
+      triggerEventBridge: triggerEventBridge,
       wakeWordController: WakeWordController(
         settingsController: settingsController,
       ),

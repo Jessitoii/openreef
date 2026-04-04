@@ -31,7 +31,7 @@ class ModelRegistry {
       id: 'gemma-3n-e2b-it',
       name: 'Gemma 3n E2B IT',
       downloadUrl:
-          'https://huggingface.co/google/gemma-3n-E2B-it-litert-lm/resolve/main/gemma-3n-E2B-it-int4.litertlm?download=true',
+          'https://huggingface.co/litert-community/gemma-3-270m-it/resolve/main/gemma3-270m-it-q8.mediatek.mt6991.litertlm?download=true',
       storageFileName: 'gemma_3n_e2b_it.task',
       expectedFileSizeBytes: 1536 * 1024 * 1024,
       contextWindow: 32000,
@@ -40,16 +40,17 @@ class ModelRegistry {
       hardwareNotes: 'Good fit when future multimodal features matter.',
     ),
     ModelDescriptor(
-      id: 'gemma-3-1b-it',
-      name: 'Gemma 3 1B IT',
+      id: 'gemma-1b-it',
+      name: 'Gemma 1B IT (Test)',
       downloadUrl:
-          'https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/Gemma3-1B-IT_q4_ekv1280_generic.litertlm?download=true',
-      storageFileName: 'gemma_3_1b_it.task',
-      expectedFileSizeBytes: 658 * 1024 * 1024,
-      contextWindow: 8000,
+          'https://huggingface.co/kikytus/gemma-2b-it-litert-lm/resolve/main/gemma-2b-it-cpu-int4.bin?download=true',
+      storageFileName: 'gemma_1b_test.task',
+      expectedFileSizeBytes:
+          1400 * 1024 * 1024, // Boyut fark etmez, indirene kadar bekleyin
+      contextWindow: 4000,
       minRamGb: 2,
-      bestFor: 'Lower-end devices and fast lightweight on-device chat.',
-      hardwareNotes: 'Fallback choice for constrained RAM devices.',
+      bestFor: 'Test for Memory Limits.',
+      hardwareNotes: '-',
     ),
     ModelDescriptor(
       id: 'phi-4-mini-it',

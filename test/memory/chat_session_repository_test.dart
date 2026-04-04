@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:openreef/memory/auto_dream_session_state.dart';
 import 'package:openreef/memory/chat_session_record.dart';
 import 'package:openreef/memory/chat_session_repository.dart';
 import 'package:openreef/ui/chat_session_port.dart';
@@ -80,6 +81,60 @@ void main() {
       'newer',
       'older',
     ]);
+  });
+
+  test('fetches unsummarized messages after the saved checkpoint', () async {
+    final repository = await _createRepository();
+    addTearDown(repository.close);
+
+    await repository.saveSession(
+      session: ChatSessionRecord(
+        id: 'session-a',
+        title: 'Checkpoint Chat',
+        lastModified: DateTime(2026, 4, 5, 20, 00),
+      ),
+      messages: <ChatTranscriptMessage>[
+        ChatTranscriptMessage(
+          id: 'msg-1',
+          sender: ChatMessageSender.user,
+          text: 'First point',
+          timestamp: DateTime(2026, 4, 5, 20, 00),
+        ),
+        ChatTranscriptMessage(
+          id: 'msg-2',
+          sender: ChatMessageSender.assistant,
+          text: 'Second point',
+          timestamp: DateTime(2026, 4, 5, 20, 01),
+        ),
+        ChatTranscriptMessage(
+          id: 'msg-3',
+          sender: ChatMessageSender.user,
+          text: 'Third point',
+          timestamp: DateTime(2026, 4, 5, 20, 02),
+        ),
+        ChatTranscriptMessage(
+          id: 'msg-4',
+          sender: ChatMessageSender.assistant,
+          text: 'Streaming draft',
+          timestamp: DateTime(2026, 4, 5, 20, 03),
+          isStreaming: true,
+        ),
+      ],
+    );
+    await repository.saveAutoDreamState(
+      AutoDreamSessionState(
+        sessionId: 'session-a',
+        lastSummarizedPosition: 1,
+        lastSummarizedAt: DateTime.utc(2026, 4, 5, 20, 05),
+        lastMemoryKey: 'session_existing',
+      ),
+    );
+
+    final unsummarized = await repository.fetchUnsummarizedMessages('session-a');
+    final savedState = await repository.fetchAutoDreamState('session-a');
+
+    expect(unsummarized.map((message) => message.id).toList(), <String>['msg-3']);
+    expect(savedState?.lastMemoryKey, 'session_existing');
   });
 }
 

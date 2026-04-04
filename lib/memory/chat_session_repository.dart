@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:openreef/memory/auto_dream_session_state.dart';
 import 'package:openreef/memory/chat_message_record.dart';
 import 'package:openreef/memory/chat_session_record.dart';
 import 'package:openreef/ui/chat_session_port.dart';
@@ -16,6 +17,7 @@ class ChatSessionRepository {
   static const String _databaseName = 'openreef_chat_sessions.sqlite';
   static const String _sessionsTable = 'chat_sessions';
   static const String _messagesTable = 'chat_messages';
+  static const String _autoDreamStateTable = 'auto_dream_session_state';
 
   final String? _path;
   final DatabaseFactory? _databaseFactory;
@@ -32,7 +34,7 @@ class ChatSessionRepository {
     _database = await factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 1,
+        version: 2,
         onCreate: (database, version) async {
           await database.execute('''
             CREATE TABLE $_sessionsTable (
@@ -57,6 +59,28 @@ class ChatSessionRepository {
             CREATE INDEX idx_chat_messages_session_position
             ON $_messagesTable(session_id, position)
           ''');
+          await database.execute('''
+            CREATE TABLE $_autoDreamStateTable (
+              session_id TEXT PRIMARY KEY,
+              last_summarized_position INTEGER NOT NULL,
+              last_summarized_at TEXT NOT NULL,
+              last_memory_key TEXT NOT NULL,
+              FOREIGN KEY(session_id) REFERENCES $_sessionsTable(id) ON DELETE CASCADE
+            )
+          ''');
+        },
+        onUpgrade: (database, oldVersion, newVersion) async {
+          if (oldVersion < 2) {
+            await database.execute('''
+              CREATE TABLE $_autoDreamStateTable (
+                session_id TEXT PRIMARY KEY,
+                last_summarized_position INTEGER NOT NULL,
+                last_summarized_at TEXT NOT NULL,
+                last_memory_key TEXT NOT NULL,
+                FOREIGN KEY(session_id) REFERENCES $_sessionsTable(id) ON DELETE CASCADE
+              )
+            ''');
+          }
         },
         onConfigure: (database) async {
           await database.execute('PRAGMA foreign_keys = ON');
@@ -75,6 +99,11 @@ class ChatSessionRepository {
   }
 
   Future<List<ChatTranscriptMessage>> fetchMessages(String sessionId) async {
+    final rows = await fetchMessageRecords(sessionId);
+    return rows.map((record) => record.toTranscriptMessage()).toList();
+  }
+
+  Future<List<ChatMessageRecord>> fetchMessageRecords(String sessionId) async {
     final database = await _requireDatabase();
     final rows = await database.query(
       _messagesTable,
@@ -82,10 +111,44 @@ class ChatSessionRepository {
       whereArgs: <Object?>[sessionId],
       orderBy: 'position ASC',
     );
-    return rows
-        .map(ChatMessageRecord.fromDatabaseMap)
-        .map((record) => record.toTranscriptMessage())
-        .toList();
+    return rows.map(ChatMessageRecord.fromDatabaseMap).toList();
+  }
+
+  Future<AutoDreamSessionState?> fetchAutoDreamState(String sessionId) async {
+    final database = await _requireDatabase();
+    final rows = await database.query(
+      _autoDreamStateTable,
+      where: 'session_id = ?',
+      whereArgs: <Object?>[sessionId],
+      limit: 1,
+    );
+
+    if (rows.isEmpty) {
+      return null;
+    }
+
+    return AutoDreamSessionState.fromDatabaseMap(rows.single);
+  }
+
+  Future<List<ChatMessageRecord>> fetchUnsummarizedMessages(String sessionId) async {
+    final database = await _requireDatabase();
+    final state = await fetchAutoDreamState(sessionId);
+    final rows = await database.query(
+      _messagesTable,
+      where: 'session_id = ? AND position > ? AND is_streaming = 0',
+      whereArgs: <Object?>[sessionId, state?.lastSummarizedPosition ?? -1],
+      orderBy: 'position ASC',
+    );
+    return rows.map(ChatMessageRecord.fromDatabaseMap).toList();
+  }
+
+  Future<void> saveAutoDreamState(AutoDreamSessionState state) async {
+    final database = await _requireDatabase();
+    await database.insert(
+      _autoDreamStateTable,
+      state.toDatabaseMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
   }
 
   Future<void> saveSession({

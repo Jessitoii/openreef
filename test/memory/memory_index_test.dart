@@ -84,4 +84,24 @@ void main() {
 
     expect(resolved, 'OpenReef memory system is the active project.');
   });
+
+  test('resolves episodic pointers when no long-term record exists', () async {
+    final now = DateTime.utc(2026, 4, 5, 9);
+    await storage.saveRecord(
+      MemoryRecord(
+        store: MemoryStoreKind.episodic,
+        key: 'session_2026_04_05',
+        content: 'Compact session memory.',
+        category: 'last_session',
+        importance: 3,
+        createdAt: now,
+        expiresAt: now.add(const Duration(days: 30)),
+      ),
+    );
+    await index.updateSessionPointer(memoryKey: 'session_2026_04_05');
+
+    final resolved = await index.resolve('memory:session_2026_04_05');
+
+    expect(resolved, 'Compact session memory.');
+  });
 }

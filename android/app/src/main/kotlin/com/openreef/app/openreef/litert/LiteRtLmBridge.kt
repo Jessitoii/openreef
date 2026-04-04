@@ -470,7 +470,7 @@ class LiteRtAndroidLmEngine(
                 )
             }
             throw LiteRtInferenceException(
-                "Failed to initialize LiteRT-LM engine.",
+                "Init failed: ${throwable.message}",
                 throwable,
             )
         }
