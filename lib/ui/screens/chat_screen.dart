@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:openreef/ui/app_theme.dart';
 import 'package:openreef/ui/chat_session_port.dart';
-import 'package:openreef/ui/mock_chat_session.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({
@@ -9,7 +8,7 @@ class ChatScreen extends StatefulWidget {
     super.key,
   });
 
-  final MockChatSession chatSession;
+  final ChatSessionPort chatSession;
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -18,7 +17,8 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _composerController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
-  int _lastMessageCount = 0;
+  final Set<String> _expandedActivityIds = <String>{};
+  int _lastContentFootprint = 0;
 
   @override
   void dispose() {
@@ -34,8 +34,10 @@ class _ChatScreenState extends State<ChatScreen> {
       animation: widget.chatSession,
       builder: (context, child) {
         final messages = widget.chatSession.messages;
-        if (messages.length != _lastMessageCount) {
-          _lastMessageCount = messages.length;
+        final activities = widget.chatSession.activities;
+        final footprint = messages.length + activities.length;
+        if (footprint != _lastContentFootprint) {
+          _lastContentFootprint = footprint;
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (_scrollController.hasClients) {
               _scrollController.jumpTo(
@@ -44,60 +46,84 @@ class _ChatScreenState extends State<ChatScreen> {
             }
           });
         }
+
         return Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _ChatHeader(status: widget.chatSession.status),
+              _StartupHeader(status: widget.chatSession.status),
               const SizedBox(height: 12),
               Expanded(
                 child: Card(
-                  child: Column(
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
-                        child: Row(
-                          children: [
-                            Icon(
-                              Icons.fiber_manual_record,
-                              size: 12,
-                              color: widget.chatSession.status ==
-                                      ChatSessionStatus.idle
-                                  ? ReefPalette.darkSuccess
-                                  : ReefPalette.coral,
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              _statusLabel(widget.chatSession.status),
-                              style: theme.textTheme.labelLarge?.copyWith(
-                                color: theme.colorScheme.onSurfaceVariant,
-                              ),
-                            ),
-                            const Spacer(),
-                            Text(
-                              'session: main',
-                              style: theme.textTheme.labelMedium?.copyWith(
-                                color: theme.colorScheme.onSurfaceVariant,
-                              ),
-                            ),
-                          ],
-                        ),
+                  clipBehavior: Clip.antiAlias,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          theme.colorScheme.surface,
+                          theme.colorScheme.surfaceContainerHighest
+                              .withValues(alpha: 0.6),
+                        ],
                       ),
-                      const Divider(height: 1),
-                      Expanded(
-                        child: ListView.separated(
-                          controller: _scrollController,
-                          padding: const EdgeInsets.all(16),
-                          itemCount: messages.length,
-                          itemBuilder: (context, index) {
-                            return _TranscriptBubble(message: messages[index]);
-                          },
-                          separatorBuilder: (context, index) =>
-                              const SizedBox(height: 12),
+                    ),
+                    child: Column(
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+                          child: Row(
+                            children: [
+                              _SignalOrb(status: widget.chatSession.status),
+                              const SizedBox(width: 10),
+                              Text(
+                                _statusLabel(widget.chatSession.status),
+                                style: theme.textTheme.labelLarge?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                  letterSpacing: 0.8,
+                                ),
+                              ),
+                              const Spacer(),
+                              Text(
+                                'session: main',
+                                style: theme.textTheme.labelMedium?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
-                    ],
+                        const Divider(height: 1),
+                        Expanded(
+                          child: ListView(
+                            controller: _scrollController,
+                            padding: const EdgeInsets.all(16),
+                            children: [
+                              if (activities.isNotEmpty) ...[
+                                Text(
+                                  'sub-agents',
+                                  style: theme.textTheme.labelLarge?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                                const SizedBox(height: 10),
+                                ...activities.map(_buildActivityBlock),
+                                const SizedBox(height: 18),
+                              ],
+                              Text(
+                                'transcript',
+                                style: theme.textTheme.labelLarge?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              ..._buildTranscript(messages),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -139,6 +165,127 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  List<Widget> _buildTranscript(List<ChatTranscriptMessage> messages) {
+    return <Widget>[
+      for (var index = 0; index < messages.length; index++) ...[
+        _TranscriptBubble(message: messages[index]),
+        if (index != messages.length - 1) const SizedBox(height: 12),
+      ],
+    ];
+  }
+
+  Widget _buildActivityBlock(SubAgentActivity activity) {
+    final theme = Theme.of(context);
+    final isExpanded = _expandedActivityIds.contains(activity.id);
+    final statusColor = switch (activity.status) {
+      SubAgentActivityStatus.running => ReefPalette.coral,
+      SubAgentActivityStatus.completed => ReefPalette.darkSuccess,
+      SubAgentActivityStatus.failed => theme.colorScheme.error,
+    };
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          color: statusColor.withValues(alpha: 0.08),
+          border: Border.all(color: statusColor.withValues(alpha: 0.4)),
+          boxShadow: [
+            BoxShadow(
+              blurRadius: 18,
+              offset: const Offset(0, 8),
+              color: statusColor.withValues(alpha: 0.06),
+            ),
+          ],
+        ),
+        child: Column(
+          children: [
+            InkWell(
+              key: Key('activity-${activity.id}'),
+              borderRadius: BorderRadius.circular(16),
+              onTap: () {
+                setState(() {
+                  if (isExpanded) {
+                    _expandedActivityIds.remove(activity.id);
+                  } else {
+                    _expandedActivityIds.add(activity.id);
+                  }
+                });
+              },
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Row(
+                  children: [
+                    Icon(
+                      isExpanded
+                          ? Icons.keyboard_arrow_down
+                          : Icons.keyboard_arrow_right,
+                      color: statusColor,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            activity.label,
+                            style: theme.textTheme.labelLarge?.copyWith(
+                              color: statusColor,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            activity.summary,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurface,
+                              height: 1.45,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    _ActivityStatusBadge(status: activity.status),
+                  ],
+                ),
+              ),
+            ),
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 220),
+              switchInCurve: Curves.easeOutCubic,
+              switchOutCurve: Curves.easeInCubic,
+              child: isExpanded
+                  ? Padding(
+                      key: ValueKey<String>('${activity.id}-expanded'),
+                      padding: const EdgeInsets.fromLTRB(18, 0, 18, 16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: activity.details
+                            .map(
+                              (detail) => Padding(
+                                padding: const EdgeInsets.only(top: 8),
+                                child: Text(
+                                  '> $detail',
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                    height: 1.45,
+                                  ),
+                                ),
+                              ),
+                            )
+                            .toList(),
+                      ),
+                    )
+                  : const SizedBox.shrink(),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _submitMessage() async {
     final text = _composerController.text.trim();
     if (text.isEmpty) {
@@ -150,56 +297,165 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 }
 
-class _ChatHeader extends StatelessWidget {
-  const _ChatHeader({required this.status});
+class _StartupHeader extends StatelessWidget {
+  const _StartupHeader({required this.status});
 
   final ChatSessionStatus status;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              '> OPENREEF_TERMINAL',
-              style: theme.textTheme.titleLarge?.copyWith(
-                fontWeight: FontWeight.w700,
-                color: theme.colorScheme.primary,
+    final lines = <String>[
+      'BOOT> reef.ui.shell :: online',
+      'BOOT> agent_loop_adapter :: mocked',
+      'BOOT> terminal_renderer :: streaming-ready',
+    ];
+
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(begin: 0, end: 1),
+      duration: const Duration(milliseconds: 700),
+      curve: Curves.easeOutCubic,
+      builder: (context, value, child) {
+        return Transform.translate(
+          offset: Offset(0, (1 - value) * 16),
+          child: Opacity(
+            opacity: value,
+            child: Card(
+              clipBehavior: Clip.antiAlias,
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [
+                            ReefPalette.coral.withValues(alpha: 0.10),
+                            Colors.transparent,
+                            ReefPalette.darkSuccess.withValues(alpha: 0.08),
+                          ],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                      ),
+                    ),
+                  ),
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: CustomPaint(painter: _ScanlinePainter()),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Text(
+                              '> OPENREEF_TERMINAL',
+                              style: theme.textTheme.titleLarge?.copyWith(
+                                fontWeight: FontWeight.w800,
+                                color: theme.colorScheme.primary,
+                                letterSpacing: 0.6,
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 6,
+                              ),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(999),
+                                border: Border.all(
+                                  color: ReefPalette.darkSuccess
+                                      .withValues(alpha: 0.6),
+                                ),
+                                color: ReefPalette.darkSuccess
+                                    .withValues(alpha: 0.10),
+                              ),
+                              child: Text(
+                                'root@device',
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  color: ReefPalette.darkSuccess,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        ...lines.map(
+                          (line) => Padding(
+                            padding: const EdgeInsets.only(bottom: 4),
+                            child: Text(
+                              line,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                                height: 1.45,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            _HeaderChip(
+                              label: 'model: offline',
+                              accent: theme.colorScheme.primary,
+                            ),
+                            _HeaderChip(
+                              label: 'voice: local',
+                              accent: ReefPalette.darkSuccess,
+                            ),
+                            _HeaderChip(
+                              label: 'status: ${_statusLabel(status).toLowerCase()}',
+                              accent: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: 8),
-            Text(
-              'Offline-first agent console. UI is live, AgentLoop hookup is mocked, and settings map cleanly to future tools.',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-                height: 1.45,
-              ),
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                _HeaderChip(
-                  label: 'model: offline',
-                  accent: theme.colorScheme.primary,
-                ),
-                _HeaderChip(
-                  label: 'voice: local',
-                  accent: ReefPalette.darkSuccess,
-                ),
-                _HeaderChip(
-                  label: 'status: ${_statusLabel(status).toLowerCase()}',
-                  accent: theme.colorScheme.onSurfaceVariant,
-                ),
-              ],
-            ),
-          ],
-        ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _SignalOrb extends StatelessWidget {
+  const _SignalOrb({required this.status});
+
+  final ChatSessionStatus status;
+
+  @override
+  Widget build(BuildContext context) {
+    final active = switch (status) {
+      ChatSessionStatus.idle => ReefPalette.darkSuccess,
+      ChatSessionStatus.completed => ReefPalette.darkSuccess,
+      ChatSessionStatus.planning ||
+      ChatSessionStatus.toolRouting ||
+      ChatSessionStatus.streaming => ReefPalette.coral,
+    };
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 240),
+      width: 12,
+      height: 12,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: active,
+        boxShadow: [
+          BoxShadow(
+            blurRadius: 14,
+            color: active.withValues(alpha: 0.55),
+          ),
+        ],
       ),
     );
   }
@@ -224,6 +480,34 @@ class _HeaderChip extends StatelessWidget {
         color: accent.withValues(alpha: 0.08),
       ),
       child: Text(label),
+    );
+  }
+}
+
+class _ActivityStatusBadge extends StatelessWidget {
+  const _ActivityStatusBadge({required this.status});
+
+  final SubAgentActivityStatus status;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final (label, color) = switch (status) {
+      SubAgentActivityStatus.running => ('running', ReefPalette.coral),
+      SubAgentActivityStatus.completed => ('done', ReefPalette.darkSuccess),
+      SubAgentActivityStatus.failed => ('failed', theme.colorScheme.error),
+    };
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(999),
+        color: color.withValues(alpha: 0.14),
+      ),
+      child: Text(
+        label,
+        style: theme.textTheme.labelSmall?.copyWith(color: color),
+      ),
     );
   }
 }
@@ -258,27 +542,47 @@ class _TranscriptBubble extends StatelessWidget {
         const SizedBox(height: 6),
         ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 540),
-          child: DecoratedBox(
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 160),
+            curve: Curves.easeOut,
             decoration: BoxDecoration(
               color: bubbleColor,
               borderRadius: BorderRadius.circular(16),
               border: Border.all(color: theme.colorScheme.outline),
+              boxShadow: [
+                if (message.isStreaming)
+                  BoxShadow(
+                    blurRadius: 16,
+                    color: ReefPalette.coral.withValues(alpha: 0.08),
+                    offset: const Offset(0, 8),
+                  ),
+              ],
             ),
             child: Padding(
               padding: const EdgeInsets.all(14),
               child: Column(
                 crossAxisAlignment: alignment,
                 children: [
-                  Text(
-                    message.text,
-                    style: theme.textTheme.bodyMedium?.copyWith(height: 1.5),
-                  ),
+                  _StreamingText(message: message),
                   const SizedBox(height: 8),
-                  Text(
-                    _formatTimestamp(message.timestamp),
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        _formatTimestamp(message.timestamp),
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                      if (message.isStreaming) ...[
+                        const SizedBox(width: 8),
+                        Container(
+                          width: 8,
+                          height: 14,
+                          color: ReefPalette.coral,
+                        ),
+                      ],
+                    ],
                   ),
                 ],
               ),
@@ -290,6 +594,43 @@ class _TranscriptBubble extends StatelessWidget {
   }
 }
 
+class _StreamingText extends StatelessWidget {
+  const _StreamingText({required this.message});
+
+  final ChatTranscriptMessage message;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 120),
+      switchInCurve: Curves.easeOut,
+      switchOutCurve: Curves.easeIn,
+      child: Text(
+        message.text,
+        key: ValueKey<String>('${message.id}:${message.text.length}'),
+        style: theme.textTheme.bodyMedium?.copyWith(height: 1.5),
+      ),
+    );
+  }
+}
+
+class _ScanlinePainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.025)
+      ..strokeWidth = 1;
+    const gap = 8.0;
+    for (var y = 0.0; y < size.height; y += gap) {
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
 String _statusLabel(ChatSessionStatus status) {
   switch (status) {
     case ChatSessionStatus.idle:
@@ -298,6 +639,8 @@ String _statusLabel(ChatSessionStatus status) {
       return 'PLANNING';
     case ChatSessionStatus.toolRouting:
       return 'TOOL ROUTING';
+    case ChatSessionStatus.streaming:
+      return 'STREAMING';
     case ChatSessionStatus.completed:
       return 'COMPLETE';
   }
