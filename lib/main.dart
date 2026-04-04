@@ -26,6 +26,8 @@ import 'package:openreef/tools/tool_manifest_registry.dart';
 import 'package:openreef/ui/agent_loop_chat_session.dart';
 import 'package:openreef/ui/chat_session_port.dart';
 import 'package:openreef/ui/openreef_app.dart';
+import 'package:openreef/voice/audio_service.dart';
+import 'package:openreef/voice/wake_word_controller.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
@@ -101,6 +103,8 @@ class OpenReefBootstrap {
     required this.chatSession,
     required this.modelDownloadController,
     required this.liteRtBridge,
+    required this.audioService,
+    required this.wakeWordController,
     required this.modelReady,
   });
 
@@ -108,6 +112,8 @@ class OpenReefBootstrap {
   final ChatSessionPort chatSession;
   final ModelDownloadController modelDownloadController;
   final LiteRtBridge liteRtBridge;
+  final AudioService audioService;
+  final WakeWordController wakeWordController;
   final bool modelReady;
 
   static Future<OpenReefBootstrap> initialize() async {
@@ -195,11 +201,16 @@ class OpenReefBootstrap {
       memoryFormer: memoryFormer,
     );
 
+    final settingsController = SettingsController();
     return OpenReefBootstrap._(
-      settingsController: SettingsController(),
+      settingsController: settingsController,
       chatSession: AgentLoopChatSession(agentLoop: agentLoop),
       modelDownloadController: modelDownloadController,
       liteRtBridge: liteRtBridge,
+      audioService: AudioService(settingsController: settingsController),
+      wakeWordController: WakeWordController(
+        settingsController: settingsController,
+      ),
       modelReady: modelReady,
     );
   }

@@ -3,11 +3,8 @@
 # =============================================================================
 
 # ====================== CORE MODEL ======================
-model = "gpt-5.4"                    # veya gpt-5.4-mini, o4-mini vs.
-model_provider = "openai"
 
 # Reasoning kalitesi (Flutter gibi kompleks projelerde yüksek önerilir)
-model_reasoning_effort = "medium"
 model_reasoning_summary = "detailed"
 model_verbosity = "medium"
 

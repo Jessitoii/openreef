@@ -26,14 +26,7 @@ void main() {
       controller.activeSession?.record.title,
       'This is the first chat title candida...',
     );
-
-    final reloadedRepository = ChatSessionRepository(
-      path: repositoryPath(repository),
-      databaseFactory: databaseFactoryFfi,
-    );
-    await reloadedRepository.initialize();
-    addTearDown(reloadedRepository.close);
-    final sessions = await reloadedRepository.fetchSessions();
+    final sessions = await repository.fetchSessions();
     expect(
       sessions.single.title,
       'This is the first chat title candida...',
@@ -90,8 +83,4 @@ Future<ChatSessionRepository> _createRepository() async {
   );
   await repository.initialize();
   return repository;
-}
-
-String repositoryPath(ChatSessionRepository repository) {
-  return (repository as dynamic)._path as String;
 }

@@ -108,7 +108,7 @@ void main() {
 
     await tester.tap(find.byKey(const Key('open-drawer-button')));
     await tester.pumpAndSettle();
-    expect(find.text('Recent Chats'), findsOneWidget);
+    expect(find.text('RECENT CHATS'), findsOneWidget);
     expect(find.text('First conversation for persistence'), findsOneWidget);
 
     await tester.tap(find.byKey(const Key('new-chat-button')));

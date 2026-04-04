@@ -5,6 +5,8 @@ import android.media.AudioManager
 import android.os.BatteryManager
 import com.openreef.app.openreef.litert.LiteRtLmBridge
 import com.openreef.app.openreef.litert.LiteRtAndroidLmEngine
+import com.openreef.app.openreef.service.OpenReefForegroundService
+import io.flutter.plugin.common.EventChannel
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -12,6 +14,8 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
     private var liteRtBridge: LiteRtLmBridge? = null
     private var nativeToolsChannel: MethodChannel? = null
+    private var wakeWordChannel: MethodChannel? = null
+    private var wakeWordEventChannel: EventChannel? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -38,11 +42,54 @@ class MainActivity : FlutterActivity() {
                     }
                 }
         }
+        if (wakeWordChannel == null) {
+            wakeWordChannel =
+                MethodChannel(
+                    flutterEngine.dartExecutor.binaryMessenger,
+                    WAKE_WORD_CHANNEL_NAME,
+                ).also { channel ->
+                    channel.setMethodCallHandler { call, result ->
+                        when (call.method) {
+                            "startListening" -> result.success(handleStartWakeWord())
+                            "stopListening" -> result.success(handleStopWakeWord())
+                            "isListening" -> result.success(OpenReefForegroundService.isListening())
+                            else -> result.notImplemented()
+                        }
+                    }
+                }
+        }
+        if (wakeWordEventChannel == null) {
+            wakeWordEventChannel =
+                EventChannel(
+                    flutterEngine.dartExecutor.binaryMessenger,
+                    WAKE_WORD_EVENT_CHANNEL_NAME,
+                ).also { channel ->
+                    channel.setStreamHandler(
+                        object : EventChannel.StreamHandler {
+                            override fun onListen(
+                                arguments: Any?,
+                                events: EventChannel.EventSink?,
+                            ) {
+                                OpenReefForegroundService.attachEventSink(events)
+                            }
+
+                            override fun onCancel(arguments: Any?) {
+                                OpenReefForegroundService.attachEventSink(null)
+                            }
+                        },
+                    )
+                }
+        }
     }
 
     override fun onDestroy() {
         nativeToolsChannel?.setMethodCallHandler(null)
         nativeToolsChannel = null
+        wakeWordChannel?.setMethodCallHandler(null)
+        wakeWordChannel = null
+        wakeWordEventChannel?.setStreamHandler(null)
+        wakeWordEventChannel = null
+        OpenReefForegroundService.attachEventSink(null)
         liteRtBridge?.dispose()
         liteRtBridge = null
         super.onDestroy()
@@ -97,7 +144,15 @@ class MainActivity : FlutterActivity() {
         )
     }
 
+    private fun handleStartWakeWord(): Boolean =
+        OpenReefForegroundService.requestStart(applicationContext)
+
+    private fun handleStopWakeWord(): Boolean =
+        OpenReefForegroundService.requestStop(applicationContext)
+
     companion object {
         private const val NATIVE_TOOLS_CHANNEL_NAME = "openreef/native_tools"
+        private const val WAKE_WORD_CHANNEL_NAME = "openreef/wake_word_channel"
+        private const val WAKE_WORD_EVENT_CHANNEL_NAME = "openreef/wake_word_events"
     }
 }

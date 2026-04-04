@@ -1,25 +1,76 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:openreef/settings/settings_controller.dart';
 
-/// Controls the Android wake-word foreground service.
-///
-/// The implementation is intentionally lightweight so the voice layer can
-/// compile cleanly before Porcupine and audio processing are wired in.
-class WakeWordController {
-  WakeWordController({OptionalMethodChannel? methodChannel})
-    : _methodChannel =
-          methodChannel ?? const OptionalMethodChannel(methodChannelName);
+enum WakeWordEventType { detected }
+
+class WakeWordEvent {
+  const WakeWordEvent({
+    required this.type,
+    required this.detectedAt,
+  });
+
+  factory WakeWordEvent.detected() {
+    return WakeWordEvent(
+      type: WakeWordEventType.detected,
+      detectedAt: DateTime.now(),
+    );
+  }
+
+  final WakeWordEventType type;
+  final DateTime detectedAt;
+}
+
+/// Controls the Android wake-word foreground service and listens to native
+/// wake-word detections emitted over the Flutter event channel.
+class WakeWordController extends ChangeNotifier {
+  WakeWordController({
+    required SettingsController settingsController,
+    OptionalMethodChannel? methodChannel,
+    EventChannel? eventChannel,
+    Stream<dynamic>? eventStream,
+    bool? isSupportedOverride,
+  }) : _settingsController = settingsController,
+       _methodChannel =
+           methodChannel ?? const OptionalMethodChannel(methodChannelName),
+       _eventChannel = eventChannel ?? const EventChannel(eventChannelName),
+       _eventStreamOverride = eventStream,
+       _isSupportedOverride = isSupportedOverride {
+    _settingsController.addListener(_handleSettingsChanged);
+    _eventSubscription = _platformEvents().listen(_handlePlatformEvent);
+    unawaited(syncWithSettings());
+  }
 
   static const String methodChannelName = 'openreef/wake_word_channel';
+  static const String eventChannelName = 'openreef/wake_word_events';
 
   static const String _startMethod = 'startListening';
   static const String _stopMethod = 'stopListening';
   static const String _statusMethod = 'isListening';
 
+  final SettingsController _settingsController;
   final OptionalMethodChannel _methodChannel;
+  final EventChannel _eventChannel;
+  final Stream<dynamic>? _eventStreamOverride;
+  final bool? _isSupportedOverride;
+  final StreamController<WakeWordEvent> _events =
+      StreamController<WakeWordEvent>.broadcast();
+
+  StreamSubscription<dynamic>? _eventSubscription;
+  DateTime? _lastDetectedAt;
+  bool _isListening = false;
 
   bool get isSupported =>
-      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+      _isSupportedOverride ??
+      (!kIsWeb && defaultTargetPlatform == TargetPlatform.android);
+
+  bool get isListening => _isListening;
+
+  DateTime? get lastDetectedAt => _lastDetectedAt;
+
+  Stream<WakeWordEvent> get events => _events.stream;
 
   Future<bool> startListening() async {
     if (!isSupported) {
@@ -27,24 +78,83 @@ class WakeWordController {
     }
 
     final started = await _methodChannel.invokeMethod<bool>(_startMethod);
-    return started ?? false;
+    _setListening(started ?? false);
+    return _isListening;
   }
 
   Future<bool> stopListening() async {
     if (!isSupported) {
+      _setListening(false);
       return false;
     }
 
     final stopped = await _methodChannel.invokeMethod<bool>(_stopMethod);
+    _setListening(!(stopped ?? false) ? _isListening : false);
     return stopped ?? false;
   }
 
-  Future<bool> isListening() async {
+  Future<bool> refreshListeningState() async {
     if (!isSupported) {
+      _setListening(false);
       return false;
     }
 
     final listening = await _methodChannel.invokeMethod<bool>(_statusMethod);
-    return listening ?? false;
+    _setListening(listening ?? false);
+    return _isListening;
+  }
+
+  Future<void> syncWithSettings() async {
+    if (!_settingsController.settings.wakeWordEnabled) {
+      await stopListening();
+      return;
+    }
+
+    await startListening();
+  }
+
+  @override
+  void dispose() {
+    _settingsController.removeListener(_handleSettingsChanged);
+    _eventSubscription?.cancel();
+    _events.close();
+    super.dispose();
+  }
+
+  void _handleSettingsChanged() {
+    unawaited(syncWithSettings());
+  }
+
+  Stream<dynamic> _platformEvents() {
+    if (!isSupported) {
+      return const Stream<dynamic>.empty();
+    }
+    return _eventStreamOverride ?? _eventChannel.receiveBroadcastStream();
+  }
+
+  void _handlePlatformEvent(dynamic payload) {
+    final eventName =
+        switch (payload) {
+          String value => value,
+          Map<dynamic, dynamic> value => value['event']?.toString(),
+          _ => null,
+        };
+
+    if (eventName != 'detected') {
+      return;
+    }
+
+    final event = WakeWordEvent.detected();
+    _lastDetectedAt = event.detectedAt;
+    _events.add(event);
+    notifyListeners();
+  }
+
+  void _setListening(bool value) {
+    if (_isListening == value) {
+      return;
+    }
+    _isListening = value;
+    notifyListeners();
   }
 }
