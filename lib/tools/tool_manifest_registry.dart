@@ -1,0 +1,132 @@
+import 'package:openreef/tools/tool_manifest.dart';
+
+class ToolManifestRegistry {
+  ToolManifestRegistry(List<NativeToolHandler> handlers)
+    : _handlers = Map<String, NativeToolHandler>.fromEntries(
+        handlers.map(
+          (handler) =>
+              MapEntry<String, NativeToolHandler>(handler.manifest.id, handler),
+        ),
+      );
+
+  final Map<String, NativeToolHandler> _handlers;
+
+  List<ToolManifest> listManifests() {
+    return _handlers.values
+        .map((handler) => handler.manifest)
+        .toList(growable: false);
+  }
+
+  ToolManifest? manifestById(String toolId) => _handlers[toolId]?.manifest;
+
+  NativeToolHandler? handlerById(String toolId) => _handlers[toolId];
+
+  ToolValidationResult validate(ToolInvocation invocation) {
+    final handler = _handlers[invocation.toolId];
+    if (handler == null) {
+      return ToolValidationResult.invalid('unknown_tool:${invocation.toolId}');
+    }
+
+    final manifest = handler.manifest;
+    if (!manifest.enabled) {
+      return ToolValidationResult.invalid('disabled_tool:${manifest.id}');
+    }
+
+    final normalized = <String, Object?>{};
+    for (final spec in manifest.argumentSchema) {
+      final hasValue = invocation.arguments.containsKey(spec.name);
+      final value = invocation.arguments[spec.name];
+      if (!hasValue || value == null) {
+        if (spec.isRequired) {
+          return ToolValidationResult.invalid('missing_argument:${spec.name}');
+        }
+        continue;
+      }
+
+      final normalizedValue = _normalizeArgument(spec, value);
+      if (normalizedValue case _NormalizationFailure(:final message)) {
+        return ToolValidationResult.invalid(message);
+      }
+
+      normalized[spec.name] = normalizedValue as Object?;
+    }
+
+    return ToolValidationResult.valid(normalized);
+  }
+
+  Future<NativeToolExecutionResult> execute(
+    ToolInvocation invocation, {
+    NativeToolContext context = const NativeToolContext(),
+  }) async {
+    final validation = validate(invocation);
+    if (!validation.isValid) {
+      throw StateError(validation.error!);
+    }
+
+    final handler = _handlers[invocation.toolId]!;
+    final normalizedInvocation = ToolInvocation(
+      toolId: invocation.toolId,
+      arguments: validation.normalizedArguments,
+    );
+    final result = await handler.execute(normalizedInvocation, context);
+    return NativeToolExecutionResult(
+      content: result.content,
+      metadata: <String, Object?>{
+        'toolId': handler.manifest.id,
+        'category': handler.manifest.category,
+        ...result.metadata,
+      },
+    );
+  }
+
+  Object _normalizeArgument(ToolArgumentSpec spec, Object value) {
+    switch (spec.type) {
+      case ToolArgumentType.string:
+        if (value is! String) {
+          return _NormalizationFailure('invalid_argument:${spec.name}');
+        }
+        return _validateAllowedValues(spec, value);
+      case ToolArgumentType.integer:
+        if (value is int) {
+          return _validateNumericRange(spec, value);
+        }
+        if (value is num && value == value.roundToDouble()) {
+          return _validateNumericRange(spec, value.toInt());
+        }
+        return _NormalizationFailure('invalid_argument:${spec.name}');
+      case ToolArgumentType.doubleValue:
+        if (value is! num) {
+          return _NormalizationFailure('invalid_argument:${spec.name}');
+        }
+        return _validateNumericRange(spec, value.toDouble());
+      case ToolArgumentType.boolean:
+        if (value is! bool) {
+          return _NormalizationFailure('invalid_argument:${spec.name}');
+        }
+        return _validateAllowedValues(spec, value);
+    }
+  }
+
+  Object _validateNumericRange(ToolArgumentSpec spec, num value) {
+    if (spec.minimum != null && value < spec.minimum!) {
+      return _NormalizationFailure('argument_out_of_range:${spec.name}');
+    }
+    if (spec.maximum != null && value > spec.maximum!) {
+      return _NormalizationFailure('argument_out_of_range:${spec.name}');
+    }
+    return _validateAllowedValues(spec, value);
+  }
+
+  Object _validateAllowedValues(ToolArgumentSpec spec, Object value) {
+    if (spec.allowedValues.isNotEmpty && !spec.allowedValues.contains(value)) {
+      return _NormalizationFailure('argument_not_allowed:${spec.name}');
+    }
+    return value;
+  }
+}
+
+class _NormalizationFailure {
+  const _NormalizationFailure(this.message);
+
+  final String message;
+}

@@ -1,30 +1,74 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-
 import 'package:openreef/main.dart';
+import 'package:openreef/settings/settings_controller.dart';
+import 'package:openreef/ui/mock_chat_session.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  testWidgets('app boots into chat screen', (tester) async {
+    await tester.pumpWidget(_buildApp());
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
-
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
-
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    expect(find.text('> OPENREEF_TERMINAL'), findsOneWidget);
+    expect(find.text('Chat'), findsOneWidget);
   });
+
+  testWidgets('sending a message shows user text and mock reply', (
+    tester,
+  ) async {
+    final settingsController = SettingsController();
+    final chatSession = MockChatSession();
+    await tester.pumpWidget(
+      MyApp(
+        settingsController: settingsController,
+        chatSession: chatSession,
+      ),
+    );
+
+    final sendFuture = chatSession.sendMessage('Check theme status');
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 1300));
+    await sendFuture;
+
+    expect(find.textContaining('Check theme status'), findsOneWidget);
+    expect(find.textContaining('Theme changes are live.'), findsOneWidget);
+  });
+
+  testWidgets('theme mode can be changed from settings', (tester) async {
+    await tester.pumpWidget(_buildApp());
+
+    await tester.tap(find.text('Settings'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Light'));
+    await tester.pumpAndSettle();
+
+    final materialApp = tester.widget<MaterialApp>(find.byType(MaterialApp));
+    expect(materialApp.themeMode, ThemeMode.light);
+  });
+
+  testWidgets('voice settings controls update visible state', (tester) async {
+    await tester.pumpWidget(_buildApp());
+
+    await tester.tap(find.text('Settings'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('wake-word-toggle')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Wake Sensitivity 0.7'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('tts-engine-dropdown')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Kokoro').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Kokoro'), findsOneWidget);
+  });
+}
+
+Widget _buildApp() {
+  return MyApp(
+    settingsController: SettingsController(),
+    chatSession: MockChatSession(),
+  );
 }
