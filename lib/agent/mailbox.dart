@@ -96,8 +96,10 @@ class MailboxDispatchConfig {
 
 abstract class SubAgentDispatcher {
   Future<DispatchResult> dispatch(DispatchRequest request);
+}
 
-  Future<void> dispose() async {}
+abstract class ManagedSubAgentDispatcher {
+  Future<void> dispose();
 }
 
 class AgentMailbox {
@@ -234,7 +236,9 @@ class AgentMailbox {
   }
 
   Future<void> dispose() async {
-    await _subAgentDispatcher.dispose();
+    if (_subAgentDispatcher case final ManagedSubAgentDispatcher dispatcher) {
+      await dispatcher.dispose();
+    }
     await _approvalController.close();
   }
 
@@ -284,7 +288,8 @@ class AgentMailbox {
   }
 }
 
-class _DefaultSubAgentDispatcher implements SubAgentDispatcher {
+class _DefaultSubAgentDispatcher
+    implements SubAgentDispatcher, ManagedSubAgentDispatcher {
   _DefaultSubAgentDispatcher({
     required Duration timeout,
     required this.onCompleted,
