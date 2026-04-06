@@ -8,7 +8,8 @@ class AgentLoopChatSession extends ChangeNotifier
   AgentLoopChatSession({
     required AgentLoop agentLoop,
     this.sessionKey = 'agent:main',
-    List<ChatTranscriptMessage> initialMessages = const <ChatTranscriptMessage>[],
+    List<ChatTranscriptMessage> initialMessages =
+        const <ChatTranscriptMessage>[],
   }) : _agentLoop = agentLoop,
        _messages = initialMessages.isEmpty
            ? <ChatTranscriptMessage>[
@@ -89,6 +90,7 @@ class AgentLoopChatSession extends ChangeNotifier
       );
 
       final responseText = _normalizeResponse(result);
+      final responseSender = _responseSenderForText(responseText);
       _conversationHistory.add(
         AgentMessage(
           role: AgentMessageRole.assistant,
@@ -96,21 +98,21 @@ class AgentLoopChatSession extends ChangeNotifier
           turnNumber: userTurnNumber,
         ),
       );
-      _appendMessage(ChatMessageSender.assistant, responseText);
+      _appendMessage(responseSender, responseText);
 
       _setActivities(<SubAgentActivity>[
         SubAgentActivity(
           id: 'agent-loop',
           label: 'agent.loop',
-          summary: result.sessionResult == SessionResult.completed
-              ? 'Agent loop completed successfully.'
-              : 'Agent loop entered a protected frozen state.',
+          summary: _activitySummaryForResult(result, responseText),
           details: <String>[
             'Result: ${result.sessionResult.name}',
             if (responseText.isNotEmpty)
               'Response length: ${responseText.length} chars',
           ],
-          status: result.sessionResult == SessionResult.completed
+          status: _isProtectivePauseMessage(responseText)
+              ? SubAgentActivityStatus.completed
+              : result.sessionResult == SessionResult.completed
               ? SubAgentActivityStatus.completed
               : SubAgentActivityStatus.failed,
         ),
@@ -149,6 +151,31 @@ class AgentLoopChatSession extends ChangeNotifier
       return 'The agent session was frozen after repeated execution errors.';
     }
     return 'LiteRT completed the turn but returned no visible text.';
+  }
+
+  ChatMessageSender _responseSenderForText(String responseText) {
+    if (_isProtectivePauseMessage(responseText)) {
+      return ChatMessageSender.system;
+    }
+    return ChatMessageSender.assistant;
+  }
+
+  String _activitySummaryForResult(
+    AgentLoopResult result,
+    String responseText,
+  ) {
+    if (_isProtectivePauseMessage(responseText)) {
+      return 'Generation paused to protect the device from low-memory crashes.';
+    }
+    return result.sessionResult == SessionResult.completed
+        ? 'Agent loop completed successfully.'
+        : 'Agent loop entered a protected frozen state.';
+  }
+
+  bool _isProtectivePauseMessage(String text) {
+    final lowered = text.toLowerCase();
+    return lowered.contains('openreef paused generation') ||
+        lowered.contains('low free ram detected');
   }
 
   int _nextTurnNumber() {
@@ -205,7 +232,8 @@ class AgentLoopChatSession extends ChangeNotifier
   @override
   ChatSessionPort createSession({
     required String sessionId,
-    List<ChatTranscriptMessage> initialMessages = const <ChatTranscriptMessage>[],
+    List<ChatTranscriptMessage> initialMessages =
+        const <ChatTranscriptMessage>[],
   }) {
     return AgentLoopChatSession(
       agentLoop: _agentLoop,

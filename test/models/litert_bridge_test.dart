@@ -33,10 +33,30 @@ void main() {
     expect(stats.latencyMs, 0);
   });
 
+  test('getDeviceStats parses legacy native key names', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(deviceStatsChannel, (call) async {
+          expect(call.method, 'getDeviceStats');
+          return <Object?, Object?>{'freeram': 1.75, 'npu_ready': false};
+        });
+
+    final stats = await bridge.getDeviceStats();
+
+    expect(stats, isNotNull);
+    expect(stats!.freeRam, 1.75);
+    expect(stats.npuReady, isFalse);
+  });
+
   test('generateStream throws when model not initialized', () {
     expect(
       () => bridge.generateStream(context: 'Hello', maxTokens: 16),
       throwsA(isA<StateError>()),
     );
+  });
+
+  test('crash shield exception prints user-facing message', () {
+    const error = LiteRtCrashShieldException('Low RAM');
+
+    expect(error.toString(), 'Low RAM');
   });
 }

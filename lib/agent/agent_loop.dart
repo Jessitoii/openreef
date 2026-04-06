@@ -6,6 +6,7 @@ import 'package:openreef/context/compactor.dart';
 import 'package:openreef/context/context_assembler.dart';
 import 'package:openreef/memory/memory_former.dart';
 import 'package:openreef/memory/memory_turn.dart';
+import 'package:openreef/models/litert_bridge.dart';
 
 class AgentLoop {
   AgentLoop({
@@ -15,12 +16,12 @@ class AgentLoop {
     required ToolRouter toolRouter,
     required MemoryFormer memoryFormer,
     AgentNotifier notifier = const NoopAgentNotifier(),
-  })  : _contextAssembler = contextAssembler,
-        _compactor = compactor,
-        _modelAdapter = modelAdapter,
-        _toolRouter = toolRouter,
-        _memoryFormer = memoryFormer,
-        _notifier = notifier;
+  }) : _contextAssembler = contextAssembler,
+       _compactor = compactor,
+       _modelAdapter = modelAdapter,
+       _toolRouter = toolRouter,
+       _memoryFormer = memoryFormer,
+       _notifier = notifier;
 
   static const int maxErrors = 3;
   static const int _autoCompactReserveTokens = 2000;
@@ -59,12 +60,11 @@ class AgentLoop {
         context,
         maxTokens: context.tokenBudget.outputReserve,
       );
-    } catch (_) {
-      consecutiveErrors += 1;
-      failedToolCalls = true;
-      response = const AgentResponse(
-        text: '',
-        toolCall: ToolCall(id: 'generation_error_0', toolId: 'generation_error'),
+    } catch (error) {
+      return _completeWithGenerationFailure(
+        error,
+        sessionKey: sessionKey,
+        hasFailedToolCalls: failedToolCalls,
       );
     }
 
@@ -105,15 +105,11 @@ class AgentLoop {
           context,
           maxTokens: context.tokenBudget.outputReserve,
         );
-      } catch (_) {
-        failedToolCalls = true;
-        consecutiveErrors += 1;
-        response = AgentResponse(
-          text: '',
-          toolCall: ToolCall(
-            id: 'generation_error_$consecutiveErrors',
-            toolId: 'generation_error',
-          ),
+      } catch (error) {
+        return _completeWithGenerationFailure(
+          error,
+          sessionKey: sessionKey,
+          hasFailedToolCalls: true,
         );
       }
     }
@@ -130,6 +126,32 @@ class AgentLoop {
     return AgentLoopResult(
       sessionResult: SessionResult.completed,
       text: response.text,
+    );
+  }
+
+  Future<AgentLoopResult> _completeWithGenerationFailure(
+    Object error, {
+    required String sessionKey,
+    required bool hasFailedToolCalls,
+  }) async {
+    await _memoryFormer.process(
+      MemoryTurn(
+        facts: const [],
+        hasFailedToolCalls: hasFailedToolCalls,
+        isAmbiguous: false,
+        sessionKey: sessionKey,
+      ),
+    );
+
+    final message = switch (error) {
+      LiteRtCrashShieldException() =>
+        'OpenReef paused generation to protect your phone. ${error.toString()}',
+      _ => 'LiteRT generation failed: $error',
+    };
+
+    return AgentLoopResult(
+      sessionResult: SessionResult.completed,
+      text: message,
     );
   }
 
@@ -175,7 +197,8 @@ class AgentLoop {
       );
     }
 
-    if (nextContext.tokenBudget.remaining < 1500 || nextContext.compactRequested) {
+    if (nextContext.tokenBudget.remaining < 1500 ||
+        nextContext.compactRequested) {
       nextContext = await _compactor.fullCompact(
         nextContext,
         reInjectRecentFiles: true,

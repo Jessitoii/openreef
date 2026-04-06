@@ -10,6 +10,7 @@ import 'package:openreef/context/context_assembler.dart';
 import 'package:openreef/memory/memory_former.dart';
 import 'package:openreef/memory/memory_index.dart';
 import 'package:openreef/memory/memory_storage.dart';
+import 'package:openreef/models/litert_bridge.dart';
 import 'package:openreef/memory/sqlite_memory_storage_backend.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
@@ -29,10 +30,7 @@ void main() {
     );
     await storage.initialize();
     memoryIndex = MemoryIndex(storage);
-    memoryFormer = MemoryFormer(
-      storage: storage,
-      memoryIndex: memoryIndex,
-    );
+    memoryFormer = MemoryFormer(storage: storage, memoryIndex: memoryIndex);
   });
 
   tearDown(() async {
@@ -44,57 +42,50 @@ void main() {
     final loop = _buildLoop(
       memoryIndex: memoryIndex,
       memoryFormer: memoryFormer,
-      modelAdapter: _QueueModelAdapter(
-        <AgentResponse>[
-          const AgentResponse(
-            text: '',
-            toolCall: ToolCall(id: '1', toolId: 'explode'),
-          ),
-          const AgentResponse(
-            text: '',
-            toolCall: ToolCall(id: '2', toolId: 'explode'),
-          ),
-          const AgentResponse(
-            text: '',
-            toolCall: ToolCall(id: '3', toolId: 'explode'),
-          ),
-          const AgentResponse(
-            text: '',
-            toolCall: ToolCall(id: '4', toolId: 'explode'),
-          ),
-        ],
-      ),
-      toolCatalog: InMemoryToolCatalog(
-        <ToolDefinition>[
-          ToolDefinition(
-            id: 'session_status',
-            embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
-            execute: _okExecute,
-          ),
-          ToolDefinition(
-            id: 'memory_search',
-            embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
-            execute: _okExecute,
-          ),
-          ToolDefinition(
-            id: 'notify',
-            embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
-            execute: _okExecute,
-          ),
-          ToolDefinition(
-            id: 'explode',
-            embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
-            execute: _failingExecute,
-          ),
-        ],
-      ),
+      modelAdapter: _QueueModelAdapter(<AgentResponse>[
+        const AgentResponse(
+          text: '',
+          toolCall: ToolCall(id: '1', toolId: 'explode'),
+        ),
+        const AgentResponse(
+          text: '',
+          toolCall: ToolCall(id: '2', toolId: 'explode'),
+        ),
+        const AgentResponse(
+          text: '',
+          toolCall: ToolCall(id: '3', toolId: 'explode'),
+        ),
+        const AgentResponse(
+          text: '',
+          toolCall: ToolCall(id: '4', toolId: 'explode'),
+        ),
+      ]),
+      toolCatalog: InMemoryToolCatalog(<ToolDefinition>[
+        ToolDefinition(
+          id: 'session_status',
+          embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
+          execute: _okExecute,
+        ),
+        ToolDefinition(
+          id: 'memory_search',
+          embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
+          execute: _okExecute,
+        ),
+        ToolDefinition(
+          id: 'notify',
+          embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
+          execute: _okExecute,
+        ),
+        ToolDefinition(
+          id: 'explode',
+          embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
+          execute: _failingExecute,
+        ),
+      ]),
       notifier: notifier,
     );
 
-    final result = await loop.run(
-      'trigger failures',
-      sessionKey: 'agent:main',
-    );
+    final result = await loop.run('trigger failures', sessionKey: 'agent:main');
 
     expect(result.sessionResult, SessionResult.frozen);
     expect(notifier.freezeCalls, 1);
@@ -105,60 +96,56 @@ void main() {
     final loop = _buildLoop(
       memoryIndex: memoryIndex,
       memoryFormer: memoryFormer,
-      modelAdapter: _QueueModelAdapter(
-        <AgentResponse>[
-          const AgentResponse(
-            text: '',
-            toolCall: ToolCall(id: '1', toolId: 'explode'),
-          ),
-          const AgentResponse(
-            text: '',
-            toolCall: ToolCall(id: '2', toolId: 'explode'),
-          ),
-          const AgentResponse(
-            text: '',
-            toolCall: ToolCall(id: '3', toolId: 'recover'),
-          ),
-          const AgentResponse(
-            text: '',
-            toolCall: ToolCall(id: '4', toolId: 'explode'),
-          ),
-          const AgentResponse(
-            text: '',
-            toolCall: ToolCall(id: '5', toolId: 'explode'),
-          ),
-          const AgentResponse(text: 'done'),
-        ],
-      ),
-      toolCatalog: InMemoryToolCatalog(
-        <ToolDefinition>[
-          ToolDefinition(
-            id: 'session_status',
-            embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
-            execute: _okExecute,
-          ),
-          ToolDefinition(
-            id: 'memory_search',
-            embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
-            execute: _okExecute,
-          ),
-          ToolDefinition(
-            id: 'notify',
-            embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
-            execute: _okExecute,
-          ),
-          ToolDefinition(
-            id: 'explode',
-            embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
-            execute: _failingExecute,
-          ),
-          ToolDefinition(
-            id: 'recover',
-            embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
-            execute: _okExecute,
-          ),
-        ],
-      ),
+      modelAdapter: _QueueModelAdapter(<AgentResponse>[
+        const AgentResponse(
+          text: '',
+          toolCall: ToolCall(id: '1', toolId: 'explode'),
+        ),
+        const AgentResponse(
+          text: '',
+          toolCall: ToolCall(id: '2', toolId: 'explode'),
+        ),
+        const AgentResponse(
+          text: '',
+          toolCall: ToolCall(id: '3', toolId: 'recover'),
+        ),
+        const AgentResponse(
+          text: '',
+          toolCall: ToolCall(id: '4', toolId: 'explode'),
+        ),
+        const AgentResponse(
+          text: '',
+          toolCall: ToolCall(id: '5', toolId: 'explode'),
+        ),
+        const AgentResponse(text: 'done'),
+      ]),
+      toolCatalog: InMemoryToolCatalog(<ToolDefinition>[
+        ToolDefinition(
+          id: 'session_status',
+          embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
+          execute: _okExecute,
+        ),
+        ToolDefinition(
+          id: 'memory_search',
+          embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
+          execute: _okExecute,
+        ),
+        ToolDefinition(
+          id: 'notify',
+          embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
+          execute: _okExecute,
+        ),
+        ToolDefinition(
+          id: 'explode',
+          embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
+          execute: _failingExecute,
+        ),
+        ToolDefinition(
+          id: 'recover',
+          embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
+          execute: _okExecute,
+        ),
+      ]),
       notifier: notifier,
     );
 
@@ -172,13 +159,14 @@ void main() {
     expect(notifier.freezeCalls, 0);
   });
 
-  test('does not freeze before the third consecutive error is reached', () async {
-    final notifier = _RecordingNotifier();
-    final loop = _buildLoop(
-      memoryIndex: memoryIndex,
-      memoryFormer: memoryFormer,
-      modelAdapter: _QueueModelAdapter(
-        <AgentResponse>[
+  test(
+    'does not freeze before the third consecutive error is reached',
+    () async {
+      final notifier = _RecordingNotifier();
+      final loop = _buildLoop(
+        memoryIndex: memoryIndex,
+        memoryFormer: memoryFormer,
+        modelAdapter: _QueueModelAdapter(<AgentResponse>[
           const AgentResponse(
             text: '',
             toolCall: ToolCall(id: '1', toolId: 'explode'),
@@ -188,10 +176,8 @@ void main() {
             toolCall: ToolCall(id: '2', toolId: 'explode'),
           ),
           const AgentResponse(text: 'safe exit'),
-        ],
-      ),
-      toolCatalog: InMemoryToolCatalog(
-        <ToolDefinition>[
+        ]),
+        toolCatalog: InMemoryToolCatalog(<ToolDefinition>[
           ToolDefinition(
             id: 'session_status',
             embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
@@ -212,19 +198,50 @@ void main() {
             embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
             execute: _failingExecute,
           ),
-        ],
-      ),
-      notifier: notifier,
-    );
+        ]),
+        notifier: notifier,
+      );
 
-    final result = await loop.run(
-      'only two failures',
-      sessionKey: 'agent:main',
-    );
+      final result = await loop.run(
+        'only two failures',
+        sessionKey: 'agent:main',
+      );
 
-    expect(result.sessionResult, SessionResult.completed);
-    expect(notifier.freezeCalls, 0);
-  });
+      expect(result.sessionResult, SessionResult.completed);
+      expect(notifier.freezeCalls, 0);
+    },
+  );
+
+  test(
+    'returns crash shield message instead of freezing on generation errors',
+    () async {
+      final notifier = _RecordingNotifier();
+      final loop = _buildLoop(
+        memoryIndex: memoryIndex,
+        memoryFormer: memoryFormer,
+        modelAdapter: _ThrowingModelAdapter(
+          const LiteRtCrashShieldException('Low free RAM detected.'),
+        ),
+        toolCatalog: InMemoryToolCatalog(<ToolDefinition>[
+          ToolDefinition(
+            id: 'session_status',
+            embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
+            execute: _okExecute,
+          ),
+        ]),
+        notifier: notifier,
+      );
+
+      final result = await loop.run(
+        'protect the device',
+        sessionKey: 'session-test',
+      );
+
+      expect(result.sessionResult, SessionResult.completed);
+      expect(result.text, 'Low free RAM detected.');
+      expect(notifier.freezeCalls, 0);
+    },
+  );
 
   test('runs compaction before dispatch in the tool loop', () async {
     final events = <String>[];
@@ -234,42 +251,38 @@ void main() {
     final loop = _buildLoop(
       memoryIndex: memoryIndex,
       memoryFormer: memoryFormer,
-      modelAdapter: _QueueModelAdapter(
-        <AgentResponse>[
-          const AgentResponse(
-            text: '',
-            toolCall: ToolCall(id: '1', toolId: 'recover'),
-          ),
-          const AgentResponse(text: 'done'),
-        ],
-      ),
-      toolCatalog: InMemoryToolCatalog(
-        <ToolDefinition>[
-          ToolDefinition(
-            id: 'session_status',
-            embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
-            execute: _okExecute,
-          ),
-          ToolDefinition(
-            id: 'memory_search',
-            embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
-            execute: _okExecute,
-          ),
-          ToolDefinition(
-            id: 'notify',
-            embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
-            execute: _okExecute,
-          ),
-          ToolDefinition(
-            id: 'recover',
-            embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
-            execute: (call) async {
-              events.add('dispatch');
-              return const ToolResult.success('ok');
-            },
-          ),
-        ],
-      ),
+      modelAdapter: _QueueModelAdapter(<AgentResponse>[
+        const AgentResponse(
+          text: '',
+          toolCall: ToolCall(id: '1', toolId: 'recover'),
+        ),
+        const AgentResponse(text: 'done'),
+      ]),
+      toolCatalog: InMemoryToolCatalog(<ToolDefinition>[
+        ToolDefinition(
+          id: 'session_status',
+          embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
+          execute: _okExecute,
+        ),
+        ToolDefinition(
+          id: 'memory_search',
+          embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
+          execute: _okExecute,
+        ),
+        ToolDefinition(
+          id: 'notify',
+          embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
+          execute: _okExecute,
+        ),
+        ToolDefinition(
+          id: 'recover',
+          embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
+          execute: (call) async {
+            events.add('dispatch');
+            return const ToolResult.success('ok');
+          },
+        ),
+      ]),
       notifier: notifier,
       compactor: compactor,
     );
@@ -354,6 +367,20 @@ class _FixedEmbedder implements IntentEmbedder {
   Future<List<double>> embed(String text) async => _embedding;
 }
 
+class _ThrowingModelAdapter implements AgentModelAdapter {
+  _ThrowingModelAdapter(this._error);
+
+  final Object _error;
+
+  @override
+  Future<AgentResponse> generate(
+    AssembleResult context, {
+    required int maxTokens,
+  }) async {
+    throw _error;
+  }
+}
+
 class _InlineSummarizer implements CompactionSummarizer {
   const _InlineSummarizer(this._events);
 
@@ -371,9 +398,7 @@ class _InlineSummarizer implements CompactionSummarizer {
 
 class _RecordingCompactor extends ReefCompactor {
   _RecordingCompactor(this._events)
-      : super(
-          summarizer: _InlineSummarizer(_events),
-        );
+    : super(summarizer: _InlineSummarizer(_events));
 
   final List<String> _events;
 
