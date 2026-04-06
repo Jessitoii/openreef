@@ -4,19 +4,25 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:openreef/memory/chat_session_repository.dart';
+import 'package:openreef/memory/memory_storage.dart';
+import 'package:openreef/memory/sqlite_memory_storage_backend.dart';
+import 'package:openreef/mcp/mcp_connection_store.dart';
+import 'package:openreef/mcp/mcp_connections_controller.dart';
 import 'package:openreef/models/litert_bridge.dart';
 import 'package:openreef/models/model_download_controller.dart';
 import 'package:openreef/models/model_downloader.dart';
 import 'package:openreef/models/model_registry.dart';
 import 'package:openreef/models/model_storage.dart';
 import 'package:openreef/settings/settings_controller.dart';
+import 'package:openreef/skills/skill_registry.dart';
+import 'package:openreef/skills/skill_registry_controller.dart';
 import 'package:openreef/ui/chat_session_port.dart';
 import 'package:openreef/ui/mock_chat_session.dart';
 import 'package:openreef/ui/openreef_app.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
-const MethodChannel _modelMethodChannel = MethodChannel(
-  'openreef/litert_channel',
+const MethodChannel _deviceStatsChannel = MethodChannel(
+  'openreef/device_stats',
 );
 
 void main() {
@@ -25,12 +31,20 @@ void main() {
 
   setUp(() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(_modelMethodChannel, null);
+        .setMockMethodCallHandler(_deviceStatsChannel, (call) async {
+          if (call.method == 'getDeviceStats') {
+            return <String, Object?>{
+              'freeRamGb': 6.0,
+              'npuReady': false,
+            };
+          }
+          return null;
+        });
   });
 
   tearDown(() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(_modelMethodChannel, null);
+        .setMockMethodCallHandler(_deviceStatsChannel, null);
   });
 
   testWidgets('app boots into drawer-driven chat shell', (tester) async {
@@ -171,7 +185,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('drawer-skills')));
     await tester.pumpAndSettle();
-    expect(find.text('SKILLS'), findsOneWidget);
+    expect(find.text('SKILL REGISTRY'), findsOneWidget);
 
     await tester.tap(find.byKey(const Key('open-drawer-button')));
     await tester.pumpAndSettle();
@@ -196,6 +210,27 @@ Future<Widget> _buildApp({
     path: '${sessionDirectory.path}${Platform.pathSeparator}chat.sqlite',
     databaseFactory: databaseFactoryFfi,
   );
+  final memoryDatabase = await Directory.systemTemp.createTemp(
+    'widget-memory-',
+  );
+  final memoryStorage = MemoryStorage(
+    SqliteMemoryStorageBackend(
+      path:
+          '${memoryDatabase.path}${Platform.pathSeparator}memory.sqlite',
+      databaseFactory: databaseFactoryFfi,
+    ),
+  );
+  await memoryStorage.initialize();
+  final skillsDirectory = await Directory.systemTemp.createTemp(
+    'widget-skills-',
+  );
+  final skillRegistryController = SkillRegistryController(
+    registry: SkillRegistry(rootPaths: <String>[skillsDirectory.path]),
+  );
+  final mcpConnectionsController = McpConnectionsController(
+    store: McpConnectionStore(memoryStorage),
+    autoConnectPersisted: false,
+  );
 
   return OpenReefApp(
     settingsController: settingsController ?? SettingsController(),
@@ -205,8 +240,10 @@ Future<Widget> _buildApp({
       registry: const ModelRegistry(),
       storage: modelStorage,
       downloader: ModelDownloader(storage: modelStorage),
-      bridge: LiteRtBridge(methodChannel: _modelMethodChannel),
+      bridge: LiteRtBridge(),
     ),
+    skillRegistryController: skillRegistryController,
+    mcpConnectionsController: mcpConnectionsController,
     modelReady: true,
     onModelReady: () async {},
   );

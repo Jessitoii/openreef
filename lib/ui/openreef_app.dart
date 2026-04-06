@@ -2,16 +2,20 @@ import 'package:flutter/material.dart';
 import 'package:openreef/memory/chat_session_repository.dart';
 import 'package:openreef/models/model_download_controller.dart';
 import 'package:openreef/settings/settings_controller.dart';
+import 'package:openreef/skills/skill_registry_controller.dart';
 import 'package:openreef/ui/app_shell.dart';
 import 'package:openreef/ui/app_theme.dart';
 import 'package:openreef/ui/chat_session_port.dart';
 import 'package:openreef/ui/screens/model_download_screen.dart';
+import 'package:openreef/mcp/mcp_connections_controller.dart';
 
 class OpenReefApp extends StatelessWidget {
   const OpenReefApp({
     required this.settingsController,
     required this.chatSession,
     required this.modelDownloadController,
+    required this.skillRegistryController,
+    required this.mcpConnectionsController,
     required this.modelReady,
     required this.onModelReady,
     this.chatSessionRepository,
@@ -21,6 +25,8 @@ class OpenReefApp extends StatelessWidget {
   final SettingsController settingsController;
   final ChatSessionPort chatSession;
   final ModelDownloadController modelDownloadController;
+  final SkillRegistryController skillRegistryController;
+  final McpConnectionsController mcpConnectionsController;
   final bool modelReady;
   final Future<void> Function() onModelReady;
   final ChatSessionRepository? chatSessionRepository;
@@ -41,6 +47,8 @@ class OpenReefApp extends StatelessWidget {
                   settingsController: settingsController,
                   chatSession: chatSession,
                   modelDownloadController: modelDownloadController,
+                  skillRegistryController: skillRegistryController,
+                  mcpConnectionsController: mcpConnectionsController,
                   onModelReady: onModelReady,
                   chatSessionRepository: chatSessionRepository,
                 )

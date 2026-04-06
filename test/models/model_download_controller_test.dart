@@ -1,6 +1,5 @@
 import 'dart:io';
 
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:openreef/models/litert_bridge.dart';
 import 'package:openreef/models/model_descriptor.dart';
@@ -13,7 +12,6 @@ import 'package:openreef/models/model_storage.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  const MethodChannel methodChannel = MethodChannel('openreef/litert_channel');
   late Directory tempDirectory;
   late ModelStorage storage;
 
@@ -22,18 +20,9 @@ void main() {
       'openreef-controller-',
     );
     storage = ModelStorage(directoryResolver: () async => tempDirectory);
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(methodChannel, (MethodCall call) async {
-          if (call.method == 'getDeviceStats') {
-            return <String, Object?>{'freeram': 2.0, 'npu_ready': false};
-          }
-          return null;
-        });
   });
 
   tearDown(() async {
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(methodChannel, null);
     if (await tempDirectory.exists()) {
       await tempDirectory.delete(recursive: true);
     }
@@ -44,7 +33,7 @@ void main() {
       registry: const ModelRegistry(),
       storage: storage,
       downloader: _FakeModelDownloader(storage: storage),
-      bridge: LiteRtBridge(methodChannel: methodChannel),
+      bridge: _FakeLiteRtBridge(),
     );
 
     await controller.initialize();
@@ -68,6 +57,7 @@ void main() {
           status: ModelDownloadResultStatus.completed,
           installedModel: InstalledModelRecord(
             descriptor: descriptor,
+            modelId: 'test-model-id',
             path: installedFile.path,
             fileSizeBytes: 1024,
             installedAt: DateTime.now(),
@@ -80,7 +70,7 @@ void main() {
       registry: const ModelRegistry(),
       storage: storage,
       downloader: downloader,
-      bridge: LiteRtBridge(methodChannel: methodChannel),
+      bridge: _FakeLiteRtBridge(),
     );
 
     await controller.initialize();
@@ -113,5 +103,12 @@ class _FakeModelDownloader extends ModelDownloader {
     return const ModelDownloadResult(
       status: ModelDownloadResultStatus.cancelled,
     );
+  }
+}
+
+class _FakeLiteRtBridge extends LiteRtBridge {
+  @override
+  Future<LiteRtDeviceStats> getDeviceStats() async {
+    return const LiteRtDeviceStats(freeRam: 2.0, npuReady: false);
   }
 }

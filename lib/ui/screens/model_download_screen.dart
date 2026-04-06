@@ -158,7 +158,7 @@ class _HeroPanel extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Text(
-              'Download one model into secure app storage, then we will initialize LiteRT natively from the local file path.',
+              'Download one model into secure app storage, then we will initialize it for on-device inference.',
               style: theme.textTheme.bodyLarge?.copyWith(
                 color: muted,
                 height: 1.5,
@@ -340,7 +340,8 @@ class _MarketplacePanel extends StatelessWidget {
                     label: Text(switch (state.status) {
                       ModelDownloadStatus.paused => 'Resume Download',
                       ModelDownloadStatus.completed => 'Re-download Model',
-                      ModelDownloadStatus.initializing => 'Initializing LiteRT',
+                      ModelDownloadStatus.initializing =>
+                        'Initializing Model',
                       _ => 'Download Model',
                     }),
                   ),

@@ -2,7 +2,8 @@ enum MemoryStoreKind {
   shortTerm,
   longTerm,
   episodic,
-  skillState;
+  skillState,
+  mcpConnections;
 
   String get value {
     switch (this) {
@@ -14,6 +15,8 @@ enum MemoryStoreKind {
         return 'episodic';
       case MemoryStoreKind.skillState:
         return 'skill_state';
+      case MemoryStoreKind.mcpConnections:
+        return 'mcp_connections';
     }
   }
 

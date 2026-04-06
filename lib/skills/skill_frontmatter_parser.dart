@@ -58,8 +58,14 @@ class SkillFrontmatterParser {
       toolsRequired.add(entry);
     }
 
+    final descriptionNode = parsedYaml['description'];
+    final description = descriptionNode is String ? descriptionNode : '';
+
     return ParsedSkillMarkdown(
-      manifest: SkillManifest(toolsRequired: toolsRequired),
+      manifest: SkillManifest(
+        toolsRequired: toolsRequired,
+        description: description,
+      ),
       body: body,
     );
   }

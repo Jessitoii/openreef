@@ -2,6 +2,7 @@ package com.openreef.app.openreef
 
 import android.content.Context
 import android.media.AudioManager
+import android.app.ActivityManager
 import android.os.BatteryManager
 import com.openreef.app.openreef.litert.LiteRtLmBridge
 import com.openreef.app.openreef.litert.LiteRtAndroidLmEngine
@@ -15,6 +16,7 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
     private var liteRtBridge: LiteRtLmBridge? = null
     private var nativeToolsChannel: MethodChannel? = null
+    private var deviceStatsChannel: MethodChannel? = null
     private var wakeWordChannel: MethodChannel? = null
     private var wakeWordEventChannel: EventChannel? = null
 
@@ -39,6 +41,20 @@ class MainActivity : FlutterActivity() {
                             "setVolumeLevel" ->
                                 handleSetVolumeLevel(call.argument<Double>("level"), result)
                             "getBatteryInfo" -> handleGetBatteryInfo(result)
+                            else -> result.notImplemented()
+                        }
+                    }
+                }
+        }
+        if (deviceStatsChannel == null) {
+            deviceStatsChannel =
+                MethodChannel(
+                    flutterEngine.dartExecutor.binaryMessenger,
+                    DEVICE_STATS_CHANNEL_NAME,
+                ).also { channel ->
+                    channel.setMethodCallHandler { call, result ->
+                        when (call.method) {
+                            "getDeviceStats" -> handleGetDeviceStats(result)
                             else -> result.notImplemented()
                         }
                     }
@@ -87,6 +103,8 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         nativeToolsChannel?.setMethodCallHandler(null)
         nativeToolsChannel = null
+        deviceStatsChannel?.setMethodCallHandler(null)
+        deviceStatsChannel = null
         wakeWordChannel?.setMethodCallHandler(null)
         wakeWordChannel = null
         wakeWordEventChannel?.setStreamHandler(null)
@@ -146,6 +164,23 @@ class MainActivity : FlutterActivity() {
         )
     }
 
+    private fun handleGetDeviceStats(result: MethodChannel.Result) {
+        val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+        if (activityManager == null) {
+            result.error("ERR_DEVICE_STATS", "ActivityManager unavailable", null)
+            return
+        }
+        val memoryInfo = ActivityManager.MemoryInfo()
+        activityManager.getMemoryInfo(memoryInfo)
+        val freeRamGb = memoryInfo.availMem.toDouble() / (1024.0 * 1024.0 * 1024.0)
+        result.success(
+            mapOf(
+                "freeRamGb" to freeRamGb,
+                "npuReady" to false,
+            ),
+        )
+    }
+
     private fun handleStartWakeWord(): Boolean =
         OpenReefForegroundService.requestStart(applicationContext)
 
@@ -154,6 +189,7 @@ class MainActivity : FlutterActivity() {
 
     companion object {
         private const val NATIVE_TOOLS_CHANNEL_NAME = "openreef/native_tools"
+        private const val DEVICE_STATS_CHANNEL_NAME = "openreef/device_stats"
         private const val WAKE_WORD_CHANNEL_NAME = "openreef/wake_word_channel"
         private const val WAKE_WORD_EVENT_CHANNEL_NAME = "openreef/wake_word_events"
     }

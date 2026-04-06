@@ -3,6 +3,7 @@ import 'package:openreef/memory/chat_session_record.dart';
 import 'package:openreef/memory/chat_session_repository.dart';
 import 'package:openreef/models/model_download_controller.dart';
 import 'package:openreef/settings/settings_controller.dart';
+import 'package:openreef/skills/skill_registry_controller.dart';
 import 'package:openreef/ui/chat_session_port.dart';
 import 'package:openreef/ui/chat_workspace_controller.dart';
 import 'package:openreef/ui/screens/chat_screen.dart';
@@ -10,12 +11,15 @@ import 'package:openreef/ui/screens/mcp_connections_screen.dart';
 import 'package:openreef/ui/screens/model_download_screen.dart';
 import 'package:openreef/ui/screens/settings_screen.dart';
 import 'package:openreef/ui/screens/skills_screen.dart';
+import 'package:openreef/mcp/mcp_connections_controller.dart';
 
 class AppShell extends StatefulWidget {
   const AppShell({
     required this.settingsController,
     required this.chatSession,
     required this.modelDownloadController,
+    required this.skillRegistryController,
+    required this.mcpConnectionsController,
     required this.onModelReady,
     this.chatSessionRepository,
     super.key,
@@ -24,6 +28,8 @@ class AppShell extends StatefulWidget {
   final SettingsController settingsController;
   final ChatSessionPort chatSession;
   final ModelDownloadController modelDownloadController;
+  final SkillRegistryController skillRegistryController;
+  final McpConnectionsController mcpConnectionsController;
   final Future<void> Function() onModelReady;
   final ChatSessionRepository? chatSessionRepository;
 
@@ -202,9 +208,11 @@ class _AppShellState extends State<AppShell> {
       case AppShellDestination.settings:
         return SettingsScreen(settingsController: widget.settingsController);
       case AppShellDestination.skills:
-        return const SkillsScreen();
+        return SkillsScreen(controller: widget.skillRegistryController);
       case AppShellDestination.mcp:
-        return const McpConnectionsScreen();
+        return McpConnectionsScreen(
+          controller: widget.mcpConnectionsController,
+        );
     }
   }
 

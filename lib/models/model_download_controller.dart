@@ -79,6 +79,15 @@ class ModelDownloadController extends ChangeNotifier {
       return null;
     }
 
+    if (_downloader.isDownloading && !_state.isDownloading) {
+      _downloader.resetStuckDownload();
+    }
+
+    final existingInstalled = _state.installedModel;
+    if (existingInstalled != null) {
+      await _storage.clearInstalled(existingInstalled.descriptor);
+    }
+
     _lastTickAt = null;
     _lastTickBytes = 0;
     _state = _state.copyWith(
@@ -130,10 +139,13 @@ class ModelDownloadController extends ChangeNotifier {
           return null;
       }
     } catch (error) {
+      final message = error.toString().contains('Task timed out')
+          ? 'Model download timed out. Please try again.'
+          : error.toString();
       _state = _state.copyWith(
         status: ModelDownloadStatus.failed,
         bytesPerSecond: 0,
-        errorMessage: error.toString(),
+        errorMessage: message,
       );
       notifyListeners();
       return null;
@@ -222,6 +234,9 @@ class ModelDownloadController extends ChangeNotifier {
   }
 
   void _updateProgress(int downloadedBytes, int totalBytes) {
+    if (downloadedBytes < 0 || totalBytes <= 0) {
+      return;
+    }
     final now = DateTime.now();
     var bytesPerSecond = _state.bytesPerSecond;
     if (_lastTickAt != null) {

@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:background_downloader/background_downloader.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter_gemma/flutter_gemma.dart';
 import 'package:openreef/models/model_descriptor.dart';
 import 'package:openreef/models/model_storage.dart';
 
@@ -16,19 +19,65 @@ class ModelDownloadResult {
 class ModelDownloader {
   ModelDownloader({
     required ModelStorage storage,
-    HttpClient Function()? clientFactory,
-  }) : _storage = storage,
-       _clientFactory = clientFactory ?? HttpClient.new;
+  }) : _storage = storage;
+
+  static const String _downloadGroup = 'smart_downloads';
+  static bool _androidDownloadNotificationsConfigured = false;
 
   final ModelStorage _storage;
-  final HttpClient Function() _clientFactory;
-
-  HttpClient? _activeClient;
+  CancelToken? _activeCancelToken;
   bool _pauseRequested = false;
   bool _cancelRequested = false;
   bool _isDownloading = false;
 
   bool get isDownloading => _isDownloading;
+
+  Future<void> _ensureAndroidForegroundNotificationsConfigured() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return;
+    }
+    if (_androidDownloadNotificationsConfigured) {
+      return;
+    }
+
+    FileDownloader().configureNotificationForGroup(
+      _downloadGroup,
+      running: const TaskNotification(
+        'Downloading model',
+        '{filename} - {progress}% ({networkSpeed}, {timeRemaining})',
+      ),
+      complete: const TaskNotification(
+        'Model download complete',
+        '{filename} is ready to initialize.',
+      ),
+      error: const TaskNotification(
+        'Model download failed',
+        '{filename} could not be downloaded.',
+      ),
+      paused: const TaskNotification(
+        'Model download paused',
+        '{filename} is waiting to resume.',
+      ),
+      canceled: const TaskNotification(
+        'Model download canceled',
+        '{filename} was canceled.',
+      ),
+      progressBar: true,
+    );
+    _androidDownloadNotificationsConfigured = true;
+    debugPrint(
+      'ModelDownloader: configured Android notifications for group=$_downloadGroup',
+    );
+  }
+
+  void resetStuckDownload() {
+    _activeCancelToken?.cancel();
+    _activeCancelToken = null;
+    _pauseRequested = false;
+    _cancelRequested = false;
+    _isDownloading = false;
+    debugPrint('ModelDownloader.resetStuckDownload: cleared stale download state');
+  }
 
   Future<ModelDownloadResult> download({
     required ModelDescriptor descriptor,
@@ -41,126 +90,45 @@ class ModelDownloader {
     _isDownloading = true;
     _pauseRequested = false;
     _cancelRequested = false;
-    _activeClient = _clientFactory();
-
-    final installedFile = await _storage.getInstalledFile(descriptor);
-    final partialFile = await _storage.getPartialFile(descriptor);
-    await installedFile.parent.create(recursive: true);
-
-    RandomAccessFile? sink;
-
     try {
-      var existingBytes = await _storage.getPartialBytes(descriptor);
+      await _ensureAndroidForegroundNotificationsConfigured();
 
-      final request = await _activeClient!.getUrl(
-        Uri.parse(descriptor.downloadUrl),
+      _activeCancelToken = CancelToken();
+      final totalBytes = descriptor.expectedFileSizeBytes;
+      onProgress(0, totalBytes);
+
+      debugPrint(
+        'ModelDownloader.download: start install modelId=${descriptor.id}',
       );
-      if (existingBytes > 0) {
-        request.headers.set(HttpHeaders.rangeHeader, 'bytes=$existingBytes-');
-      }
-
-      final response = await request.close();
-
-      if (response.statusCode == HttpStatus.ok && existingBytes > 0) {
-        await partialFile.writeAsBytes(const <int>[], flush: true);
-        existingBytes = 0;
-      }
-
-      if (response.statusCode == HttpStatus.requestedRangeNotSatisfiable &&
-          await partialFile.exists()) {
-        if (await installedFile.exists()) {
-          await installedFile.delete();
-        }
-        final completedFile = await partialFile.rename(installedFile.path);
-        final stat = await completedFile.stat();
-        return ModelDownloadResult(
-          status: ModelDownloadResultStatus.completed,
-          installedModel: InstalledModelRecord(
-            descriptor: descriptor,
-            path: completedFile.path,
-            fileSizeBytes: stat.size,
-            installedAt: stat.modified,
-          ),
-        );
-      }
-
-      if (response.statusCode != HttpStatus.ok &&
-          response.statusCode != HttpStatus.partialContent) {
-        throw HttpException(
-          'Model download failed with status ${response.statusCode}.',
-          uri: Uri.parse(descriptor.downloadUrl),
-        );
-      }
-
-      sink = await partialFile.open(
-        mode:
-            existingBytes > 0 &&
-                response.statusCode == HttpStatus.partialContent
-            ? FileMode.append
-            : FileMode.write,
+      final installation =
+          await FlutterGemma.installModel(
+            modelType: descriptor.modelType,
+            fileType: descriptor.fileType,
+          )
+          .fromNetwork(descriptor.downloadUrl, foreground: true)
+          .withProgress((progress) {
+            final normalized = progress.clamp(0, 100) / 100;
+            final downloadedBytes =
+                (normalized * totalBytes).round().clamp(0, totalBytes);
+            onProgress(downloadedBytes, totalBytes);
+          })
+          .withCancelToken(_activeCancelToken!)
+          .install();
+      debugPrint(
+        'ModelDownloader.download: install finished modelId=${installation.modelId}',
       );
 
-      final totalBytes = _resolveTotalBytes(
-        response: response,
-        fallbackBytes: descriptor.expectedFileSizeBytes,
-        existingBytes: existingBytes,
+      final record = InstalledModelRecord(
+        descriptor: descriptor,
+        modelId: installation.modelId,
+        fileSizeBytes: totalBytes,
+        installedAt: DateTime.now(),
       );
-      var downloadedBytes = existingBytes;
-      onProgress(downloadedBytes, totalBytes);
+      await _storage.saveInstalledModel(record);
 
-      await for (final chunk in response) {
-        if (_cancelRequested) {
-          await sink.close();
-          if (await partialFile.exists()) {
-            await partialFile.delete();
-          }
-          return const ModelDownloadResult(
-            status: ModelDownloadResultStatus.cancelled,
-          );
-        }
-
-        if (_pauseRequested) {
-          await sink.close();
-          return const ModelDownloadResult(
-            status: ModelDownloadResultStatus.paused,
-          );
-        }
-
-        sink.writeFromSync(chunk);
-        downloadedBytes += chunk.length;
-        onProgress(downloadedBytes, totalBytes);
-      }
-
-      await sink.close();
-
-      if (_cancelRequested) {
-        if (await partialFile.exists()) {
-          await partialFile.delete();
-        }
-        return const ModelDownloadResult(
-          status: ModelDownloadResultStatus.cancelled,
-        );
-      }
-
-      if (_pauseRequested) {
-        return const ModelDownloadResult(
-          status: ModelDownloadResultStatus.paused,
-        );
-      }
-
-      if (await installedFile.exists()) {
-        await installedFile.delete();
-      }
-      final completedFile = await partialFile.rename(installedFile.path);
-      final stat = await completedFile.stat();
       return ModelDownloadResult(
         status: ModelDownloadResultStatus.completed,
-        installedModel: InstalledModelRecord(
-          descriptor: descriptor,
-          path: completedFile.path,
-          fileSizeBytes: stat.size,
-          installedAt: stat.modified,
-        ),
+        installedModel: record,
       );
     } on SocketException catch (error) {
       if (_pauseRequested) {
@@ -187,15 +155,7 @@ class ModelDownloader {
       }
       rethrow;
     } finally {
-      if (sink != null) {
-        try {
-          await sink.close();
-        } on FileSystemException {
-          // The sink may already be closed after a pause or completion branch.
-        }
-      }
-      _activeClient?.close(force: true);
-      _activeClient = null;
+      _activeCancelToken = null;
       _isDownloading = false;
       _pauseRequested = false;
       _cancelRequested = false;
@@ -207,7 +167,7 @@ class ModelDownloader {
       return;
     }
     _pauseRequested = true;
-    _activeClient?.close(force: true);
+    _activeCancelToken?.cancel();
   }
 
   void cancel() {
@@ -215,28 +175,6 @@ class ModelDownloader {
       return;
     }
     _cancelRequested = true;
-    _activeClient?.close(force: true);
-  }
-
-  int _resolveTotalBytes({
-    required HttpClientResponse response,
-    required int fallbackBytes,
-    required int existingBytes,
-  }) {
-    final contentRange = response.headers.value(HttpHeaders.contentRangeHeader);
-    if (contentRange != null) {
-      final slashIndex = contentRange.lastIndexOf('/');
-      if (slashIndex >= 0 && slashIndex + 1 < contentRange.length) {
-        return int.tryParse(contentRange.substring(slashIndex + 1)) ??
-            fallbackBytes;
-      }
-    }
-    if (response.contentLength > 0) {
-      if (response.statusCode == HttpStatus.partialContent) {
-        return existingBytes + response.contentLength;
-      }
-      return response.contentLength;
-    }
-    return fallbackBytes;
+    _activeCancelToken?.cancel();
   }
 }

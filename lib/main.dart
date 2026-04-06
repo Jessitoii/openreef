@@ -13,12 +13,16 @@ import 'package:openreef/memory/memory_former.dart';
 import 'package:openreef/memory/memory_index.dart';
 import 'package:openreef/memory/memory_storage.dart';
 import 'package:openreef/memory/sqlite_memory_storage_backend.dart';
+import 'package:openreef/mcp/mcp_connection_store.dart';
+import 'package:openreef/mcp/mcp_connections_controller.dart';
 import 'package:openreef/models/litert_bridge.dart';
 import 'package:openreef/models/model_download_controller.dart';
 import 'package:openreef/models/model_downloader.dart';
 import 'package:openreef/models/model_registry.dart';
 import 'package:openreef/models/model_storage.dart';
 import 'package:openreef/settings/settings_controller.dart';
+import 'package:openreef/skills/skill_registry.dart';
+import 'package:openreef/skills/skill_registry_controller.dart';
 import 'package:openreef/tools/mvp_native_tools.dart';
 import 'package:openreef/tools/platform_native_tool_adapters.dart';
 import 'package:openreef/tools/tool_manifest_bridge.dart';
@@ -29,11 +33,14 @@ import 'package:openreef/ui/chat_session_port.dart';
 import 'package:openreef/ui/openreef_app.dart';
 import 'package:openreef/voice/audio_service.dart';
 import 'package:openreef/voice/wake_word_controller.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:flutter_gemma/flutter_gemma.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await FlutterGemma.initialize();
   final bootstrap = await OpenReefBootstrap.initialize();
   runApp(MyApp(bootstrap: bootstrap));
 }
@@ -58,7 +65,7 @@ class _MyAppState extends State<MyApp> {
     }
     widget.bootstrap.modelDownloadController.markInitializingModel();
     try {
-      await widget.bootstrap.initializeModelAtPath(installedModel.path);
+      await widget.bootstrap.initializeModelAtPath(installedModel.modelId);
       if (!mounted) {
         return;
       }
@@ -84,6 +91,8 @@ class _MyAppState extends State<MyApp> {
       settingsController: widget.bootstrap.settingsController,
       chatSession: widget.bootstrap.chatSession,
       modelDownloadController: widget.bootstrap.modelDownloadController,
+      skillRegistryController: widget.bootstrap.skillRegistryController,
+      mcpConnectionsController: widget.bootstrap.mcpConnectionsController,
       modelReady: _modelReady,
       onModelReady: _handleModelReady,
     );
@@ -106,6 +115,8 @@ class OpenReefBootstrap {
     required this.audioService,
     required this.triggerEventBridge,
     required this.wakeWordController,
+    required this.skillRegistryController,
+    required this.mcpConnectionsController,
     required this.modelReady,
   });
 
@@ -116,6 +127,8 @@ class OpenReefBootstrap {
   final AudioService audioService;
   final TriggerEventBridge triggerEventBridge;
   final WakeWordController wakeWordController;
+  final SkillRegistryController skillRegistryController;
+  final McpConnectionsController mcpConnectionsController;
   final bool modelReady;
 
   static Future<OpenReefBootstrap> initialize() async {
@@ -173,7 +186,10 @@ class OpenReefBootstrap {
     final installedModel = modelDownloadController.state.installedModel;
     if (installedModel != null) {
       try {
-        await initializeLiteRtBridge(liteRtBridge, path: installedModel.path);
+        await initializeLiteRtBridge(
+          liteRtBridge,
+          path: installedModel.modelId,
+        );
         modelReady = true;
       } catch (error) {
         await modelDownloadController.recoverFromCorruptInstalledModel(
@@ -205,6 +221,16 @@ class OpenReefBootstrap {
 
     final settingsController = SettingsController();
     final triggerEventBridge = TriggerEventBridge();
+    final documentsDir = await getApplicationDocumentsDirectory();
+    final skillsDir = Directory(
+      '${documentsDir.path}${Platform.pathSeparator}skills',
+    );
+    final skillRegistryController = SkillRegistryController(
+      registry: SkillRegistry(rootPaths: <String>[skillsDir.path]),
+    );
+    final mcpConnectionsController = McpConnectionsController(
+      store: McpConnectionStore(memoryStorage),
+    );
     return OpenReefBootstrap._(
       settingsController: settingsController,
       chatSession: AgentLoopChatSession(agentLoop: agentLoop),
@@ -215,6 +241,8 @@ class OpenReefBootstrap {
       wakeWordController: WakeWordController(
         settingsController: settingsController,
       ),
+      skillRegistryController: skillRegistryController,
+      mcpConnectionsController: mcpConnectionsController,
       modelReady: modelReady,
     );
   }
@@ -231,17 +259,23 @@ class OpenReefBootstrap {
 
     try {
       final stats = await bridge.getDeviceStats();
-      useNpu = stats.npuReady;
+      useNpu = stats?.npuReady ?? false;
     } on PlatformException {
       useNpu = false;
     }
 
     try {
+      debugPrint(
+        'OpenReefBootstrap.initializeLiteRtBridge: initModel modelId=$path useNpu=$useNpu',
+      );
       await bridge.initModel(path: path, useNpu: useNpu);
     } on PlatformException catch (error) {
       if (error.code != 'ERR_NPU_FALLBACK' || !useNpu) {
         rethrow;
       }
+      debugPrint(
+        'OpenReefBootstrap.initializeLiteRtBridge: NPU fallback, retrying on CPU/GPU',
+      );
       await bridge.initModel(path: path, useNpu: false);
     }
   }
