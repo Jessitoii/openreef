@@ -19,6 +19,8 @@ internal object TriggerChannelBridge :
     private const val pendingEventsKey = "pending_events"
     private const val methodChannelName = "openreef/triggers_channel"
     private const val eventChannelName = "openreef/triggers_events"
+    private const val maxPendingEvents = 20
+    private const val maxPendingAgeMs = 24L * 60L * 60L * 1000L
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val bindings = mutableListOf<ChannelBinding>()
@@ -128,10 +130,15 @@ internal object TriggerChannelBridge :
         event: TriggerDeliveryEvent,
     ) {
         val sharedPreferences = context.getSharedPreferences(prefsName, Context.MODE_PRIVATE)
-        val existing =
-            sharedPreferences.getString(pendingEventsKey, null)?.let(::JSONArray) ?: JSONArray()
-        existing.put(event.toJson())
-        sharedPreferences.edit().putString(pendingEventsKey, existing.toString()).apply()
+        val existingEvents = readPersistedEvents(context).toMutableList()
+        existingEvents.add(event)
+        val trimmedEvents =
+            existingEvents
+                .filterNot(::isExpired)
+                .takeLast(maxPendingEvents)
+        val encoded = JSONArray()
+        trimmedEvents.forEach { encoded.put(it.toJson()) }
+        sharedPreferences.edit().putString(pendingEventsKey, encoded.toString()).apply()
     }
 
     private fun readPersistedEvents(context: Context): List<TriggerDeliveryEvent> {
@@ -139,12 +146,20 @@ internal object TriggerChannelBridge :
             context
                 .getSharedPreferences(prefsName, Context.MODE_PRIVATE)
                 .getString(pendingEventsKey, null) ?: return emptyList()
-        val array = JSONArray(raw)
+        val array = runCatching { JSONArray(raw) }.getOrElse { return emptyList() }
         return buildList {
             for (index in 0 until array.length()) {
-                add(TriggerDeliveryEvent.fromJson(array.getJSONObject(index)))
+                val event = TriggerDeliveryEvent.fromJson(array.getJSONObject(index))
+                if (!isExpired(event)) {
+                    add(event)
+                }
             }
         }
+    }
+
+    private fun isExpired(event: TriggerDeliveryEvent): Boolean {
+        val ageMs = System.currentTimeMillis() - event.enqueuedAtEpochMs
+        return ageMs > maxPendingAgeMs
     }
 }
 

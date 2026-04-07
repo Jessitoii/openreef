@@ -40,6 +40,8 @@ class InMemoryToolCatalog implements ToolCatalog {
 }
 
 class ToolRouter {
+  static const String rejectionReasonKey = 'outcome_reason';
+
   ToolRouter({
     required ToolCatalog catalog,
     required AgentMailbox mailbox,
@@ -69,10 +71,14 @@ class ToolRouter {
     }
 
     if (tool.requiresConfirmation) {
-      if (sessionKey == 'agent:main') {
+      if (!_isSubAgentSession(sessionKey)) {
         final approved = await _confirmToolCall(call);
         if (!approved) {
-          return const ToolResult.rejected();
+          return const ToolResult.rejected(
+            metadata: <String, Object?>{
+              rejectionReasonKey: 'user_rejected',
+            },
+          );
         }
       } else {
         final decision = await _mailbox.requestApproval(
@@ -82,11 +88,29 @@ class ToolRouter {
         if (decision.isRejected) {
           return ToolResult.rejected(
             content: decision.reason ?? 'rejected',
+            metadata: <String, Object?>{
+              rejectionReasonKey: _normalizeMailboxRejectionReason(
+                decision.reason,
+              ),
+            },
           );
         }
       }
     }
 
     return tool.execute(call);
+  }
+
+  bool _isSubAgentSession(String sessionKey) {
+    return sessionKey.startsWith('agent:main:sub:');
+  }
+
+  static String _normalizeMailboxRejectionReason(String? reason) {
+    return switch (reason) {
+      'timeout' => 'timeout',
+      'user_denied' => 'user_rejected',
+      'policy_denied' => 'policy_rejected',
+      _ => 'rejected_unknown',
+    };
   }
 }

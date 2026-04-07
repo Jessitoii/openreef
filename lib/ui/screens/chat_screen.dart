@@ -139,6 +139,14 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
               ),
               const SizedBox(height: 12),
+              if (widget.chatSession.pendingApprovalOrNull != null) ...[
+                _PendingApprovalCard(
+                  approval: widget.chatSession.pendingApprovalOrNull!,
+                  onApprove: widget.chatSession.approvePendingApprovalIfSupported,
+                  onReject: widget.chatSession.rejectPendingApprovalIfSupported,
+                ),
+                const SizedBox(height: 12),
+              ],
               Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
@@ -153,7 +161,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       decoration: const InputDecoration(
                         labelText: 'Prompt',
                         hintText:
-                            'Ask OpenReef to plan, search memory, or configure voice...',
+                            'Ask OpenReef to plan or search memory. Voice automation is experimental.',
                       ),
                     ),
                   ),
@@ -310,6 +318,73 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 }
 
+class _PendingApprovalCard extends StatelessWidget {
+  const _PendingApprovalCard({
+    required this.approval,
+    required this.onApprove,
+    required this.onReject,
+  });
+
+  final PendingToolApproval approval;
+  final VoidCallback onApprove;
+  final VoidCallback onReject;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final argumentPreview = approval.arguments.entries
+        .map((entry) => '${entry.key}: ${entry.value}')
+        .join(', ');
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Approval required',
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'The agent wants to run `${approval.toolId}`.',
+              style: theme.textTheme.bodyMedium,
+            ),
+            if (argumentPreview.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(
+                argumentPreview,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                OutlinedButton(
+                  key: const Key('approval-reject-button'),
+                  onPressed: onReject,
+                  child: const Text('Reject'),
+                ),
+                const SizedBox(width: 8),
+                FilledButton(
+                  key: const Key('approval-approve-button'),
+                  onPressed: onApprove,
+                  child: const Text('Approve'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _SessionHeader extends StatelessWidget {
   const _SessionHeader({
     required this.status,
@@ -399,7 +474,7 @@ class _SessionHeader extends StatelessWidget {
                       accent: theme.colorScheme.primary,
                     ),
                     _HeaderChip(
-                      label: 'voice: local',
+                      label: 'voice: experimental',
                       accent: ReefPalette.darkSuccess,
                     ),
                     _HeaderChip(

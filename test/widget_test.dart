@@ -8,6 +8,7 @@ import 'package:openreef/memory/memory_storage.dart';
 import 'package:openreef/memory/sqlite_memory_storage_backend.dart';
 import 'package:openreef/mcp/mcp_connection_store.dart';
 import 'package:openreef/mcp/mcp_connections_controller.dart';
+import 'package:openreef/mcp/mcp_secret_store.dart';
 import 'package:openreef/models/litert_bridge.dart';
 import 'package:openreef/models/model_download_controller.dart';
 import 'package:openreef/models/model_downloader.dart';
@@ -33,10 +34,7 @@ void main() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(_deviceStatsChannel, (call) async {
           if (call.method == 'getDeviceStats') {
-            return <String, Object?>{
-              'freeRamGb': 6.0,
-              'npuReady': false,
-            };
+            return <String, Object?>{'freeRamGb': 6.0, 'npuReady': false};
           }
           return null;
         });
@@ -135,31 +133,44 @@ void main() {
     await tester.tap(find.text('First conversation for persistence'));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('First conversation for persistence'), findsOneWidget);
+    expect(
+      find.textContaining('First conversation for persistence'),
+      findsOneWidget,
+    );
   });
 
-  testWidgets('settings are reachable from drawer and controls still work', (
-    tester,
-  ) async {
-    _setLargeSurface(tester);
-    await tester.pumpWidget(await _buildApp());
-    await tester.pumpAndSettle();
+  testWidgets(
+    'settings are reachable from drawer and unavailable wake runtime is labeled',
+    (tester) async {
+      _setLargeSurface(tester);
+      await tester.pumpWidget(await _buildApp());
+      await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const Key('open-drawer-button')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('drawer-settings')));
-    await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('open-drawer-button')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('drawer-settings')));
+      await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Light'));
-    await tester.pumpAndSettle();
+      await tester.tap(find.text('Light'));
+      await tester.pumpAndSettle();
 
-    final materialApp = tester.widget<MaterialApp>(find.byType(MaterialApp));
-    expect(materialApp.themeMode, ThemeMode.light);
+      final materialApp = tester.widget<MaterialApp>(find.byType(MaterialApp));
+      expect(materialApp.themeMode, ThemeMode.light);
 
-    await tester.tap(find.byKey(const Key('wake-word-toggle')));
-    await tester.pumpAndSettle();
-    expect(find.text('Wake Sensitivity 0.7'), findsOneWidget);
-  });
+      expect(
+        find.textContaining(
+          'Unavailable until a Picovoice access key is provisioned',
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.text(
+          'Wake Sensitivity (inactive until wake runtime is configured) 0.7',
+        ),
+        findsOneWidget,
+      );
+    },
+  );
 
   testWidgets('models screen launches from drawer', (tester) async {
     _setLargeSurface(tester);
@@ -215,8 +226,7 @@ Future<Widget> _buildApp({
   );
   final memoryStorage = MemoryStorage(
     SqliteMemoryStorageBackend(
-      path:
-          '${memoryDatabase.path}${Platform.pathSeparator}memory.sqlite',
+      path: '${memoryDatabase.path}${Platform.pathSeparator}memory.sqlite',
       databaseFactory: databaseFactoryFfi,
     ),
   );
@@ -228,7 +238,10 @@ Future<Widget> _buildApp({
     registry: SkillRegistry(rootPaths: <String>[skillsDirectory.path]),
   );
   final mcpConnectionsController = McpConnectionsController(
-    store: McpConnectionStore(memoryStorage),
+    store: McpConnectionStore(
+      memoryStorage,
+      secretStore: InMemoryMcpSecretStore(),
+    ),
     autoConnectPersisted: false,
   );
 

@@ -26,6 +26,7 @@ class OpenReefForegroundService : Service() {
             WakeWordService(applicationContext) {
                 WakeWordEventBridge.emitDetected()
             }
+        wakeWordService.setSensitivity(requestedSensitivity)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -94,7 +95,7 @@ class OpenReefForegroundService : Service() {
         val contentText =
             when {
                 listening -> "Listening for the Porcupine wake word."
-                waitingForAccessKey -> "Paste your Picovoice access key to enable listening."
+                waitingForAccessKey -> "Provision a Picovoice access key to enable listening."
                 else -> "Wake-word listener is idle."
             }
 
@@ -113,12 +114,16 @@ class OpenReefForegroundService : Service() {
         private const val NOTIFICATION_ID = 4101
         private const val NOTIFICATION_CHANNEL_ID = "openreef_wake_word"
         private const val NOTIFICATION_CHANNEL_NAME = "OpenReef Wake Word"
+        private const val DEFAULT_SENSITIVITY = 0.7f
 
         @Volatile
         private var listeningState = false
 
         @Volatile
         private var serviceInstance: OpenReefForegroundService? = null
+
+        @Volatile
+        private var requestedSensitivity = DEFAULT_SENSITIVITY
 
         fun requestStart(context: Context): Boolean {
             val intent = Intent(context, OpenReefForegroundService::class.java).apply {
@@ -137,6 +142,16 @@ class OpenReefForegroundService : Service() {
         }
 
         fun isListening(): Boolean = listeningState
+
+        fun isAvailable(context: Context): Boolean = WakeWordService.isConfigured(context)
+
+        fun setSensitivity(value: Double?): Boolean {
+            val normalized =
+                (value ?: DEFAULT_SENSITIVITY.toDouble()).toFloat().coerceIn(0.3f, 0.9f)
+            requestedSensitivity = normalized
+            serviceInstance?.wakeWordService?.setSensitivity(normalized)
+            return true
+        }
 
         fun attachEventSink(eventSink: EventChannel.EventSink?) {
             WakeWordEventBridge.attachEventSink(eventSink)

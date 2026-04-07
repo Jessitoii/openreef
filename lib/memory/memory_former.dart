@@ -1,22 +1,44 @@
+import 'package:openreef/memory/memory_deduplicator.dart';
+import 'package:openreef/memory/memory_embedding_record.dart';
 import 'package:openreef/memory/memory_fact.dart';
 import 'package:openreef/memory/memory_index.dart';
 import 'package:openreef/memory/memory_record.dart';
 import 'package:openreef/memory/memory_storage.dart';
 import 'package:openreef/memory/memory_store_kind.dart';
 import 'package:openreef/memory/memory_turn.dart';
+import 'package:openreef/memory/semantic_memory_retriever.dart';
+import 'package:openreef/memory/semantic_text_embedder.dart';
 
 /// Shapes new memory entries before they are persisted.
 class MemoryFormer {
   MemoryFormer({
     required MemoryStorage storage,
     required MemoryIndex memoryIndex,
+    required SemanticTextEmbedder embedder,
+    MemoryDeduplicator? deduplicator,
+    SemanticMemoryRetriever? retriever,
   })  : _storage = storage,
-        _memoryIndex = memoryIndex;
+        _memoryIndex = memoryIndex,
+        _embedder = embedder,
+        _retriever =
+            retriever ??
+            SemanticMemoryRetriever(storage: storage, embedder: embedder),
+        _deduplicator =
+            deduplicator ??
+            MemoryDeduplicator(
+              storage: storage,
+              retriever:
+                  retriever ??
+                  SemanticMemoryRetriever(storage: storage, embedder: embedder),
+            );
 
   static const Duration _shortTermTtl = Duration(hours: 24);
 
   final MemoryStorage _storage;
   final MemoryIndex _memoryIndex;
+  final SemanticTextEmbedder _embedder;
+  final SemanticMemoryRetriever _retriever;
+  final MemoryDeduplicator _deduplicator;
 
   Future<void> process(MemoryTurn turn) async {
     if (turn.hasFailedToolCalls) {
@@ -55,6 +77,16 @@ class MemoryFormer {
         : MemoryStoreKind.shortTerm;
     final expiresAt =
         store == MemoryStoreKind.shortTerm ? occurredAt.add(_shortTermTtl) : null;
+    final normalizedContent = _retriever.normalizeContent(fact.fact);
+    if (normalizedContent.isEmpty) {
+      return;
+    }
+
+    if (store == MemoryStoreKind.longTerm && await _deduplicator.isDuplicate(fact)) {
+      return;
+    }
+
+    final embedding = await _embedder.embedDocument(fact.fact);
 
     await _storage.saveRecord(
       MemoryRecord(
@@ -66,6 +98,15 @@ class MemoryFormer {
         createdAt: occurredAt,
         expiresAt: expiresAt,
         metadata: fact.metadata,
+      ),
+    );
+    await _storage.saveEmbedding(
+      MemoryEmbeddingRecord(
+        memoryKey: fact.key,
+        modelId: _embedder.modelId,
+        embedding: embedding,
+        normalizedContent: normalizedContent,
+        updatedAt: occurredAt,
       ),
     );
 

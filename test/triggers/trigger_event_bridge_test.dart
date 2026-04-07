@@ -12,6 +12,7 @@ void main() {
         'type': 'schedule',
         'scheduledAtEpochMs': 1_710_000_000_000,
         'deliveredAtEpochMs': 1_710_000_005_000,
+        'enqueuedAtEpochMs': 1_710_000_004_000,
         'payload': <String, Object?>{'origin': 'alarm_manager', 'attempt': 1},
       }),
       isSupportedOverride: true,
@@ -35,6 +36,11 @@ void main() {
             'deliveredAtEpochMs',
             1_710_000_005_000,
           )
+          .having(
+            (value) => value.enqueuedAtEpochMs,
+            'enqueuedAtEpochMs',
+            1_710_000_004_000,
+          )
           .having((value) => value.payload, 'payload', <String, Object?>{
             'origin': 'alarm_manager',
             'attempt': 1,
@@ -44,7 +50,7 @@ void main() {
   });
 
   test('ignores event subscriptions on unsupported platforms', () async {
-    final controller = StreamController<dynamic>();
+    final controller = StreamController<dynamic>.broadcast();
     final bridge = TriggerEventBridge(
       eventStream: controller.stream,
       isSupportedOverride: false,

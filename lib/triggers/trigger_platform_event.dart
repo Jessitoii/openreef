@@ -4,6 +4,7 @@ class TriggerPlatformEvent {
     required this.type,
     required this.scheduledAtEpochMs,
     required this.deliveredAtEpochMs,
+    this.enqueuedAtEpochMs,
     this.payload = const <String, Object?>{},
   });
 
@@ -22,6 +23,7 @@ class TriggerPlatformEvent {
       type: _readRequiredString(map, 'type'),
       scheduledAtEpochMs: _readRequiredInt(map, 'scheduledAtEpochMs'),
       deliveredAtEpochMs: _readRequiredInt(map, 'deliveredAtEpochMs'),
+      enqueuedAtEpochMs: _readOptionalInt(map, 'enqueuedAtEpochMs'),
       payload: _coercePayloadMap(map['payload']),
     );
   }
@@ -30,6 +32,7 @@ class TriggerPlatformEvent {
   final String type;
   final int scheduledAtEpochMs;
   final int deliveredAtEpochMs;
+  final int? enqueuedAtEpochMs;
   final Map<String, Object?> payload;
 
   DateTime get scheduledAt =>
@@ -37,6 +40,10 @@ class TriggerPlatformEvent {
 
   DateTime get deliveredAt =>
       DateTime.fromMillisecondsSinceEpoch(deliveredAtEpochMs);
+
+  DateTime? get enqueuedAt => enqueuedAtEpochMs == null
+      ? null
+      : DateTime.fromMillisecondsSinceEpoch(enqueuedAtEpochMs!);
 
   static String _readRequiredString(Map<dynamic, dynamic> map, String key) {
     final value = map[key];
@@ -48,6 +55,20 @@ class TriggerPlatformEvent {
 
   static int _readRequiredInt(Map<dynamic, dynamic> map, String key) {
     final value = map[key];
+    if (value is int) {
+      return value;
+    }
+    if (value is num) {
+      return value.toInt();
+    }
+    throw ArgumentError.value(value, key, 'Expected integer');
+  }
+
+  static int? _readOptionalInt(Map<dynamic, dynamic> map, String key) {
+    final value = map[key];
+    if (value == null) {
+      return null;
+    }
     if (value is int) {
       return value;
     }

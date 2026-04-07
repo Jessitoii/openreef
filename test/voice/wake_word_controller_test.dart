@@ -29,6 +29,10 @@ void main() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(_wakeWordMethodChannel, (call) async {
           switch (call.method) {
+            case 'isAvailable':
+              return true;
+            case 'setSensitivity':
+              return true;
             case 'startListening':
               listening = true;
               return true;
@@ -60,65 +64,109 @@ void main() {
     expect(controller.isListening, isFalse);
   });
 
-  test('controller emits detection events from the event channel stream', () async {
-    final settingsController = SettingsController();
-    final platformEvents = StreamController<dynamic>.broadcast();
-    final controller = WakeWordController(
-      settingsController: settingsController,
-      isSupportedOverride: true,
-      eventStream: platformEvents.stream,
-    );
-    addTearDown(() async {
-      await platformEvents.close();
-      controller.dispose();
-    });
+  test(
+    'controller emits detection events from the event channel stream',
+    () async {
+      final settingsController = SettingsController();
+      final platformEvents = StreamController<dynamic>.broadcast();
+      final controller = WakeWordController(
+        settingsController: settingsController,
+        isSupportedOverride: true,
+        eventStream: platformEvents.stream,
+      );
+      addTearDown(() async {
+        await platformEvents.close();
+        controller.dispose();
+      });
 
-    final eventFuture = controller.events.first;
-    platformEvents.add(const <String, String>{'event': 'detected'});
+      final eventFuture = controller.events.first;
+      platformEvents.add(const <String, String>{'event': 'detected'});
 
-    final event = await eventFuture;
-    expect(event.type, WakeWordEventType.detected);
-    expect(controller.lastDetectedAt, isNotNull);
-  });
+      final event = await eventFuture;
+      expect(event.type, WakeWordEventType.detected);
+      expect(controller.lastDetectedAt, isNotNull);
+    },
+  );
 
-  test('controller syncs listening state from wake-word setting changes', () async {
-    final settingsController = SettingsController();
-    var startCalls = 0;
-    var stopCalls = 0;
+  test(
+    'controller syncs listening state from wake-word setting changes',
+    () async {
+      final settingsController = SettingsController();
+      var startCalls = 0;
+      var stopCalls = 0;
 
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(_wakeWordMethodChannel, (call) async {
-          switch (call.method) {
-            case 'startListening':
-              startCalls += 1;
-              return true;
-            case 'stopListening':
-              stopCalls += 1;
-              return true;
-            case 'isListening':
-              return startCalls > stopCalls;
-            default:
-              return null;
-          }
-        });
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(_wakeWordMethodChannel, (call) async {
+            switch (call.method) {
+              case 'isAvailable':
+                return true;
+              case 'setSensitivity':
+                return true;
+              case 'startListening':
+                startCalls += 1;
+                return true;
+              case 'stopListening':
+                stopCalls += 1;
+                return true;
+              case 'isListening':
+                return startCalls > stopCalls;
+              default:
+                return null;
+            }
+          });
 
-    final controller = WakeWordController(
-      settingsController: settingsController,
-      isSupportedOverride: true,
-      eventStream: const Stream<dynamic>.empty(),
-    );
-    addTearDown(controller.dispose);
+      final controller = WakeWordController(
+        settingsController: settingsController,
+        isSupportedOverride: true,
+        eventStream: const Stream<dynamic>.empty(),
+      );
+      addTearDown(controller.dispose);
 
-    settingsController.updateWakeWordEnabled(true);
-    await Future<void>.delayed(Duration.zero);
+      await controller.refreshAvailability();
+      expect(controller.isAvailable, isTrue);
 
-    expect(startCalls, 1);
-    expect(controller.isListening, isTrue);
+      settingsController.updateWakeWordEnabled(true);
+      await Future<void>.delayed(Duration.zero);
 
-    settingsController.updateWakeWordEnabled(false);
-    await Future<void>.delayed(Duration.zero);
+      expect(startCalls, greaterThanOrEqualTo(1));
+      expect(controller.isListening, isTrue);
 
-    expect(stopCalls, greaterThanOrEqualTo(1));
-    expect(controller.isListening, isFalse);
-  });
+      settingsController.updateWakeWordEnabled(false);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(stopCalls, greaterThanOrEqualTo(1));
+      expect(controller.isListening, isFalse);
+    },
+  );
+
+  test(
+    'controller reports unavailable wake runtime when native key is missing',
+    () async {
+      final settingsController = SettingsController();
+
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(_wakeWordMethodChannel, (call) async {
+            switch (call.method) {
+              case 'isAvailable':
+                return false;
+              case 'stopListening':
+                return true;
+              default:
+                return null;
+            }
+          });
+
+      final controller = WakeWordController(
+        settingsController: settingsController,
+        isSupportedOverride: true,
+        eventStream: const Stream<dynamic>.empty(),
+      );
+      addTearDown(controller.dispose);
+
+      expect(await controller.refreshAvailability(), isFalse);
+      expect(controller.isAvailable, isFalse);
+      expect(await controller.startListening(), isFalse);
+      expect(controller.isListening, isFalse);
+    },
+  );
 }

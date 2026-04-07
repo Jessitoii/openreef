@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Override this in a local resource overlay or build variant; keep empty in source. -->
+    <string name="picovoice_access_key"></string>
+</resources>

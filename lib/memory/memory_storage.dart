@@ -1,5 +1,7 @@
 import 'package:openreef/memory/memory_pointer.dart';
+import 'package:openreef/memory/memory_embedding_record.dart';
 import 'package:openreef/memory/memory_record.dart';
+import 'package:openreef/memory/semantic_memory_match.dart';
 import 'package:openreef/memory/memory_storage_backend.dart';
 import 'package:openreef/memory/memory_store_kind.dart';
 
@@ -30,6 +32,44 @@ class MemoryStorage {
   }) {
     return _backend.fetchRecords(
       store: store,
+      includeExpired: includeExpired,
+    );
+  }
+
+  Future<void> saveEmbedding(MemoryEmbeddingRecord record) {
+    return _backend.saveEmbedding(record);
+  }
+
+  Future<MemoryEmbeddingRecord?> readEmbedding(String key) {
+    return _backend.fetchEmbedding(key);
+  }
+
+  Future<MemoryRecord?> readRecordByNormalizedContent(
+    String normalizedContent, {
+    MemoryStoreKind? store,
+    bool includeExpired = false,
+  }) {
+    return _backend.fetchRecordByNormalizedContent(
+      normalizedContent,
+      store: store,
+      includeExpired: includeExpired,
+    );
+  }
+
+  Future<List<SemanticMemoryMatch>> searchByEmbedding({
+    required List<double> queryEmbedding,
+    int limit = 5,
+    double threshold = 0,
+    MemoryStoreKind? store,
+    String? category,
+    bool includeExpired = false,
+  }) {
+    return _backend.searchByEmbedding(
+      queryEmbedding: queryEmbedding,
+      limit: limit,
+      threshold: threshold,
+      store: store,
+      category: category,
       includeExpired: includeExpired,
     );
   }

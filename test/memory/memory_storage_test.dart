@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:openreef/memory/memory_record.dart';
 import 'package:openreef/memory/memory_storage.dart';
@@ -25,7 +27,7 @@ void main() {
   });
 
   test('saves and retrieves long-term and short-term memory records', () async {
-    final now = DateTime.utc(2026, 4, 4, 12);
+    final now = DateTime.now().toUtc();
     await storage.saveRecord(
       MemoryRecord(
         store: MemoryStoreKind.longTerm,
@@ -87,5 +89,49 @@ void main() {
 
     expect(activeRecord, isNull);
     expect(expiredRecord?.content, 'Old compact summary');
+  });
+
+  test('purges expired records during initialization lifecycle', () async {
+    final directory = await Directory.systemTemp.createTemp('memory-purge-');
+    addTearDown(() async {
+      if (await directory.exists()) {
+        await directory.delete(recursive: true);
+      }
+    });
+    final path = '${directory.path}${Platform.pathSeparator}memory.sqlite';
+    final staleBackend = SqliteMemoryStorageBackend(
+      path: path,
+      databaseFactory: databaseFactoryFfi,
+    );
+    final staleStorage = MemoryStorage(staleBackend);
+    await staleStorage.initialize();
+    await staleStorage.saveRecord(
+      MemoryRecord(
+        store: MemoryStoreKind.episodic,
+        key: 'expired_record',
+        content: 'Should be deleted',
+        category: 'summary',
+        importance: 1,
+        createdAt: DateTime.utc(2026, 4, 1),
+        expiresAt: DateTime.utc(2026, 4, 2),
+      ),
+    );
+    await staleStorage.close();
+
+    final reopenedBackend = SqliteMemoryStorageBackend(
+      path: path,
+      databaseFactory: databaseFactoryFfi,
+    );
+    final reopenedStorage = MemoryStorage(reopenedBackend);
+    addTearDown(reopenedStorage.close);
+
+    await reopenedStorage.initialize();
+    final expired = await reopenedStorage.readRecord(
+      'expired_record',
+      store: MemoryStoreKind.episodic,
+      includeExpired: true,
+    );
+
+    expect(expired, isNull);
   });
 }

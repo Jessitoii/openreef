@@ -5,12 +5,14 @@ import 'package:openreef/background/auto_dream_run_result.dart';
 import 'package:openreef/background/auto_dream_worker.dart';
 import 'package:openreef/memory/chat_session_record.dart';
 import 'package:openreef/memory/chat_session_repository.dart';
+import 'package:openreef/memory/memory_embedding_record.dart';
 import 'package:openreef/memory/memory_index.dart';
 import 'package:openreef/memory/memory_pointer.dart';
 import 'package:openreef/memory/memory_record.dart';
 import 'package:openreef/memory/memory_storage.dart';
 import 'package:openreef/memory/memory_storage_backend.dart';
 import 'package:openreef/memory/memory_store_kind.dart';
+import 'package:openreef/memory/semantic_memory_match.dart';
 import 'package:openreef/memory/sqlite_memory_storage_backend.dart';
 import 'package:openreef/ui/chat_session_port.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -96,7 +98,7 @@ void main() {
     expect(result.sessionsSummarized, 1);
     expect(episodicRecords, hasLength(1));
     expect(episodicRecords.single.content, contains('[EPISODIC MEMORY] Planning Chat'));
-    expect(episodicRecords.single.content, contains('Pending: Next, check analyzer output?'));
+    expect(episodicRecords.single.content, contains('User: Next, check analyzer output?'));
     expect(pointer['last_session'], 'memory:${episodicRecords.single.key}');
     expect(resolved, episodicRecords.single.content);
   });
@@ -216,6 +218,48 @@ class _SlowMemoryStorageBackend implements MemoryStorageBackend {
     bool includeExpired = false,
   }) {
     return _delegate.fetchRecords(store: store, includeExpired: includeExpired);
+  }
+
+  @override
+  Future<void> saveEmbedding(MemoryEmbeddingRecord record) {
+    return _delegate.saveEmbedding(record);
+  }
+
+  @override
+  Future<MemoryEmbeddingRecord?> fetchEmbedding(String key) {
+    return _delegate.fetchEmbedding(key);
+  }
+
+  @override
+  Future<MemoryRecord?> fetchRecordByNormalizedContent(
+    String normalizedContent, {
+    MemoryStoreKind? store,
+    bool includeExpired = false,
+  }) {
+    return _delegate.fetchRecordByNormalizedContent(
+      normalizedContent,
+      store: store,
+      includeExpired: includeExpired,
+    );
+  }
+
+  @override
+  Future<List<SemanticMemoryMatch>> searchByEmbedding({
+    required List<double> queryEmbedding,
+    int limit = 5,
+    double threshold = 0,
+    MemoryStoreKind? store,
+    String? category,
+    bool includeExpired = false,
+  }) {
+    return _delegate.searchByEmbedding(
+      queryEmbedding: queryEmbedding,
+      limit: limit,
+      threshold: threshold,
+      store: store,
+      category: category,
+      includeExpired: includeExpired,
+    );
   }
 
   @override

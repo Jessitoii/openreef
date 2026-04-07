@@ -5,6 +5,7 @@ import 'package:openreef/memory/memory_index.dart';
 import 'package:openreef/memory/memory_storage.dart';
 import 'package:openreef/memory/memory_store_kind.dart';
 import 'package:openreef/memory/memory_turn.dart';
+import 'package:openreef/memory/semantic_text_embedder.dart';
 import 'package:openreef/memory/sqlite_memory_storage_backend.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
@@ -27,6 +28,7 @@ void main() {
     former = MemoryFormer(
       storage: storage,
       memoryIndex: index,
+      embedder: const _FixedSemanticEmbedder(<double>[1, 0, 0]),
     );
   });
 
@@ -35,7 +37,7 @@ void main() {
   });
 
   test('writes durable memory and updates pointers for successful turns', () async {
-    final occurredAt = DateTime.utc(2026, 4, 4, 16);
+    final occurredAt = DateTime.now().toUtc();
     await former.process(
       MemoryTurn(
         facts: const <MemoryFact>[
@@ -74,7 +76,7 @@ void main() {
   });
 
   test('strict write discipline skips durable writes after failed tool calls', () async {
-    final occurredAt = DateTime.utc(2026, 4, 4, 17);
+    final occurredAt = DateTime.now().toUtc();
     await former.process(
       MemoryTurn(
         facts: const <MemoryFact>[
@@ -106,7 +108,7 @@ void main() {
   });
 
   test('ambiguous turns are downgraded to short-term only', () async {
-    final occurredAt = DateTime.utc(2026, 4, 4, 18);
+    final occurredAt = DateTime.now().toUtc();
     await former.process(
       MemoryTurn(
         facts: const <MemoryFact>[
@@ -135,4 +137,19 @@ void main() {
     expect(longTerm, isNull);
     expect(shortTerm?.content, 'Maybe the deadline moved to next week.');
   });
+}
+
+class _FixedSemanticEmbedder implements SemanticTextEmbedder {
+  const _FixedSemanticEmbedder(this._embedding);
+
+  final List<double> _embedding;
+
+  @override
+  String get modelId => 'test-embedder';
+
+  @override
+  Future<List<double>> embedDocument(String text) async => _embedding;
+
+  @override
+  Future<List<double>> embedQuery(String text) async => _embedding;
 }

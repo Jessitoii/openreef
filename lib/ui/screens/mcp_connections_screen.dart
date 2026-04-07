@@ -3,10 +3,7 @@ import 'package:openreef/mcp/mcp_connections_controller.dart';
 import 'package:openreef/ui/app_theme.dart';
 
 class McpConnectionsScreen extends StatefulWidget {
-  const McpConnectionsScreen({
-    required this.controller,
-    super.key,
-  });
+  const McpConnectionsScreen({required this.controller, super.key});
 
   final McpConnectionsController controller;
 
@@ -64,15 +61,22 @@ class _McpConnectionsScreenState extends State<McpConnectionsScreen> {
                     connection: connection,
                     onDisconnect: () =>
                         widget.controller.disconnect(connection.url),
-                    onConnect: () => widget.controller.connect(
-                      connection.url,
-                      persist: connection.persisted,
-                    ),
-                    onForget: connection.persisted
-                        ? () => widget.controller.disconnect(
-                              connection.url,
-                              removePersistence: true,
-                            )
+                    onConnect: () {
+                      final endpointId = connection.endpointId;
+                      if (endpointId != null) {
+                        widget.controller.reconnectPersisted(endpointId);
+                        return;
+                      }
+                      widget.controller.connect(
+                        connection.url,
+                        persist: connection.persisted,
+                      );
+                    },
+                    onForget:
+                        connection.persisted && connection.endpointId != null
+                        ? () => widget.controller.forgetPersisted(
+                            connection.endpointId!,
+                          )
                         : null,
                   ),
                 ),
@@ -81,7 +85,7 @@ class _McpConnectionsScreenState extends State<McpConnectionsScreen> {
               Padding(
                 padding: const EdgeInsets.only(top: 8),
                 child: Text(
-                  'Tip: Persisted connections auto-connect on boot.',
+                  'Tip: Persisted connections auto-connect on boot for connection state recovery.',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
@@ -111,7 +115,8 @@ class _McpConnectionsScreenState extends State<McpConnectionsScreen> {
   void _handleUrlChanged() {
     final value = _urlController.text.trim();
     final parsed = Uri.tryParse(value);
-    final canConnect = parsed != null && parsed.hasScheme && parsed.host.isNotEmpty;
+    final canConnect =
+        parsed != null && parsed.hasScheme && parsed.host.isNotEmpty;
     if (canConnect != _canConnect) {
       setState(() {
         _canConnect = canConnect;
@@ -151,7 +156,7 @@ class _ConnectionHeader extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              'Securely connect to SSE endpoints and import their tools into the agent router.',
+              'Connect to SSE endpoints and inspect available MCP tools. Current runtime does not route these tools into the active agent loop.',
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
                 height: 1.5,
@@ -178,9 +183,9 @@ class _ConnectionHeader extends StatelessWidget {
               value: persistConnection,
               onChanged: onPersistChanged,
               contentPadding: EdgeInsets.zero,
-              title: const Text('Persist connection for background tasks'),
+              title: const Text('Persist connection for reconnect on boot'),
               subtitle: Text(
-                'Saving this endpoint allows the agent to use the server while the app is closed. Only enable if you trust the server and accept the privacy impact.',
+                'Saves this endpoint and auto-reconnects on app startup. It does not currently execute background MCP tasks while the app is closed.',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                   height: 1.4,
@@ -270,8 +275,8 @@ class _ConnectionCard extends StatelessWidget {
               children: connection.tools.isEmpty
                   ? const <Widget>[_ToolChip(label: 'none')]
                   : connection.tools
-                      .map((tool) => _ToolChip(label: tool.name))
-                      .toList(),
+                        .map((tool) => _ToolChip(label: tool.name))
+                        .toList(),
             ),
             const SizedBox(height: 14),
             Wrap(
@@ -304,10 +309,7 @@ class _ConnectionCard extends StatelessWidget {
     );
   }
 
-  (String, Color) _statusMeta(
-    McpConnectionStatus status,
-    ThemeData theme,
-  ) {
+  (String, Color) _statusMeta(McpConnectionStatus status, ThemeData theme) {
     switch (status) {
       case McpConnectionStatus.connected:
         return ('connected', ReefPalette.darkSuccess);
@@ -387,7 +389,7 @@ class _EmptyConnectionsCard extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              'Add a secure SSE endpoint to import tools and capabilities.',
+              'Add an SSE endpoint to inspect server/tool metadata and connection status.',
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),

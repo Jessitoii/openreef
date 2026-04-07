@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -18,12 +19,17 @@ class LiteRtBridge {
   static const double _minimumSafeFreeRamGb = 1.2;
   static const double _minimumRecoveredFreeRamGb = 1.0;
   static const Duration _memoryPressureCooldown = Duration(seconds: 20);
+  static const int _defaultMaxTokens = 32768;
+  static const int _gemma4E2bInitMaxTokens = 4096;
+  static const int _gemma4E2bRuntimeMaxTokens = 8192;
 
   InferenceModel? _activeModel;
   InferenceChat? _activeChat;
   String? _activeModelId;
   PreferredBackend? _preferredBackend;
-  int _maxTokens = 1024;
+  int _maxTokens = _defaultMaxTokens;
+  int _initTokenBudget = _defaultMaxTokens;
+  int _runtimeTargetTokenBudget = _defaultMaxTokens;
   DateTime? _memoryPressureBlockedUntil;
   final Future<LiteRtDeviceStats?> Function()? _deviceStatsProvider;
   final Future<bool> Function()? _memoryPressureRecovery;
@@ -31,10 +37,14 @@ class LiteRtBridge {
     'function',
     'mobile-actions',
   ];
+  static const List<String> _gemma4E2bIdHints = <String>[
+    'gemma-4-e2b',
+    'gemma_4_e2b',
+  ];
 
   Future<bool> initModel({required String path, required bool useNpu}) async {
     try {
-      debugPrint('LiteRtBridge.initModel: preparing modelId=$path');
+      debugPrint('LiteRtBridge.initModel: start modelId=$path');
       final hasActive = FlutterGemma.hasActiveModel();
       if (!hasActive) {
         final installed = await FlutterGemma.listInstalledModels();
@@ -47,22 +57,60 @@ class LiteRtBridge {
         );
       }
 
-      _preferredBackend = _resolvePreferredBackend(
+      final deviceStats = await getDeviceStats();
+      final preferredBackend = _resolvePreferredBackend(
         modelId: path,
         useNpu: useNpu,
+        deviceStats: deviceStats,
       );
-      _activeModelId = path;
+      final budgets = _selectTokenBudgets(
+        modelId: path,
+        preferredBackend: preferredBackend,
+        deviceStats: deviceStats,
+      );
+      _initTokenBudget = budgets.initTokenBudget;
+      _runtimeTargetTokenBudget = budgets.runtimeTargetTokenBudget;
+      _maxTokens = _initTokenBudget;
       debugPrint(
-        'LiteRtBridge.initModel: getActiveModel backend=$_preferredBackend maxTokens=$_maxTokens',
+        'LiteRtBridge.initModel: selected initTokenBudget=$_initTokenBudget runtimeTargetTokenBudget=$_runtimeTargetTokenBudget',
       );
-      _activeModel = await FlutterGemma.getActiveModel(
-        preferredBackend: _preferredBackend,
-        maxTokens: _maxTokens,
+
+      final attempts = _buildInitAttempts(
+        preferredBackend: preferredBackend,
+        initTokenBudget: _initTokenBudget,
+        runtimeTargetTokenBudget: _runtimeTargetTokenBudget,
       );
-      debugPrint('LiteRtBridge.initModel: active model ready');
-      return true;
-    } catch (_) {
-      debugPrint('LiteRtBridge.initModel: failed');
+
+      for (final attempt in attempts) {
+        _preferredBackend = attempt.backend;
+        _maxTokens = attempt.initTokenBudget;
+        _activeModelId = path;
+        debugPrint(
+          'LiteRtBridge.initModel: attempt backend=$_preferredBackend maxTokens=$_maxTokens note=${attempt.note}',
+        );
+        try {
+          _activeModel = await FlutterGemma.getActiveModel(
+            preferredBackend: _preferredBackend,
+            maxTokens: _maxTokens,
+          );
+          debugPrint('LiteRtBridge.initModel: active model ready');
+          debugPrint(
+            'LiteRtBridge.initModel: end modelId=$path backend=$_preferredBackend maxTokens=$_maxTokens',
+          );
+          return true;
+        } catch (error) {
+          debugPrint(
+            'LiteRtBridge.initModel: attempt failed backend=$_preferredBackend maxTokens=$_maxTokens error=$error',
+          );
+          await _activeModel?.close();
+          _activeModel = null;
+        }
+      }
+
+      debugPrint('LiteRtBridge.initModel: failed after all fallbacks');
+      throw StateError('Model initialization failed after fallbacks.');
+    } catch (error) {
+      debugPrint('LiteRtBridge.initModel: failed $error');
       rethrow;
     }
   }
@@ -70,6 +118,7 @@ class LiteRtBridge {
   PreferredBackend _resolvePreferredBackend({
     required String modelId,
     required bool useNpu,
+    required LiteRtDeviceStats? deviceStats,
   }) {
     if (useNpu) {
       return PreferredBackend.npu;
@@ -79,6 +128,15 @@ class LiteRtBridge {
       if (lower.contains(hint)) {
         debugPrint(
           'LiteRtBridge.initModel: forcing CPU backend for FunctionGemma modelId=$modelId',
+        );
+        return PreferredBackend.cpu;
+      }
+    }
+    if (_isGemma4E2bModel(lower)) {
+      final gpuReady = deviceStats?.gpuReady ?? false;
+      if (!gpuReady) {
+        debugPrint(
+          'LiteRtBridge.initModel: Gemma 4 E2B requires explicit GPU readiness; defaulting to CPU',
         );
         return PreferredBackend.cpu;
       }
@@ -102,8 +160,12 @@ class LiteRtBridge {
       try {
         await _guardGenerationStart();
 
-        if (maxTokens != _maxTokens) {
-          _maxTokens = maxTokens;
+        final effectiveMaxTokens = math.min(
+          maxTokens,
+          _runtimeTargetTokenBudget,
+        );
+        if (effectiveMaxTokens != _maxTokens) {
+          _maxTokens = effectiveMaxTokens;
           debugPrint(
             'LiteRtBridge.generateStream: refresh model for maxTokens=$_maxTokens',
           );
@@ -210,6 +272,160 @@ class LiteRtBridge {
     return _functionGemmaIdHints.any(lower.contains);
   }
 
+  bool _isGemma4E2bModel(String modelId) {
+    final lower = modelId.toLowerCase();
+    return _gemma4E2bIdHints.any(lower.contains);
+  }
+
+  _TokenBudgets _selectTokenBudgets({
+    required String modelId,
+    required PreferredBackend preferredBackend,
+    required LiteRtDeviceStats? deviceStats,
+  }) {
+    final modelCaps = _resolveModelTokenCaps(modelId);
+    final deviceCaps = _resolveDeviceTokenCaps(
+      deviceStats: deviceStats,
+      preferredBackend: preferredBackend,
+      modelId: modelId,
+    );
+    final initBudget = math.min(modelCaps.initTokenBudget, deviceCaps.initTokenBudget);
+    final runtimeTarget =
+        math.min(modelCaps.runtimeTargetTokenBudget, deviceCaps.runtimeTargetTokenBudget);
+    return _TokenBudgets(
+      initTokenBudget: math.min(initBudget, runtimeTarget),
+      runtimeTargetTokenBudget: runtimeTarget,
+    );
+  }
+
+  _TokenBudgets _resolveModelTokenCaps(String modelId) {
+    if (_isGemma4E2bModel(modelId)) {
+      return const _TokenBudgets(
+        initTokenBudget: _gemma4E2bInitMaxTokens,
+        runtimeTargetTokenBudget: _gemma4E2bRuntimeMaxTokens,
+      );
+    }
+    if (_isFunctionGemmaModel(modelId)) {
+      return const _TokenBudgets(
+        initTokenBudget: 2048,
+        runtimeTargetTokenBudget: 4096,
+      );
+    }
+    return const _TokenBudgets(
+      initTokenBudget: 8192,
+      runtimeTargetTokenBudget: _defaultMaxTokens,
+    );
+  }
+
+  _TokenBudgets _resolveDeviceTokenCaps({
+    required LiteRtDeviceStats? deviceStats,
+    required PreferredBackend preferredBackend,
+    required String modelId,
+  }) {
+    final lowRam = deviceStats?.lowRam ?? false;
+    final freeRam = deviceStats?.freeRam;
+    final totalRam = deviceStats?.totalRamGb;
+
+    var initCap = 8192;
+    var runtimeCap = 16384;
+
+    if (lowRam) {
+      initCap = 2048;
+      runtimeCap = 4096;
+    } else if (freeRam != null) {
+      if (freeRam < 1.5) {
+        initCap = 2048;
+        runtimeCap = 4096;
+      } else if (freeRam < 3) {
+        initCap = 4096;
+        runtimeCap = 8192;
+      } else if (freeRam < 5) {
+        initCap = 8192;
+        runtimeCap = 12288;
+      } else if (freeRam < 7) {
+        initCap = 12288;
+        runtimeCap = 16384;
+      } else {
+        initCap = 16384;
+        runtimeCap = 32768;
+      }
+    }
+
+    if (totalRam != null) {
+      if (totalRam < 4) {
+        initCap = math.min(initCap, 2048);
+        runtimeCap = math.min(runtimeCap, 4096);
+      } else if (totalRam < 6) {
+        initCap = math.min(initCap, 4096);
+        runtimeCap = math.min(runtimeCap, 8192);
+      } else if (totalRam < 8) {
+        initCap = math.min(initCap, 8192);
+        runtimeCap = math.min(runtimeCap, 12288);
+      }
+    }
+
+    if (preferredBackend == PreferredBackend.gpu &&
+        _isGemma4E2bModel(modelId)) {
+      initCap = math.min(initCap, _gemma4E2bInitMaxTokens);
+      runtimeCap = math.min(runtimeCap, _gemma4E2bRuntimeMaxTokens);
+    }
+
+    if (preferredBackend == PreferredBackend.cpu) {
+      initCap = math.min(initCap, 8192);
+      runtimeCap = math.min(runtimeCap, 16384);
+    }
+
+    return _TokenBudgets(
+      initTokenBudget: initCap,
+      runtimeTargetTokenBudget: runtimeCap,
+    );
+  }
+
+  List<_InitAttempt> _buildInitAttempts({
+    required PreferredBackend preferredBackend,
+    required int initTokenBudget,
+    required int runtimeTargetTokenBudget,
+  }) {
+    final tiers = <int>[1024, 2048, 4096, 8192, 12288, 16384, 32768];
+    int normalizeTier(int value) {
+      return tiers.where((tier) => tier <= value).fold(1024, math.max);
+    }
+
+    final startBudget = normalizeTier(initTokenBudget);
+    final safeBudget = normalizeTier(runtimeTargetTokenBudget);
+    final budgets = <int>{};
+    for (final tier in tiers) {
+      if (tier <= startBudget && tier <= safeBudget) {
+        budgets.add(tier);
+      }
+    }
+    final sortedBudgets = budgets.toList()..sort((a, b) => b.compareTo(a));
+
+    final attempts = <_InitAttempt>[];
+    for (final budget in sortedBudgets) {
+      attempts.add(
+        _InitAttempt(
+          backend: preferredBackend,
+          initTokenBudget: budget,
+          note: 'initial-backend',
+        ),
+      );
+    }
+
+    if (preferredBackend != PreferredBackend.cpu) {
+      for (final budget in sortedBudgets) {
+        attempts.add(
+          _InitAttempt(
+            backend: PreferredBackend.cpu,
+            initTokenBudget: budget,
+            note: 'fallback-cpu',
+          ),
+        );
+      }
+    }
+
+    return attempts;
+  }
+
   Future<bool> stopGeneration() async {
     final chat = _activeChat;
     if (chat == null) {
@@ -249,12 +465,25 @@ class LiteRtBridge {
     final freeRam =
         (result['freeRamGb'] as num?)?.toDouble() ??
         (result['freeram'] as num?)?.toDouble();
+    final totalRam =
+        (result['totalRamGb'] as num?)?.toDouble() ??
+        (result['totalram'] as num?)?.toDouble();
     final npuReady =
         result['npuReady'] as bool? ?? result['npu_ready'] as bool?;
+    final gpuReady =
+        result['gpuReady'] as bool? ?? result['gpu_ready'] as bool?;
+    final lowRam =
+        result['lowRam'] as bool? ?? result['low_ram'] as bool?;
     if (freeRam == null || npuReady == null) {
       return null;
     }
-    return LiteRtDeviceStats(freeRam: freeRam, npuReady: npuReady);
+    return LiteRtDeviceStats(
+      freeRam: freeRam,
+      npuReady: npuReady,
+      gpuReady: gpuReady,
+      totalRamGb: totalRam,
+      lowRam: lowRam,
+    );
   }
 
   Future<void> _guardGenerationStart() async {
@@ -316,11 +545,21 @@ class LiteRtBridge {
     }
 
     final currentBackend = _preferredBackend;
-    final nextBackend = switch (currentBackend) {
+    var nextBackend = switch (currentBackend) {
       PreferredBackend.gpu => PreferredBackend.cpu,
       PreferredBackend.npu => PreferredBackend.gpu,
       _ => currentBackend,
     };
+    if (nextBackend == PreferredBackend.gpu) {
+      final stats = await getDeviceStats();
+      final gpuReady = stats?.gpuReady ?? false;
+      if (!gpuReady && _isGemma4E2bModel(modelId)) {
+        debugPrint(
+          'LiteRtBridge._attemptMemoryPressureRecovery: GPU not explicitly ready for Gemma 4 E2B, staying on CPU',
+        );
+        nextBackend = PreferredBackend.cpu;
+      }
+    }
 
     try {
       await _activeModel?.close();
@@ -370,6 +609,28 @@ class LiteRtBridge {
   }
 }
 
+class _TokenBudgets {
+  const _TokenBudgets({
+    required this.initTokenBudget,
+    required this.runtimeTargetTokenBudget,
+  });
+
+  final int initTokenBudget;
+  final int runtimeTargetTokenBudget;
+}
+
+class _InitAttempt {
+  const _InitAttempt({
+    required this.backend,
+    required this.initTokenBudget,
+    required this.note,
+  });
+
+  final PreferredBackend backend;
+  final int initTokenBudget;
+  final String note;
+}
+
 class LiteRtCrashShieldException implements Exception {
   const LiteRtCrashShieldException(this.message);
 
@@ -399,10 +660,19 @@ class LiteRtGenerationMetrics {
 }
 
 class LiteRtDeviceStats {
-  const LiteRtDeviceStats({required this.freeRam, required this.npuReady});
+  const LiteRtDeviceStats({
+    required this.freeRam,
+    required this.npuReady,
+    this.gpuReady,
+    this.totalRamGb,
+    this.lowRam,
+  });
 
   final double freeRam;
   final bool npuReady;
+  final bool? gpuReady;
+  final double? totalRamGb;
+  final bool? lowRam;
 }
 
 class LiteRtInferenceStats {

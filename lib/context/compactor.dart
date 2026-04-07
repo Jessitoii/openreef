@@ -13,6 +13,10 @@ class ReefCompactor {
     required CompactionSummarizer summarizer,
   }) : _summarizer = summarizer;
 
+  static const String _prunedToolResult = '[tool result pruned]';
+  static const String _prunedToolError = '[tool error pruned]';
+  static const int _fallbackSummaryMessageLimit = 6;
+
   final CompactionSummarizer _summarizer;
 
   AssembleResult microCompact(AssembleResult context) {
@@ -23,13 +27,15 @@ class ReefCompactor {
           : current,
     );
     final messages = context.messages.map((message) {
-      if (!message.isToolResult) {
+      if (!message.isToolResult && !message.isToolError) {
         return message;
       }
 
       final turnNumber = message.turnNumber ?? currentTurn;
       if (currentTurn - turnNumber > 5) {
-        return message.copyWith(content: '[tool result pruned]');
+        return message.copyWith(
+          content: message.isToolError ? _prunedToolError : _prunedToolResult,
+        );
       }
       return message;
     }).toList(growable: false);
@@ -47,7 +53,7 @@ class ReefCompactor {
       return context;
     }
 
-    final summary = await _summarizer.summarize(
+    final summary = await _safeSummarize(
       split.oldMessages,
       maxTokens: maxSummaryTokens,
     );
@@ -60,6 +66,7 @@ class ReefCompactor {
           turnNumber: split.summaryTurnNumber,
           metadata: <String, Object?>{
             'reserve_tokens': reserveTokens,
+            'compaction_level': 'auto',
           },
         ),
         ...split.recentMessages,
@@ -73,8 +80,10 @@ class ReefCompactor {
     bool reInjectActiveSkills = false,
   }) async {
     final split = _splitHistory(context.messages, keepRecentTurns: 4);
-    final summary = await _summarizer.summarize(
-      split.oldMessages.isEmpty ? context.messages : split.oldMessages,
+    final messagesToSummarize =
+        split.oldMessages.isEmpty ? context.messages : split.oldMessages;
+    final summary = await _safeSummarize(
+      messagesToSummarize,
       maxTokens: context.tokenBudget.outputReserve,
     );
 
@@ -83,6 +92,9 @@ class ReefCompactor {
         role: AgentMessageRole.summary,
         content: '[COMPACT SUMMARY]\n$summary\n[END COMPACT]',
         turnNumber: split.summaryTurnNumber,
+        metadata: const <String, Object?>{
+          'compaction_level': 'full',
+        },
       ),
       ...split.recentMessages,
     ];
@@ -117,6 +129,59 @@ class ReefCompactor {
     );
   }
 
+  Future<String> _safeSummarize(
+    List<AgentMessage> messages, {
+    required int maxTokens,
+  }) async {
+    try {
+      final summary = await _summarizer.summarize(
+        messages,
+        maxTokens: maxTokens,
+      );
+      final normalized = summary.trim();
+      if (normalized.isNotEmpty) {
+        return normalized;
+      }
+    } catch (_) {
+      // Fall back to a deterministic inline summary to keep the loop alive.
+    }
+
+    return _fallbackSummary(messages, maxTokens: maxTokens);
+  }
+
+  String _fallbackSummary(
+    List<AgentMessage> messages, {
+    required int maxTokens,
+  }) {
+    final segments = messages
+        .take(_fallbackSummaryMessageLimit)
+        .map(
+          (message) =>
+              '[${message.role.name}] ${_truncate(message.content, maxTokens)}',
+        )
+        .where((segment) => segment.trim().isNotEmpty)
+        .toList(growable: false);
+
+    if (segments.isEmpty) {
+      return '[fallback summary unavailable]';
+    }
+
+    return segments.join('\n');
+  }
+
+  String _truncate(String content, int maxTokens) {
+    final words = content
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((word) => word.isNotEmpty);
+    if (words.isEmpty) {
+      return '';
+    }
+
+    final limit = maxTokens <= 0 ? 1 : maxTokens;
+    return words.take(limit).join(' ');
+  }
+
   _HistorySplit _splitHistory(
     List<AgentMessage> messages, {
     required int keepRecentTurns,
@@ -135,7 +200,8 @@ class ReefCompactor {
       );
     }
 
-    final preservedTurns = turnNumbers.sublist(turnNumbers.length - keepRecentTurns);
+    final preservedTurns =
+        turnNumbers.sublist(turnNumbers.length - keepRecentTurns);
     final preservedSet = preservedTurns.toSet();
     final oldMessages = <AgentMessage>[];
     final recentMessages = <AgentMessage>[];

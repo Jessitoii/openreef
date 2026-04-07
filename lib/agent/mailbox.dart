@@ -35,6 +35,16 @@ class ApprovalRequest {
   final ToolCall call;
 }
 
+class ApprovalResolution {
+  const ApprovalResolution({
+    required this.requestId,
+    required this.decision,
+  });
+
+  final String requestId;
+  final MailboxDecision decision;
+}
+
 class DispatchRequest {
   const DispatchRequest({
     required this.parentSessionKey,
@@ -85,12 +95,14 @@ class MailboxDispatchConfig {
     this.maxDepth = 2,
     this.maxChildrenPerAgent = 3,
     this.maxConcurrentSubAgents = 2,
+    this.approvalTimeout = const Duration(minutes: 5),
     this.subAgentTimeout = const Duration(minutes: 5),
   });
 
   final int maxDepth;
   final int maxChildrenPerAgent;
   final int maxConcurrentSubAgents;
+  final Duration approvalTimeout;
   final Duration subAgentTimeout;
 }
 
@@ -127,10 +139,14 @@ class AgentMailbox {
       <String, Completer<MailboxDecision>>{};
   final StreamController<ApprovalRequest> _approvalController =
       StreamController<ApprovalRequest>.broadcast();
+  final StreamController<ApprovalResolution> _resolutionController =
+      StreamController<ApprovalResolution>.broadcast();
   final Map<String, int> _childrenByParent = <String, int>{};
   final Set<String> _activeSessions = <String>{};
+  final Map<String, Timer> _approvalTimers = <String, Timer>{};
 
   Stream<ApprovalRequest> get approvalRequests => _approvalController.stream;
+  Stream<ApprovalResolution> get approvalResolutions => _resolutionController.stream;
 
   int get pendingApprovals => _pending.length;
   int get activeSubAgents => _activeSessions.length;
@@ -148,6 +164,12 @@ class AgentMailbox {
 
     final completer = Completer<MailboxDecision>();
     _pending[requestId] = completer;
+    _approvalTimers[requestId] = Timer(_config.approvalTimeout, () {
+      resolve(
+        requestId,
+        const MailboxDecision.rejected(reason: 'timeout'),
+      );
+    });
     _approvalController.add(
       ApprovalRequest(
         requestId: requestId,
@@ -160,11 +182,15 @@ class AgentMailbox {
 
   bool resolve(String requestId, MailboxDecision decision) {
     final completer = _pending.remove(requestId);
+    _approvalTimers.remove(requestId)?.cancel();
     if (completer == null || completer.isCompleted) {
       return false;
     }
 
     completer.complete(decision);
+    _resolutionController.add(
+      ApprovalResolution(requestId: requestId, decision: decision),
+    );
     return true;
   }
 
@@ -239,7 +265,12 @@ class AgentMailbox {
     if (_subAgentDispatcher case final ManagedSubAgentDispatcher dispatcher) {
       await dispatcher.dispose();
     }
+    for (final timer in _approvalTimers.values) {
+      timer.cancel();
+    }
+    _approvalTimers.clear();
     await _approvalController.close();
+    await _resolutionController.close();
   }
 
   static String _defaultIdGenerator() {

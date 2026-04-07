@@ -16,6 +16,18 @@ enum SubAgentActivityStatus {
   failed,
 }
 
+class PendingToolApproval {
+  const PendingToolApproval({
+    required this.toolCallId,
+    required this.toolId,
+    required this.arguments,
+  });
+
+  final String toolCallId;
+  final String toolId;
+  final Map<String, Object?> arguments;
+}
+
 class ChatTranscriptMessage {
   const ChatTranscriptMessage({
     required this.id,
@@ -93,4 +105,29 @@ abstract class ChatSessionFactory {
     required String sessionId,
     List<ChatTranscriptMessage> initialMessages = const <ChatTranscriptMessage>[],
   });
+}
+
+abstract class ApprovalCapableChatSession {
+  PendingToolApproval? get pendingApproval;
+  void approvePendingApproval();
+  void rejectPendingApproval();
+}
+
+extension ChatSessionApprovalState on ChatSessionPort {
+  PendingToolApproval? get pendingApprovalOrNull =>
+      this is ApprovalCapableChatSession
+          ? (this as ApprovalCapableChatSession).pendingApproval
+          : null;
+
+  void approvePendingApprovalIfSupported() {
+    if (this is ApprovalCapableChatSession) {
+      (this as ApprovalCapableChatSession).approvePendingApproval();
+    }
+  }
+
+  void rejectPendingApprovalIfSupported() {
+    if (this is ApprovalCapableChatSession) {
+      (this as ApprovalCapableChatSession).rejectPendingApproval();
+    }
+  }
 }

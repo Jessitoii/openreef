@@ -7,10 +7,7 @@ import 'package:openreef/settings/settings_controller.dart';
 enum WakeWordEventType { detected }
 
 class WakeWordEvent {
-  const WakeWordEvent({
-    required this.type,
-    required this.detectedAt,
-  });
+  const WakeWordEvent({required this.type, required this.detectedAt});
 
   factory WakeWordEvent.detected() {
     return WakeWordEvent(
@@ -40,7 +37,7 @@ class WakeWordController extends ChangeNotifier {
        _isSupportedOverride = isSupportedOverride {
     _settingsController.addListener(_handleSettingsChanged);
     _eventSubscription = _platformEvents().listen(_handlePlatformEvent);
-    unawaited(syncWithSettings());
+    unawaited(_initializeWakeRuntime());
   }
 
   static const String methodChannelName = 'openreef/wake_word_channel';
@@ -49,6 +46,8 @@ class WakeWordController extends ChangeNotifier {
   static const String _startMethod = 'startListening';
   static const String _stopMethod = 'stopListening';
   static const String _statusMethod = 'isListening';
+  static const String _availabilityMethod = 'isAvailable';
+  static const String _setSensitivityMethod = 'setSensitivity';
 
   final SettingsController _settingsController;
   final OptionalMethodChannel _methodChannel;
@@ -60,12 +59,14 @@ class WakeWordController extends ChangeNotifier {
 
   StreamSubscription<dynamic>? _eventSubscription;
   DateTime? _lastDetectedAt;
+  bool _isAvailable = false;
   bool _isListening = false;
 
   bool get isSupported =>
       _isSupportedOverride ??
       (!kIsWeb && defaultTargetPlatform == TargetPlatform.android);
 
+  bool get isAvailable => isSupported && _isAvailable;
   bool get isListening => _isListening;
 
   DateTime? get lastDetectedAt => _lastDetectedAt;
@@ -73,10 +74,12 @@ class WakeWordController extends ChangeNotifier {
   Stream<WakeWordEvent> get events => _events.stream;
 
   Future<bool> startListening() async {
-    if (!isSupported) {
+    if (!await refreshAvailability()) {
+      _setListening(false);
       return false;
     }
 
+    await updateSensitivity(_settingsController.settings.voiceSensitivity);
     final started = await _methodChannel.invokeMethod<bool>(_startMethod);
     _setListening(started ?? false);
     return _isListening;
@@ -84,6 +87,7 @@ class WakeWordController extends ChangeNotifier {
 
   Future<bool> stopListening() async {
     if (!isSupported) {
+      _setAvailable(false);
       _setListening(false);
       return false;
     }
@@ -95,6 +99,7 @@ class WakeWordController extends ChangeNotifier {
 
   Future<bool> refreshListeningState() async {
     if (!isSupported) {
+      _setAvailable(false);
       _setListening(false);
       return false;
     }
@@ -104,7 +109,41 @@ class WakeWordController extends ChangeNotifier {
     return _isListening;
   }
 
+  Future<bool> refreshAvailability() async {
+    if (!isSupported) {
+      _setAvailable(false);
+      _setListening(false);
+      return false;
+    }
+
+    final available = await _methodChannel.invokeMethod<bool>(
+      _availabilityMethod,
+    );
+    _setAvailable(available ?? false);
+    if (!_isAvailable) {
+      _setListening(false);
+    }
+    return _isAvailable;
+  }
+
+  Future<void> updateSensitivity(double sensitivity) async {
+    if (!await refreshAvailability()) {
+      return;
+    }
+
+    await _methodChannel.invokeMethod<void>(
+      _setSensitivityMethod,
+      <String, Object?>{'value': sensitivity.clamp(0.3, 0.9)},
+    );
+  }
+
   Future<void> syncWithSettings() async {
+    final available = await refreshAvailability();
+    if (!available) {
+      return;
+    }
+
+    await updateSensitivity(_settingsController.settings.voiceSensitivity);
     if (!_settingsController.settings.wakeWordEnabled) {
       await stopListening();
       return;
@@ -125,6 +164,11 @@ class WakeWordController extends ChangeNotifier {
     unawaited(syncWithSettings());
   }
 
+  Future<void> _initializeWakeRuntime() async {
+    await refreshAvailability();
+    await syncWithSettings();
+  }
+
   Stream<dynamic> _platformEvents() {
     if (!isSupported) {
       return const Stream<dynamic>.empty();
@@ -133,12 +177,11 @@ class WakeWordController extends ChangeNotifier {
   }
 
   void _handlePlatformEvent(dynamic payload) {
-    final eventName =
-        switch (payload) {
-          String value => value,
-          Map<dynamic, dynamic> value => value['event']?.toString(),
-          _ => null,
-        };
+    final eventName = switch (payload) {
+      String value => value,
+      Map<dynamic, dynamic> value => value['event']?.toString(),
+      _ => null,
+    };
 
     if (eventName != 'detected') {
       return;
@@ -155,6 +198,14 @@ class WakeWordController extends ChangeNotifier {
       return;
     }
     _isListening = value;
+    notifyListeners();
+  }
+
+  void _setAvailable(bool value) {
+    if (_isAvailable == value) {
+      return;
+    }
+    _isAvailable = value;
     notifyListeners();
   }
 }

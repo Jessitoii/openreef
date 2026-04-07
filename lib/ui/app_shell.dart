@@ -11,12 +11,14 @@ import 'package:openreef/ui/screens/mcp_connections_screen.dart';
 import 'package:openreef/ui/screens/model_download_screen.dart';
 import 'package:openreef/ui/screens/settings_screen.dart';
 import 'package:openreef/ui/screens/skills_screen.dart';
+import 'package:openreef/voice/wake_word_controller.dart';
 import 'package:openreef/mcp/mcp_connections_controller.dart';
 
 class AppShell extends StatefulWidget {
   const AppShell({
     required this.settingsController,
     required this.chatSession,
+    this.wakeWordController,
     required this.modelDownloadController,
     required this.skillRegistryController,
     required this.mcpConnectionsController,
@@ -27,6 +29,7 @@ class AppShell extends StatefulWidget {
 
   final SettingsController settingsController;
   final ChatSessionPort chatSession;
+  final WakeWordController? wakeWordController;
   final ModelDownloadController modelDownloadController;
   final SkillRegistryController skillRegistryController;
   final McpConnectionsController mcpConnectionsController;
@@ -89,7 +92,8 @@ class _AppShellState extends State<AppShell> {
                       padding: const EdgeInsets.symmetric(horizontal: 8),
                       children: [
                         const _DrawerSectionLabel(label: 'Recent Chats'),
-                        for (final session in _workspaceController.recentSessions)
+                        for (final session
+                            in _workspaceController.recentSessions)
                           _RecentChatTile(
                             session: session,
                             selected: activeSession?.record.id == session.id,
@@ -179,12 +183,10 @@ class _AppShellState extends State<AppShell> {
                   onChatPressed: activeSession == null
                       ? null
                       : () => _workspaceController.showDestination(
-                            AppShellDestination.chat,
-                          ),
+                          AppShellDestination.chat,
+                        ),
                 ),
-                Expanded(
-                  child: _buildBody(activeSession),
-                ),
+                Expanded(child: _buildBody(activeSession)),
               ],
             ),
           ),
@@ -206,7 +208,10 @@ class _AppShellState extends State<AppShell> {
           onSendMessage: _workspaceController.sendMessage,
         );
       case AppShellDestination.settings:
-        return SettingsScreen(settingsController: widget.settingsController);
+        return SettingsScreen(
+          settingsController: widget.settingsController,
+          wakeWordController: widget.wakeWordController,
+        );
       case AppShellDestination.skills:
         return SkillsScreen(controller: widget.skillRegistryController);
       case AppShellDestination.mcp:
@@ -261,10 +266,7 @@ class _ShellTopBar extends StatelessWidget {
               ),
             ),
           ),
-          TextButton(
-            onPressed: onChatPressed,
-            child: const Text('Chat'),
-          ),
+          TextButton(onPressed: onChatPressed, child: const Text('Chat')),
         ],
       ),
     );
@@ -308,11 +310,7 @@ class _RecentChatTile extends StatelessWidget {
       selected: selected,
       selectedTileColor: theme.colorScheme.primary.withValues(alpha: 0.08),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      title: Text(
-        session.title,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
+      title: Text(session.title, maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: Text(subtitle),
       onTap: onTap,
     );

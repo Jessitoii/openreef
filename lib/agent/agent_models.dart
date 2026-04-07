@@ -168,16 +168,19 @@ class AgentResponse {
 enum SessionResult {
   completed,
   frozen,
+  failed,
 }
 
 class AgentLoopResult {
   const AgentLoopResult({
     required this.sessionResult,
     required this.text,
+    this.reason,
   });
 
   final SessionResult sessionResult;
   final String text;
+  final String? reason;
 }
 
 class AgentResponseParser {

@@ -1,35 +1,27 @@
 package com.openreef.app.openreef
 
+import android.app.ActivityManager
 import android.content.Context
 import android.media.AudioManager
-import android.app.ActivityManager
 import android.os.BatteryManager
-import com.openreef.app.openreef.litert.LiteRtLmBridge
-import com.openreef.app.openreef.litert.LiteRtAndroidLmEngine
+import com.openreef.app.openreef.mcp.OpenReefSecureStore
 import com.openreef.app.openreef.service.OpenReefForegroundService
 import com.openreef.app.openreef.triggers.TriggerChannelBridge
-import io.flutter.plugin.common.EventChannel
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
-    private var liteRtBridge: LiteRtLmBridge? = null
     private var nativeToolsChannel: MethodChannel? = null
     private var deviceStatsChannel: MethodChannel? = null
     private var wakeWordChannel: MethodChannel? = null
     private var wakeWordEventChannel: EventChannel? = null
+    private var mcpSecretStoreChannel: MethodChannel? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         TriggerChannelBridge.attachToFlutterEngine(applicationContext, flutterEngine)
-        if (liteRtBridge == null) {
-            liteRtBridge =
-                LiteRtLmBridge(
-                    messenger = flutterEngine.dartExecutor.binaryMessenger,
-                    engine = LiteRtAndroidLmEngine(applicationContext),
-                )
-        }
         if (nativeToolsChannel == null) {
             nativeToolsChannel =
                 MethodChannel(
@@ -71,6 +63,16 @@ class MainActivity : FlutterActivity() {
                             "startListening" -> result.success(handleStartWakeWord())
                             "stopListening" -> result.success(handleStopWakeWord())
                             "isListening" -> result.success(OpenReefForegroundService.isListening())
+                            "isAvailable" ->
+                                result.success(
+                                    OpenReefForegroundService.isAvailable(applicationContext),
+                                )
+                            "setSensitivity" ->
+                                result.success(
+                                    OpenReefForegroundService.setSensitivity(
+                                        call.argument<Double>("value"),
+                                    ),
+                                )
                             else -> result.notImplemented()
                         }
                     }
@@ -98,6 +100,17 @@ class MainActivity : FlutterActivity() {
                     )
                 }
         }
+        if (mcpSecretStoreChannel == null) {
+            mcpSecretStoreChannel =
+                MethodChannel(
+                    flutterEngine.dartExecutor.binaryMessenger,
+                    MCP_SECRET_STORE_CHANNEL_NAME,
+                ).also { channel ->
+                    channel.setMethodCallHandler { call, result ->
+                        OpenReefSecureStore.handleMethodCall(applicationContext, call, result)
+                    }
+                }
+        }
     }
 
     override fun onDestroy() {
@@ -109,9 +122,9 @@ class MainActivity : FlutterActivity() {
         wakeWordChannel = null
         wakeWordEventChannel?.setStreamHandler(null)
         wakeWordEventChannel = null
+        mcpSecretStoreChannel?.setMethodCallHandler(null)
+        mcpSecretStoreChannel = null
         OpenReefForegroundService.attachEventSink(null)
-        liteRtBridge?.dispose()
-        liteRtBridge = null
         super.onDestroy()
     }
 
@@ -192,5 +205,6 @@ class MainActivity : FlutterActivity() {
         private const val DEVICE_STATS_CHANNEL_NAME = "openreef/device_stats"
         private const val WAKE_WORD_CHANNEL_NAME = "openreef/wake_word_channel"
         private const val WAKE_WORD_EVENT_CHANNEL_NAME = "openreef/wake_word_events"
+        private const val MCP_SECRET_STORE_CHANNEL_NAME = "openreef/mcp_secret_store"
     }
 }

@@ -4,17 +4,22 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:openreef/agent/agent_loop.dart';
 import 'package:openreef/agent/agent_model_adapter.dart';
+import 'package:openreef/agent/agent_notifier.dart';
 import 'package:openreef/agent/mailbox.dart';
 import 'package:openreef/agent/tool_router.dart';
 import 'package:openreef/context/bootstrap_context_services.dart';
 import 'package:openreef/context/compactor.dart';
 import 'package:openreef/context/context_assembler.dart';
 import 'package:openreef/memory/memory_former.dart';
+import 'package:openreef/memory/memory_formation_service.dart';
 import 'package:openreef/memory/memory_index.dart';
+import 'package:openreef/memory/semantic_memory_retriever.dart';
+import 'package:openreef/memory/semantic_text_embedder.dart';
 import 'package:openreef/memory/memory_storage.dart';
 import 'package:openreef/memory/sqlite_memory_storage_backend.dart';
 import 'package:openreef/mcp/mcp_connection_store.dart';
 import 'package:openreef/mcp/mcp_connections_controller.dart';
+import 'package:openreef/mcp/mcp_secret_store.dart';
 import 'package:openreef/models/litert_bridge.dart';
 import 'package:openreef/models/model_download_controller.dart';
 import 'package:openreef/models/model_downloader.dart';
@@ -90,6 +95,7 @@ class _MyAppState extends State<MyApp> {
     return OpenReefApp(
       settingsController: widget.bootstrap.settingsController,
       chatSession: widget.bootstrap.chatSession,
+      wakeWordController: widget.bootstrap.wakeWordController,
       modelDownloadController: widget.bootstrap.modelDownloadController,
       skillRegistryController: widget.bootstrap.skillRegistryController,
       mcpConnectionsController: widget.bootstrap.mcpConnectionsController,
@@ -142,9 +148,15 @@ class OpenReefBootstrap {
     await memoryStorage.initialize();
 
     final memoryIndex = MemoryIndex(memoryStorage);
+    final semanticEmbedder = OnDeviceSemanticTextEmbedder();
+    final semanticMemoryRetriever = SemanticMemoryRetriever(
+      storage: memoryStorage,
+      embedder: semanticEmbedder,
+    );
     final memoryFormer = MemoryFormer(
       storage: memoryStorage,
       memoryIndex: memoryIndex,
+      embedder: semanticEmbedder,
     );
 
     final toolRegistry = ToolManifestRegistry(
@@ -152,6 +164,7 @@ class OpenReefBootstrap {
         volumeAdapter: PlatformVolumeAdapter(),
         clipboardAdapter: const PlatformClipboardAdapter(),
         batteryAdapter: PlatformBatteryAdapter(),
+        memoryRetriever: semanticMemoryRetriever,
       ),
     );
     final toolBridge = ToolManifestBridge(toolRegistry);
@@ -167,6 +180,10 @@ class OpenReefBootstrap {
       toolBridge.toToolDefinition(
         toolId: 'battery_info',
         embedding: const <double>[0, 0, 0, 0, 1, 0, 0],
+      ),
+      toolBridge.toToolDefinition(
+        toolId: 'memory_search',
+        embedding: const <double>[0, 0, 0, 0, 0, 1, 0],
       ),
     ]);
 
@@ -202,21 +219,31 @@ class OpenReefBootstrap {
 
     final contextAssembler = ContextAssembler(
       memoryIndex: memoryIndex,
-      embedder: const KeywordIntentEmbedder(),
+      embedder: const LexicalIntentEmbedder(),
       toolCatalog: toolCatalog,
       skillCatalog: InMemorySkillCatalog(const <SkillDefinition>[]),
-      memoryContextProvider: MemoryStorageContextProvider(memoryStorage),
+      memoryContextProvider: SemanticMemoryContextProvider(
+        semanticMemoryRetriever,
+      ),
     );
+    final mailbox = AgentMailbox();
+    final approvalController = MainAgentApprovalController(mailbox: mailbox);
     final agentLoop = AgentLoop(
       contextAssembler: contextAssembler,
-      compactor: const ReefCompactor(summarizer: InlineCompactionSummarizer()),
+      compactor: ReefCompactor(
+        summarizer: LiteRtCompactionSummarizer(bridge: liteRtBridge),
+      ),
       modelAdapter: LiteRtAgentModelAdapter(bridge: liteRtBridge),
       toolRouter: ToolRouter(
         catalog: toolCatalog,
-        mailbox: AgentMailbox(),
-        confirmToolCall: (call) async => false,
+        mailbox: mailbox,
+        confirmToolCall: approvalController.confirmToolCall,
       ),
       memoryFormer: memoryFormer,
+      memoryFormationService: ModelBackedMemoryFormationService(
+        modelAdapter: LiteRtAgentModelAdapter(bridge: liteRtBridge),
+      ),
+      notifier: const DebugPrintAgentNotifier(),
     );
 
     final settingsController = SettingsController();
@@ -229,11 +256,17 @@ class OpenReefBootstrap {
       registry: SkillRegistry(rootPaths: <String>[skillsDir.path]),
     );
     final mcpConnectionsController = McpConnectionsController(
-      store: McpConnectionStore(memoryStorage),
+      store: McpConnectionStore(
+        memoryStorage,
+        secretStore: PlatformMcpSecretStore(),
+      ),
     );
     return OpenReefBootstrap._(
       settingsController: settingsController,
-      chatSession: AgentLoopChatSession(agentLoop: agentLoop),
+      chatSession: AgentLoopChatSession(
+        agentLoop: agentLoop,
+        approvalController: approvalController,
+      ),
       modelDownloadController: modelDownloadController,
       liteRtBridge: liteRtBridge,
       audioService: AudioService(settingsController: settingsController),

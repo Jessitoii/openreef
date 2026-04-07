@@ -1,14 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:openreef/settings/app_settings.dart';
 import 'package:openreef/settings/settings_controller.dart';
+import 'package:openreef/voice/wake_word_controller.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({
     required this.settingsController,
+    this.wakeWordController,
     super.key,
   });
 
   final SettingsController settingsController;
+  final WakeWordController? wakeWordController;
 
   @override
   Widget build(BuildContext context) {
@@ -17,6 +20,7 @@ class SettingsScreen extends StatelessWidget {
       builder: (context, child) {
         final settings = settingsController.settings;
         final theme = Theme.of(context);
+        final wakeRuntimeAvailable = wakeWordController?.isAvailable ?? false;
         return ListView(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
           children: [
@@ -34,7 +38,7 @@ class SettingsScreen extends StatelessWidget {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      'UI toggles map to the documented settings registry now and can later be surfaced through settings_read/settings_write.',
+                      'Theme settings are active. Voice controls below are experimental until wake-to-agent automation is fully wired.',
                       style: theme.textTheme.bodyMedium?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
                         height: 1.45,
@@ -70,25 +74,29 @@ class SettingsScreen extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             _SectionCard(
-              title: 'Voice',
+              title: 'Voice (Experimental)',
               child: Column(
                 children: [
                   SwitchListTile(
                     key: const Key('wake-word-toggle'),
-                    value: settings.wakeWordEnabled,
-                    title: const Text('Wake Word Enabled'),
-                    subtitle: const Text(
-                      'Keep the local wake pipeline available for future background integration.',
+                    value: wakeRuntimeAvailable && settings.wakeWordEnabled,
+                    title: const Text('Wake Word Listener (Experimental)'),
+                    subtitle: Text(
+                      wakeRuntimeAvailable
+                          ? 'Starts/stops native wake-word listening only. It does not trigger capture, inference, or spoken responses yet.'
+                          : 'Unavailable until a Picovoice access key is provisioned for this build. The wake pipeline remains experimental.',
                     ),
                     contentPadding: EdgeInsets.zero,
-                    onChanged: settingsController.updateWakeWordEnabled,
+                    onChanged: wakeRuntimeAvailable
+                        ? settingsController.updateWakeWordEnabled
+                        : null,
                   ),
                   const Divider(height: 20),
                   DropdownButtonFormField<VoiceTtsEngine>(
                     key: const Key('tts-engine-dropdown'),
                     initialValue: settings.voiceTtsEngine,
                     decoration: const InputDecoration(
-                      labelText: 'TTS Engine',
+                      labelText: 'TTS Engine (Experimental)',
                     ),
                     items: const <DropdownMenuItem<VoiceTtsEngine>>[
                       DropdownMenuItem(
@@ -111,7 +119,9 @@ class SettingsScreen extends StatelessWidget {
                     children: [
                       Expanded(
                         child: Text(
-                          'Wake Sensitivity ${settings.voiceSensitivity.toStringAsFixed(1)}',
+                          wakeRuntimeAvailable
+                              ? 'Wake Sensitivity (native listener only) ${settings.voiceSensitivity.toStringAsFixed(1)}'
+                              : 'Wake Sensitivity (inactive until wake runtime is configured) ${settings.voiceSensitivity.toStringAsFixed(1)}',
                         ),
                       ),
                     ],
@@ -123,7 +133,9 @@ class SettingsScreen extends StatelessWidget {
                     divisions: 6,
                     value: settings.voiceSensitivity,
                     label: settings.voiceSensitivity.toStringAsFixed(1),
-                    onChanged: settingsController.updateVoiceSensitivity,
+                    onChanged: wakeRuntimeAvailable
+                        ? settingsController.updateVoiceSensitivity
+                        : null,
                   ),
                 ],
               ),
@@ -136,10 +148,7 @@ class SettingsScreen extends StatelessWidget {
 }
 
 class _SectionCard extends StatelessWidget {
-  const _SectionCard({
-    required this.title,
-    required this.child,
-  });
+  const _SectionCard({required this.title, required this.child});
 
   final String title;
   final Widget child;
@@ -154,9 +163,9 @@ class _SectionCard extends StatelessWidget {
           children: [
             Text(
               title,
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w700,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 16),
             child,

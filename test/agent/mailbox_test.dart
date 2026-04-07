@@ -85,6 +85,31 @@ void main() {
     expect((await firstFuture).isApproved, isTrue);
   });
 
+  test('approval timeout deterministically rejects and cleans up pending state', () async {
+    final mailbox = AgentMailbox(
+      idGenerator: () => 'timeout-1',
+      config: const MailboxDispatchConfig(
+        approvalTimeout: Duration(milliseconds: 10),
+      ),
+    );
+    addTearDown(mailbox.dispose);
+
+    final decisionFuture = mailbox.requestApproval(
+      workerSessionKey: 'agent:main:sub:worker-timeout',
+      call: const ToolCall(id: 'call-timeout', toolId: 'screen_lock'),
+    );
+
+    final resolution = await mailbox.approvalResolutions.first;
+    final decision = await decisionFuture;
+
+    expect(resolution.requestId, 'timeout-1');
+    expect(resolution.decision.isRejected, isTrue);
+    expect(resolution.decision.reason, 'timeout');
+    expect(decision.isRejected, isTrue);
+    expect(decision.reason, 'timeout');
+    expect(mailbox.pendingApprovals, 0);
+  });
+
   test('sub-agent confirmation routes through mailbox while main-agent bypasses it', () async {
     final mailbox = AgentMailbox(idGenerator: () => 'route-1');
     addTearDown(mailbox.dispose);
@@ -130,6 +155,40 @@ void main() {
 
     expect(mainResult.content, 'dialing');
     expect(confirmations, 1);
+    expect(mailbox.pendingApprovals, 0);
+  });
+
+  test('sub-agent timeout returns rejected tool result and cleans mailbox state', () async {
+    final mailbox = AgentMailbox(
+      idGenerator: () => 'route-timeout',
+      config: const MailboxDispatchConfig(
+        approvalTimeout: Duration(milliseconds: 10),
+      ),
+    );
+    addTearDown(mailbox.dispose);
+
+    final router = ToolRouter(
+      catalog: InMemoryToolCatalog(
+        <ToolDefinition>[
+          ToolDefinition(
+            id: 'phone_call',
+            embedding: const <double>[1],
+            requiresConfirmation: true,
+            execute: (call) async => const ToolResult.success('dialing'),
+          ),
+        ],
+      ),
+      mailbox: mailbox,
+      confirmToolCall: (call) async => true,
+    );
+
+    final result = await router.dispatch(
+      const ToolCall(id: 't-timeout', toolId: 'phone_call'),
+      sessionKey: 'agent:main:sub:worker-timeout',
+    );
+
+    expect(result.isRejected, isTrue);
+    expect(result.content, 'timeout');
     expect(mailbox.pendingApprovals, 0);
   });
 

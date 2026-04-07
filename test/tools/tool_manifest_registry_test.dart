@@ -1,4 +1,13 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:openreef/memory/memory_embedding_record.dart';
+import 'package:openreef/memory/memory_pointer.dart';
+import 'package:openreef/memory/memory_record.dart';
+import 'package:openreef/memory/memory_storage.dart';
+import 'package:openreef/memory/memory_storage_backend.dart';
+import 'package:openreef/memory/memory_store_kind.dart';
+import 'package:openreef/memory/semantic_memory_match.dart';
+import 'package:openreef/memory/semantic_memory_retriever.dart';
+import 'package:openreef/memory/semantic_text_embedder.dart';
 import 'package:openreef/tools/mvp_native_tools.dart';
 import 'package:openreef/tools/native_tool_adapters.dart';
 import 'package:openreef/tools/tool_manifest.dart';
@@ -19,6 +28,10 @@ void main() {
         volumeAdapter: volumeAdapter,
         clipboardAdapter: clipboardAdapter,
         batteryAdapter: batteryAdapter,
+        memoryRetriever: SemanticMemoryRetriever(
+          storage: MemoryStorage(_NoopMemoryStorageBackend()),
+          embedder: const _FixedSemanticEmbedder(<double>[1, 0, 0]),
+        ),
       ),
     );
   });
@@ -26,8 +39,9 @@ void main() {
   test('lists manifests and looks them up by id', () {
     final manifests = registry.listManifests();
 
-    expect(manifests.length, 3);
+    expect(manifests.length, 4);
     expect(manifests.map((manifest) => manifest.id), contains('volume_set'));
+    expect(manifests.map((manifest) => manifest.id), contains('memory_search'));
     expect(registry.manifestById('battery_info')?.category, 'system');
   });
 
@@ -116,6 +130,83 @@ void main() {
     expect(result.metadata, containsPair('state', 'charging'));
     expect(result.metadata, containsPair('isLowPowerMode', true));
   });
+}
+
+class _FixedSemanticEmbedder implements SemanticTextEmbedder {
+  const _FixedSemanticEmbedder(this._embedding);
+
+  final List<double> _embedding;
+
+  @override
+  String get modelId => 'test-embedder';
+
+  @override
+  Future<List<double>> embedDocument(String text) async => _embedding;
+
+  @override
+  Future<List<double>> embedQuery(String text) async => _embedding;
+}
+
+class _NoopMemoryStorageBackend implements MemoryStorageBackend {
+  @override
+  Future<void> close() async {}
+
+  @override
+  Future<void> deletePointer(String category) async {}
+
+  @override
+  Future<void> deleteRecord(String key) async {}
+
+  @override
+  Future<MemoryEmbeddingRecord?> fetchEmbedding(String key) async => null;
+
+  @override
+  Future<MemoryPointer?> fetchPointer(String category) async => null;
+
+  @override
+  Future<List<MemoryPointer>> fetchPointers() async => const <MemoryPointer>[];
+
+  @override
+  Future<MemoryRecord?> fetchRecord(
+    String key, {
+    MemoryStoreKind? store,
+    bool includeExpired = false,
+  }) async => null;
+
+  @override
+  Future<MemoryRecord?> fetchRecordByNormalizedContent(
+    String normalizedContent, {
+    MemoryStoreKind? store,
+    bool includeExpired = false,
+  }) async => null;
+
+  @override
+  Future<List<MemoryRecord>> fetchRecords({
+    MemoryStoreKind? store,
+    bool includeExpired = false,
+  }) async => const <MemoryRecord>[];
+
+  @override
+  Future<void> initialize() async {}
+
+  @override
+  Future<void> saveEmbedding(MemoryEmbeddingRecord record) async {}
+
+  @override
+  Future<void> savePointer(MemoryPointer pointer) async {}
+
+  @override
+  Future<void> saveRecord(MemoryRecord record) async {}
+
+  @override
+  Future<List<SemanticMemoryMatch>> searchByEmbedding({
+    required List<double> queryEmbedding,
+    int limit = 5,
+    double threshold = 0,
+    MemoryStoreKind? store,
+    String? category,
+    bool includeExpired = false,
+  }) async => const <SemanticMemoryMatch>[];
 }
 
 class _RecordingVolumeAdapter implements DeviceVolumeAdapter {

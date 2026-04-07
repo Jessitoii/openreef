@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:openreef/mcp/mcp_endpoint_policy.dart';
 import 'package:openreef/mcp/mcp_models.dart';
 import 'package:openreef/mcp/mcp_transport.dart';
 
@@ -12,11 +13,11 @@ class McpSseTransport implements McpTransport {
     HttpClient? httpClient,
     Map<String, String> headers = const <String, String>{},
     McpHeadersProvider? headersProvider,
-  })  : _sseEndpoint = sseEndpoint,
-        _postEndpoint = postEndpoint,
-        _httpClient = httpClient ?? HttpClient(),
-        _headers = headers,
-        _headersProvider = headersProvider;
+  }) : _sseEndpoint = sseEndpoint,
+       _postEndpoint = postEndpoint,
+       _httpClient = httpClient ?? HttpClient(),
+       _headers = headers,
+       _headersProvider = headersProvider;
 
   final Uri _sseEndpoint;
   final HttpClient _httpClient;
@@ -111,7 +112,14 @@ class McpSseTransport implements McpTransport {
       event: _currentEvent,
       data: _dataBuffer.toString(),
     );
-    _updatePostEndpointFromMessage(message);
+    try {
+      _updatePostEndpointFromMessage(message);
+    } on Object catch (error, stackTrace) {
+      _messagesController.addError(error, stackTrace);
+      _dataBuffer.clear();
+      _currentEvent = 'message';
+      return;
+    }
     _messagesController.add(message);
     _dataBuffer.clear();
     _currentEvent = 'message';
@@ -123,9 +131,14 @@ class McpSseTransport implements McpTransport {
     }
 
     final uri = _parseEndpointAnnouncement(message);
-    if (uri != null) {
-      _postEndpoint = uri;
+    if (uri == null) {
+      return;
     }
+    McpEndpointPolicy.validateNegotiatedPostEndpoint(
+      sseEndpoint: _sseEndpoint,
+      postEndpoint: uri,
+    );
+    _postEndpoint = uri;
   }
 
   Uri? _parseEndpointAnnouncement(McpTransportMessage message) {
@@ -230,8 +243,9 @@ class McpSseTransport implements McpTransport {
       throw const McpProtocolException('invalid_json_rpc_response');
     }
 
-    final jsonRpcResponse =
-        McpJsonRpcResponse.fromJson(decoded.cast<String, Object?>());
+    final jsonRpcResponse = McpJsonRpcResponse.fromJson(
+      decoded.cast<String, Object?>(),
+    );
     if (jsonRpcResponse.id != payload['id']) {
       throw const McpProtocolException('mismatched_json_rpc_id');
     }

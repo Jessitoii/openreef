@@ -1,3 +1,6 @@
+import 'dart:convert';
+
+import 'package:openreef/memory/semantic_memory_retriever.dart';
 import 'package:openreef/tools/native_tool_adapters.dart';
 import 'package:openreef/tools/tool_manifest.dart';
 
@@ -5,11 +8,13 @@ List<NativeToolHandler> createMvpNativeToolHandlers({
   required DeviceVolumeAdapter volumeAdapter,
   required ClipboardAdapter clipboardAdapter,
   required BatteryAdapter batteryAdapter,
+  required SemanticMemoryRetriever memoryRetriever,
 }) {
   return <NativeToolHandler>[
     VolumeSetToolHandler(volumeAdapter),
     ClipboardReadToolHandler(clipboardAdapter),
     BatteryInfoToolHandler(batteryAdapter),
+    MemorySearchToolHandler(memoryRetriever),
   ];
 }
 
@@ -118,6 +123,93 @@ class BatteryInfoToolHandler implements NativeToolHandler {
         'level': snapshot.level,
         'state': snapshot.state.name,
         'isLowPowerMode': snapshot.isLowPowerMode,
+        'executedAt': context.now().toIso8601String(),
+      },
+    );
+  }
+}
+
+class MemorySearchToolHandler implements NativeToolHandler {
+  MemorySearchToolHandler(this._retriever);
+
+  static const ToolManifest _manifest = ToolManifest(
+    id: 'memory_search',
+    description:
+        'Search long-term and short-term memory using semantic retrieval.',
+    category: 'memory',
+    argumentSchema: <ToolArgumentSpec>[
+      ToolArgumentSpec(
+        name: 'query',
+        type: ToolArgumentType.string,
+      ),
+      ToolArgumentSpec(
+        name: 'top_k',
+        type: ToolArgumentType.integer,
+        isRequired: false,
+        minimum: 1,
+        maximum: 10,
+      ),
+    ],
+    tags: <String>['memory', 'semantic', 'retrieval'],
+  );
+
+  final SemanticMemoryRetriever _retriever;
+
+  @override
+  ToolManifest get manifest => _manifest;
+
+  @override
+  Future<NativeToolExecutionResult> execute(
+    ToolInvocation invocation,
+    NativeToolContext context,
+  ) async {
+    final query = (invocation.arguments['query'] as String? ?? '').trim();
+    final topK = (invocation.arguments['top_k'] as int?) ?? 3;
+    final matches = await _retriever.search(
+      query: query,
+      limit: topK,
+    );
+
+    if (matches.isEmpty) {
+      return NativeToolExecutionResult(
+        content: 'No relevant memories found.',
+        metadata: <String, Object?>{
+          'query': query,
+          'results': const <Object?>[],
+          'executedAt': context.now().toIso8601String(),
+        },
+      );
+    }
+
+    final lines = matches.map((match) {
+      return '- [${match.record.category}] ${match.record.content}';
+    }).join('\n');
+    return NativeToolExecutionResult(
+      content: lines,
+      metadata: <String, Object?>{
+        'query': query,
+        'results': matches
+            .map(
+              (match) => <String, Object?>{
+                'key': match.record.key,
+                'category': match.record.category,
+                'score': match.score,
+                'content': match.record.content,
+              },
+            )
+            .toList(growable: false),
+        'results_json': jsonEncode(
+          matches
+              .map(
+                (match) => <String, Object?>{
+                  'key': match.record.key,
+                  'category': match.record.category,
+                  'score': match.score,
+                  'content': match.record.content,
+                },
+              )
+              .toList(growable: false),
+        ),
         'executedAt': context.now().toIso8601String(),
       },
     );

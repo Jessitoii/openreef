@@ -27,6 +27,7 @@ internal data class TriggerDeliveryEvent(
     val scheduledAtEpochMs: Long,
     val deliveredAtEpochMs: Long,
     val payloadJson: String,
+    val enqueuedAtEpochMs: Long = System.currentTimeMillis(),
 ) {
     fun toMap(): Map<String, Any?> =
         mapOf(
@@ -34,6 +35,7 @@ internal data class TriggerDeliveryEvent(
             "type" to type,
             "scheduledAtEpochMs" to scheduledAtEpochMs,
             "deliveredAtEpochMs" to deliveredAtEpochMs,
+            "enqueuedAtEpochMs" to enqueuedAtEpochMs,
             "payload" to payloadJson.toFlutterPayloadMap(),
         )
 
@@ -43,6 +45,7 @@ internal data class TriggerDeliveryEvent(
             .put("type", type)
             .put("scheduledAtEpochMs", scheduledAtEpochMs)
             .put("deliveredAtEpochMs", deliveredAtEpochMs)
+            .put("enqueuedAtEpochMs", enqueuedAtEpochMs)
             .put("payloadJson", payloadJson)
 
     companion object {
@@ -52,6 +55,8 @@ internal data class TriggerDeliveryEvent(
                 type = json.getString("type"),
                 scheduledAtEpochMs = json.getLong("scheduledAtEpochMs"),
                 deliveredAtEpochMs = json.getLong("deliveredAtEpochMs"),
+                enqueuedAtEpochMs =
+                    json.optLong("enqueuedAtEpochMs", System.currentTimeMillis()),
                 payloadJson = json.optString("payloadJson", "{}"),
             )
     }
@@ -217,6 +222,7 @@ internal object TriggerAlarmScheduler {
         val payload =
             argument<Map<String, Any?>>("payload")
                 ?.let(::JSONObject)
+                ?.minimizedPayloadJson()
                 ?.toString() ?: "{}"
 
         return ScheduledTrigger(
@@ -270,6 +276,44 @@ private fun String.toFlutterPayloadMap(): Map<String, Any?> {
     }
 
     return runCatching { JSONObject(this).toFlutterMap() }.getOrElse { emptyMap() }
+}
+
+private fun JSONObject.minimizedPayloadJson(): JSONObject {
+    val filtered = JSONObject()
+    val iterator = keys()
+    while (iterator.hasNext()) {
+        val key = iterator.next()
+        if (isSensitivePayloadKey(key)) {
+            continue
+        }
+        val normalized = normalizedValue(opt(key))
+        when (normalized) {
+            is String -> {
+                if (normalized.length <= 256) {
+                    filtered.put(key, normalized)
+                }
+            }
+            null,
+            is Boolean,
+            is Int,
+            is Long,
+            is Double -> filtered.put(key, normalized)
+        }
+    }
+    return filtered
+}
+
+private fun isSensitivePayloadKey(key: String): Boolean {
+    val lowered = key.lowercase()
+    return lowered.contains("token") ||
+        lowered.contains("secret") ||
+        lowered.contains("password") ||
+        lowered.contains("authorization") ||
+        lowered.contains("auth") ||
+        lowered.contains("header") ||
+        lowered.contains("bearer") ||
+        lowered.contains("api_key") ||
+        lowered.contains("api-key")
 }
 
 private fun JSONObject.toFlutterMap(): Map<String, Any?> {

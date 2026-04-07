@@ -7,12 +7,14 @@ import 'package:openreef/ui/app_shell.dart';
 import 'package:openreef/ui/app_theme.dart';
 import 'package:openreef/ui/chat_session_port.dart';
 import 'package:openreef/ui/screens/model_download_screen.dart';
+import 'package:openreef/voice/wake_word_controller.dart';
 import 'package:openreef/mcp/mcp_connections_controller.dart';
 
 class OpenReefApp extends StatelessWidget {
   const OpenReefApp({
     required this.settingsController,
     required this.chatSession,
+    this.wakeWordController,
     required this.modelDownloadController,
     required this.skillRegistryController,
     required this.mcpConnectionsController,
@@ -24,6 +26,7 @@ class OpenReefApp extends StatelessWidget {
 
   final SettingsController settingsController;
   final ChatSessionPort chatSession;
+  final WakeWordController? wakeWordController;
   final ModelDownloadController modelDownloadController;
   final SkillRegistryController skillRegistryController;
   final McpConnectionsController mcpConnectionsController;
@@ -46,6 +49,7 @@ class OpenReefApp extends StatelessWidget {
               ? AppShell(
                   settingsController: settingsController,
                   chatSession: chatSession,
+                  wakeWordController: wakeWordController,
                   modelDownloadController: modelDownloadController,
                   skillRegistryController: skillRegistryController,
                   mcpConnectionsController: mcpConnectionsController,

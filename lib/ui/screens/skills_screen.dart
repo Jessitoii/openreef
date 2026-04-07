@@ -91,7 +91,7 @@ class _SkillsHeader extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              'Loaded skills are injected into the agent memory graph on demand.',
+              'Lists discovered SKILL.md files from Documents/skills. Runtime injection is not active in the current bootstrap path.',
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
                 height: 1.5,
@@ -103,7 +103,7 @@ class _SkillsHeader extends StatelessWidget {
               runSpacing: 10,
               children: [
                 _StatChip(
-                  label: '$skillCount active',
+                  label: '$skillCount discovered',
                   accent: ReefPalette.coral,
                 ),
                 _StatChip(
@@ -169,7 +169,7 @@ class _SkillCard extends StatelessWidget {
                     ),
                   ),
                   child: Text(
-                    'ready',
+                    'file loaded',
                     style: theme.textTheme.labelSmall?.copyWith(
                       color: ReefPalette.darkSuccess,
                     ),
