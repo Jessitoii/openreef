@@ -16,8 +16,9 @@ internal data class ScheduledTrigger(
     val triggerId: String,
     val name: String,
     val type: String,
-    val hour: Int,
-    val minute: Int,
+    val hour: Int?,
+    val minute: Int?,
+    val cronExpression: String?,
     val payloadJson: String,
 )
 
@@ -69,6 +70,7 @@ internal object TriggerAlarmScheduler {
     const val extraTriggerType = "trigger_type"
     const val extraHour = "trigger_hour"
     const val extraMinute = "trigger_minute"
+    const val extraCronExpression = "trigger_cron_expression"
     const val extraScheduledAt = "scheduled_at_epoch_ms"
     const val extraPayloadJson = "payload_json"
 
@@ -156,7 +158,14 @@ internal object TriggerAlarmScheduler {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager
             ?: throw IllegalStateException("AlarmManager unavailable")
 
-        val scheduledAt = nextDailyOccurrence(trigger.hour, trigger.minute, nowEpochMs)
+        val scheduledAt =
+            when {
+                !trigger.cronExpression.isNullOrBlank() ->
+                    nextCronOccurrence(trigger.cronExpression, nowEpochMs)
+                trigger.hour != null && trigger.minute != null ->
+                    nextDailyOccurrence(trigger.hour, trigger.minute, nowEpochMs)
+                else -> throw IllegalArgumentException("Trigger is missing schedule fields")
+            }
         val pendingIntent =
             PendingIntent.getBroadcast(
                 context,
@@ -168,6 +177,7 @@ internal object TriggerAlarmScheduler {
                     type = trigger.type,
                     hour = trigger.hour,
                     minute = trigger.minute,
+                    cronExpression = trigger.cronExpression,
                     scheduledAtEpochMs = scheduledAt,
                     payloadJson = trigger.payloadJson,
                 ),
@@ -188,8 +198,9 @@ internal object TriggerAlarmScheduler {
             triggerId = triggerId,
             name = intent.getStringExtra(extraTriggerName) ?: triggerId,
             type = intent.getStringExtra(extraTriggerType) ?: "schedule",
-            hour = intent.getIntExtra(extraHour, -1),
-            minute = intent.getIntExtra(extraMinute, -1),
+            hour = intent.takeIf { it.hasExtra(extraHour) }?.getIntExtra(extraHour, -1),
+            minute = intent.takeIf { it.hasExtra(extraMinute) }?.getIntExtra(extraMinute, -1),
+            cronExpression = intent.getStringExtra(extraCronExpression),
             payloadJson = intent.getStringExtra(extraPayloadJson) ?: "{}",
         )
     }
@@ -215,10 +226,45 @@ internal object TriggerAlarmScheduler {
         return candidate.toInstant().toEpochMilli()
     }
 
+    fun nextCronOccurrence(
+        expression: String,
+        nowEpochMs: Long = System.currentTimeMillis(),
+    ): Long {
+        val fields = expression.trim().split(Regex("\\s+"))
+        require(fields.size == 5) { "Invalid cron expression" }
+        require(fields[2] == "*") { "Unsupported cron day-of-month field" }
+        require(fields[3] == "*") { "Unsupported cron month field" }
+
+        val minuteField = CronField.parse(fields[0], 0, 59)
+        val hourField = CronField.parse(fields[1], 0, 23)
+        val dayOfWeekField = CronField.parse(fields[4], 0, 6)
+
+        var candidate =
+            ZonedDateTime.ofInstant(
+                Instant.ofEpochMilli(nowEpochMs),
+                ZoneId.systemDefault(),
+            ).plusMinutes(1).withSecond(0).withNano(0)
+        repeat(366 * 24 * 60) {
+            val normalizedDayOfWeek = candidate.dayOfWeek.value % 7
+            if (minuteField.matches(candidate.minute) &&
+                hourField.matches(candidate.hour) &&
+                dayOfWeekField.matches(normalizedDayOfWeek)
+            ) {
+                return candidate.toInstant().toEpochMilli()
+            }
+            candidate = candidate.plusMinutes(1)
+        }
+        throw IllegalStateException("Unable to resolve next cron occurrence")
+    }
+
     private fun MethodCall.toScheduledTrigger(): ScheduledTrigger? {
         val triggerId = argument<String>("triggerId") ?: return null
-        val hour = argument<Int>("hour") ?: return null
-        val minute = argument<Int>("minute") ?: return null
+        val cronExpression = argument<String>("cronExpression")
+        val hour = argument<Int>("hour")
+        val minute = argument<Int>("minute")
+        if (cronExpression.isNullOrBlank() && (hour == null || minute == null)) {
+            return null
+        }
         val payload =
             argument<Map<String, Any?>>("payload")
                 ?.let(::JSONObject)
@@ -231,6 +277,7 @@ internal object TriggerAlarmScheduler {
             type = argument<String>("type") ?: "schedule",
             hour = hour,
             minute = minute,
+            cronExpression = cronExpression,
             payloadJson = payload,
         )
     }
@@ -242,6 +289,7 @@ internal object TriggerAlarmScheduler {
         type: String? = null,
         hour: Int? = null,
         minute: Int? = null,
+        cronExpression: String? = null,
         scheduledAtEpochMs: Long? = null,
         payloadJson: String? = null,
     ): Intent =
@@ -256,6 +304,9 @@ internal object TriggerAlarmScheduler {
             if (minute != null) {
                 putExtra(extraMinute, minute)
             }
+            if (cronExpression != null) {
+                putExtra(extraCronExpression, cronExpression)
+            }
             if (scheduledAtEpochMs != null) {
                 putExtra(extraScheduledAt, scheduledAtEpochMs)
             }
@@ -268,6 +319,67 @@ internal object TriggerAlarmScheduler {
         } else {
             0
         }
+}
+
+private class CronField private constructor(
+    private val matcher: (Int) -> Boolean,
+) {
+    fun matches(value: Int): Boolean = matcher(value)
+
+    companion object {
+        fun parse(
+            raw: String,
+            minimum: Int,
+            maximum: Int,
+        ): CronField {
+            val segments = raw.split(",")
+            require(segments.none { it.isBlank() }) { "Invalid cron segment" }
+            val predicates =
+                segments.map { segment ->
+                    parseSegment(segment.trim(), minimum, maximum)
+                }
+            return CronField { value -> predicates.any { predicate -> predicate(value) } }
+        }
+
+        private fun parseSegment(
+            segment: String,
+            minimum: Int,
+            maximum: Int,
+        ): (Int) -> Boolean {
+            if (segment == "*") {
+                return { true }
+            }
+
+            val stepParts = segment.split("/")
+            require(stepParts.size <= 2 && stepParts[0].isNotEmpty()) { "Invalid cron step" }
+            val step =
+                if (stepParts.size == 2) {
+                    stepParts[1].toInt().also { require(it > 0) }
+                } else {
+                    1
+                }
+            val base = stepParts[0]
+
+            if (base == "*") {
+                return { value -> (value - minimum) % step == 0 }
+            }
+
+            val rangeParts = base.split("-")
+            if (rangeParts.size == 1) {
+                val match = rangeParts[0].toInt()
+                require(match in minimum..maximum) { "Invalid cron value" }
+                return { value -> value == match }
+            } else {
+                require(rangeParts.size == 2) { "Invalid cron range" }
+                val start = rangeParts[0].toInt()
+                val end = rangeParts[1].toInt()
+                require(start in minimum..maximum && end in minimum..maximum && start <= end) {
+                    "Invalid cron range"
+                }
+                return { value -> value in start..end && (value - start) % step == 0 }
+            }
+        }
+    }
 }
 
 private fun String.toFlutterPayloadMap(): Map<String, Any?> {

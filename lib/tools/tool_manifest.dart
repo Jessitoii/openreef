@@ -1,3 +1,5 @@
+import 'package:openreef/tools/native_tool_errors.dart';
+
 enum ToolArgumentType { string, integer, doubleValue, boolean }
 
 class ToolArgumentSpec {
@@ -78,12 +80,45 @@ class NativeToolContext {
 
 class NativeToolExecutionResult {
   const NativeToolExecutionResult({
+    this.status = NativeToolExecutionStatus.success,
     required this.content,
     this.metadata = const <String, Object?>{},
-  });
+    this.error,
+  }) : assert(
+         status != NativeToolExecutionStatus.failure || error != null,
+         'Failure results require an error payload.',
+       );
 
+  NativeToolExecutionResult.success({
+    required String content,
+    Map<String, Object?> metadata = const <String, Object?>{},
+  }) : this(
+         status: NativeToolExecutionStatus.success,
+         content: content,
+         metadata: metadata,
+       );
+
+  NativeToolExecutionResult.failure({
+    required NativeToolError error,
+    Map<String, Object?> metadata = const <String, Object?>{},
+  }) : this(
+         status: NativeToolExecutionStatus.failure,
+         content: error.message,
+         metadata: metadata,
+         error: error,
+       );
+
+  final NativeToolExecutionStatus status;
   final String content;
   final Map<String, Object?> metadata;
+  final NativeToolError? error;
+
+  bool get isFailure => status == NativeToolExecutionStatus.failure;
+}
+
+enum NativeToolExecutionStatus {
+  success,
+  failure,
 }
 
 abstract class NativeToolHandler {

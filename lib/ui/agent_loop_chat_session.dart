@@ -2,9 +2,10 @@ import 'dart:async';
 import 'dart:collection';
 
 import 'package:flutter/foundation.dart';
-import 'package:openreef/agent/agent_loop.dart';
+import 'package:openreef/agent/agent_task_executor.dart';
 import 'package:openreef/agent/mailbox.dart';
 import 'package:openreef/agent/agent_models.dart';
+import 'package:openreef/agent/execution_request.dart';
 import 'package:openreef/ui/chat_session_port.dart';
 
 class MainAgentApprovalController extends ChangeNotifier {
@@ -139,14 +140,19 @@ class _PendingApprovalEntry {
 }
 
 class AgentLoopChatSession extends ChangeNotifier
-    implements ChatSessionPort, ChatSessionFactory, ApprovalCapableChatSession {
+    implements
+        ChatSessionPort,
+        ChatSessionFactory,
+        ApprovalCapableChatSession,
+        ChatExecutionSink,
+        SystemAssistantInjectableChatSession {
   AgentLoopChatSession({
-    required AgentLoop agentLoop,
+    required AgentTaskExecutor taskExecutor,
     MainAgentApprovalController? approvalController,
     this.sessionKey = 'agent:main',
     List<ChatTranscriptMessage> initialMessages =
         const <ChatTranscriptMessage>[],
-  }) : _agentLoop = agentLoop,
+  }) : _taskExecutor = taskExecutor,
        _approvalController = approvalController,
        _messages = initialMessages.isEmpty
            ? <ChatTranscriptMessage>[
@@ -164,7 +170,7 @@ class AgentLoopChatSession extends ChangeNotifier
     _nextId = _deriveNextId(_messages);
   }
 
-  final AgentLoop _agentLoop;
+  final AgentTaskExecutor _taskExecutor;
   final MainAgentApprovalController? _approvalController;
   final String sessionKey;
   final List<ChatTranscriptMessage> _messages;
@@ -233,24 +239,34 @@ class AgentLoopChatSession extends ChangeNotifier
     );
 
     try {
-      final result = await _agentLoop.run(
-        trimmed,
-        sessionKey: sessionKey,
-        conversationHistory: List<AgentMessage>.unmodifiable(
-          _conversationHistory,
+      final result = await _taskExecutor.execute(
+        ExecutionRequest.fromUserMessage(
+          sessionKey: sessionKey,
+          prompt: trimmed,
+          metadata: <String, dynamic>{
+            'conversationHistory': _conversationHistory
+                .map(
+                  (message) => <String, Object?>{
+                    'role': message.role.name,
+                    'content': message.content,
+                    'turnNumber': message.turnNumber,
+                  },
+                )
+                .toList(growable: false),
+          },
         ),
       );
 
       final responseText = _normalizeResponse(result);
-      final responseSender = _responseSenderForText(responseText);
-      _conversationHistory.add(
-        AgentMessage(
-          role: AgentMessageRole.assistant,
-          content: responseText,
-          turnNumber: userTurnNumber,
-        ),
-      );
-      _appendMessage(responseSender, responseText);
+      if (_shouldTrackAssistantTurn(result)) {
+        _conversationHistory.add(
+          AgentMessage(
+            role: AgentMessageRole.assistant,
+            content: responseText,
+            turnNumber: userTurnNumber,
+          ),
+        );
+      }
 
       _setActivities(<SubAgentActivity>[
         SubAgentActivity(
@@ -310,10 +326,12 @@ class AgentLoopChatSession extends ChangeNotifier
     }
     if (result.sessionResult == SessionResult.failed) {
       return switch (result.reason) {
+        'session_busy' => 'Another execution is already running for this session.',
         'compaction_failure' =>
           'The agent turn failed while compacting context.',
         'generation_failure' =>
           'The agent turn failed during model generation.',
+        'executor_failure' => 'The agent turn failed before execution completed.',
         _ => 'The agent turn failed before completion.',
       };
     }
@@ -335,10 +353,18 @@ class AgentLoopChatSession extends ChangeNotifier
       return 'Generation paused to protect the device from low-memory crashes.';
     }
     return switch (result.sessionResult) {
-      SessionResult.completed => 'Agent loop completed successfully.',
-      SessionResult.frozen => 'Agent loop entered a protected frozen state.',
-      SessionResult.failed => 'Agent loop ended with a runtime failure.',
+      SessionResult.completed =>
+        'Agent loop completed successfully.',
+      SessionResult.frozen =>
+        'Agent loop entered a protected frozen state.',
+      SessionResult.failed =>
+        'Agent loop ended with a runtime failure.',
     };
+  }
+
+  bool _shouldTrackAssistantTurn(AgentLoopResult result) {
+    return result.sessionResult != SessionResult.completed ||
+        result.text.trim().isNotEmpty;
   }
 
   bool _isProtectivePauseMessage(String text) {
@@ -400,13 +426,34 @@ class AgentLoopChatSession extends ChangeNotifier
   }
 
   @override
+  void injectSystemAssistantEntry(String text) {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) {
+      return;
+    }
+    _appendMessage(ChatMessageSender.assistant, trimmed);
+  }
+
+  @override
+  Future<void> appendExecutionResult(
+    ExecutionRequest request,
+    AgentLoopResult result,
+  ) async {
+    final responseText = _normalizeResponse(result);
+    if (responseText.trim().isEmpty) {
+      return;
+    }
+    _appendMessage(_responseSenderForText(responseText), responseText);
+  }
+
+  @override
   ChatSessionPort createSession({
     required String sessionId,
     List<ChatTranscriptMessage> initialMessages =
         const <ChatTranscriptMessage>[],
   }) {
     return AgentLoopChatSession(
-      agentLoop: _agentLoop,
+      taskExecutor: _taskExecutor,
       approvalController: _approvalController,
       sessionKey: sessionId,
       initialMessages: initialMessages,

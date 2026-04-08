@@ -5,11 +5,16 @@ import 'package:openreef/skills/skill_frontmatter_parser.dart';
 void main() {
   const parser = SkillFrontmatterParser();
 
-  test('reads valid frontmatter and extracts tools_required', () {
+  test('reads valid frontmatter and extracts runtime metadata', () {
     const markdown = '''---
+name: Sleep Tracker
+description: Track daily sleep reminders.
 tools_required:
   - alarm_set
   - memory_search
+trigger_patterns:
+  - Sleep Reminder
+  -  bedtime check
 ---
 # Sleep Tracker
 > Tracks daily sleep schedule.
@@ -17,7 +22,13 @@ tools_required:
 
     final parsed = parser.parse(markdown);
 
+    expect(parsed.manifest.name, 'Sleep Tracker');
+    expect(parsed.manifest.description, 'Track daily sleep reminders.');
     expect(parsed.manifest.toolsRequired, <String>['alarm_set', 'memory_search']);
+    expect(
+      parsed.manifest.triggerPatterns,
+      <String>['sleep reminder', 'bedtime check'],
+    );
   });
 
   test('preserves markdown body after frontmatter', () {
@@ -81,6 +92,28 @@ tools_required:
           (error) => error.message,
           'message',
           'invalid_tools_required',
+        ),
+      ),
+    );
+  });
+
+  test('rejects trigger_patterns values that are not a list of strings', () {
+    const markdown = '''---
+tools_required: [notify]
+trigger_patterns:
+  - ok
+  - 7
+---
+# Reminder
+''';
+
+    expect(
+      () => parser.parse(markdown),
+      throwsA(
+        isA<SkillParseException>().having(
+          (error) => error.message,
+          'message',
+          'invalid_trigger_patterns',
         ),
       ),
     );

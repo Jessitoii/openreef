@@ -24,6 +24,7 @@ class ToolManifestBridge {
     return ToolDefinition(
       id: manifest.id,
       embedding: embedding,
+      description: manifest.description,
       enabled: manifest.enabled,
       requiresConfirmation: manifest.requiresConfirmation,
       execute: (ToolCall call) async {
@@ -31,6 +32,20 @@ class ToolManifestBridge {
           ToolInvocation(toolId: call.toolId, arguments: call.arguments),
           context: context,
         );
+        if (result.isFailure) {
+          final error = result.error!;
+          return ToolResult.failure(
+            result.content,
+            metadata: <String, Object?>{
+              'toolId': manifest.id,
+              'category': manifest.category,
+              'errorCode': error.wireCode,
+              'errorMessage': error.message,
+              ...error.details,
+              ...result.metadata,
+            },
+          );
+        }
         return ToolResult.success(result.content, metadata: result.metadata);
       },
     );

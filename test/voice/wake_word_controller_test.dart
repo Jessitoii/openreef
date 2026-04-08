@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:openreef/settings/settings_controller.dart';
+import 'package:openreef/settings/settings_store.dart';
 import 'package:openreef/voice/wake_word_controller.dart';
 
 const OptionalMethodChannel _wakeWordMethodChannel = OptionalMethodChannel(
@@ -23,7 +25,9 @@ void main() {
   });
 
   test('controller starts, stops, and refreshes listening state', () async {
-    final settingsController = SettingsController();
+    final settingsController = SettingsController(
+      store: SettingsStore(File('${Directory.systemTemp.path}/wake_settings_1.json')),
+    );
     var listening = false;
 
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -67,7 +71,9 @@ void main() {
   test(
     'controller emits detection events from the event channel stream',
     () async {
-      final settingsController = SettingsController();
+      final settingsController = SettingsController(
+        store: SettingsStore(File('${Directory.systemTemp.path}/wake_settings_2.json')),
+      );
       final platformEvents = StreamController<dynamic>.broadcast();
       final controller = WakeWordController(
         settingsController: settingsController,
@@ -91,7 +97,9 @@ void main() {
   test(
     'controller syncs listening state from wake-word setting changes',
     () async {
-      final settingsController = SettingsController();
+      final settingsController = SettingsController(
+        store: SettingsStore(File('${Directory.systemTemp.path}/wake_settings_3.json')),
+      );
       var startCalls = 0;
       var stopCalls = 0;
 
@@ -142,7 +150,9 @@ void main() {
   test(
     'controller reports unavailable wake runtime when native key is missing',
     () async {
-      final settingsController = SettingsController();
+      final settingsController = SettingsController(
+        store: SettingsStore(File('${Directory.systemTemp.path}/wake_settings_4.json')),
+      );
 
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(_wakeWordMethodChannel, (call) async {

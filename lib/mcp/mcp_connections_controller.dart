@@ -6,6 +6,7 @@ import 'package:openreef/mcp/mcp_connection_store.dart';
 import 'package:openreef/mcp/mcp_endpoint_policy.dart';
 import 'package:openreef/mcp/mcp_models.dart';
 import 'package:openreef/mcp/mcp_persisted_endpoint.dart';
+import 'package:openreef/mcp/mcp_runtime_coordinator.dart';
 import 'package:openreef/mcp/mcp_sse_transport.dart';
 import 'package:openreef/mcp/mcp_transport.dart';
 
@@ -24,6 +25,8 @@ class McpConnectionState {
     this.endpointId,
     this.trusted = false,
     this.requiresManualSecretEntry = false,
+    this.runtimeSourceId,
+    this.importedToolIds = const <String>[],
   });
 
   final String url;
@@ -35,6 +38,13 @@ class McpConnectionState {
   final String? endpointId;
   final bool trusted;
   final bool requiresManualSecretEntry;
+  final String? runtimeSourceId;
+  final List<String> importedToolIds;
+
+  bool get saved => persisted;
+  bool get connected => status == McpConnectionStatus.connected;
+  int get importedToolCount => importedToolIds.length;
+  bool get toolsImportedIntoRuntime => importedToolCount > 0;
 
   McpConnectionState copyWith({
     McpConnectionStatus? status,
@@ -45,6 +55,8 @@ class McpConnectionState {
     String? endpointId,
     bool? trusted,
     bool? requiresManualSecretEntry,
+    String? runtimeSourceId,
+    List<String>? importedToolIds,
   }) {
     return McpConnectionState(
       url: url,
@@ -57,6 +69,8 @@ class McpConnectionState {
       trusted: trusted ?? this.trusted,
       requiresManualSecretEntry:
           requiresManualSecretEntry ?? this.requiresManualSecretEntry,
+      runtimeSourceId: runtimeSourceId ?? this.runtimeSourceId,
+      importedToolIds: importedToolIds ?? this.importedToolIds,
     );
   }
 }
@@ -64,6 +78,7 @@ class McpConnectionState {
 class McpConnectionsController {
   McpConnectionsController({
     required McpConnectionStore store,
+    required McpRuntimeCoordinator runtimeCoordinator,
     McpClientInfo clientInfo = const McpClientInfo(
       name: 'OpenReef',
       version: '1.0.0+1',
@@ -71,6 +86,7 @@ class McpConnectionsController {
     bool autoConnectPersisted = true,
     McpTransportFactory? transportFactory,
   }) : _store = store,
+       _runtimeCoordinator = runtimeCoordinator,
        _clientInfo = clientInfo,
        _autoConnectPersisted = autoConnectPersisted,
        _transportFactory =
@@ -78,6 +94,7 @@ class McpConnectionsController {
            ((endpoint) => McpSseTransport(sseEndpoint: endpoint));
 
   final McpConnectionStore _store;
+  final McpRuntimeCoordinator _runtimeCoordinator;
   final McpClientInfo _clientInfo;
   final bool _autoConnectPersisted;
   final McpTransportFactory _transportFactory;
@@ -87,7 +104,9 @@ class McpConnectionsController {
       <String, _McpConnectionSession>{};
   final Map<String, McpPersistedEndpoint> _persistedEndpoints =
       <String, McpPersistedEndpoint>{};
+  final Map<String, String> _liveSourceIdsByRuntimeUrl = <String, String>{};
   bool _initialized = false;
+  int _liveSourceCounter = 0;
 
   ValueListenable<List<McpConnectionState>> get connections => _connections;
 
@@ -114,6 +133,10 @@ class McpConnectionsController {
           endpointId: endpoint.id,
           trusted: endpoint.trusted,
           requiresManualSecretEntry: endpoint.requiresManualSecretEntry,
+          runtimeSourceId: endpoint.id,
+          importedToolIds: _runtimeCoordinator.importedToolIdsForSource(
+            endpoint.id,
+          ),
         ),
       );
     }
@@ -169,6 +192,7 @@ class McpConnectionsController {
       return;
     }
     if (endpoint.requiresManualSecretEntry) {
+      _runtimeCoordinator.removeSource(endpoint.id);
       _upsertState(
         McpConnectionState(
           url: endpoint.displayUri,
@@ -178,6 +202,8 @@ class McpConnectionsController {
           endpointId: endpoint.id,
           trusted: endpoint.trusted,
           requiresManualSecretEntry: true,
+          runtimeSourceId: endpoint.id,
+          importedToolIds: const <String>[],
         ),
       );
       return;
@@ -185,6 +211,7 @@ class McpConnectionsController {
 
     final runtimeUrl = await _store.resolveRuntimeUrl(endpoint);
     if (runtimeUrl == null || runtimeUrl.trim().isEmpty) {
+      _runtimeCoordinator.removeSource(endpoint.id);
       _upsertState(
         McpConnectionState(
           url: endpoint.displayUri,
@@ -194,6 +221,8 @@ class McpConnectionsController {
           endpointId: endpoint.id,
           trusted: endpoint.trusted,
           requiresManualSecretEntry: endpoint.requiresManualSecretEntry,
+          runtimeSourceId: endpoint.id,
+          importedToolIds: const <String>[],
         ),
       );
       return;
@@ -213,7 +242,16 @@ class McpConnectionsController {
     final current = _findState(url);
     final sessionKey = _sessionKeyForState(current, fallbackUrl: url);
     final session = _sessions.remove(sessionKey);
-    await session?.client.close();
+    _runtimeCoordinator.removeSource(sessionKey);
+    final liveRuntimeUrl = session?.runtimeUrl;
+    if (liveRuntimeUrl != null) {
+      _liveSourceIdsByRuntimeUrl.remove(liveRuntimeUrl);
+    }
+    if (session != null) {
+      session.isActive = false;
+      await session.messageSubscription?.cancel();
+      await session.client.close();
+    }
 
     if (removePersistence && current?.endpointId != null) {
       await forgetPersisted(current!.endpointId!);
@@ -228,6 +266,8 @@ class McpConnectionsController {
         endpointId: current?.endpointId,
         trusted: current?.trusted ?? false,
         requiresManualSecretEntry: current?.requiresManualSecretEntry ?? false,
+        runtimeSourceId: current?.runtimeSourceId,
+        importedToolIds: const <String>[],
       ),
     );
   }
@@ -238,7 +278,16 @@ class McpConnectionsController {
       return;
     }
     final session = _sessions.remove(endpointId);
-    await session?.client.close();
+    _runtimeCoordinator.removeSource(endpointId);
+    final liveRuntimeUrl = session?.runtimeUrl;
+    if (liveRuntimeUrl != null) {
+      _liveSourceIdsByRuntimeUrl.remove(liveRuntimeUrl);
+    }
+    if (session != null) {
+      session.isActive = false;
+      await session.messageSubscription?.cancel();
+      await session.client.close();
+    }
     await _store.deleteById(endpointId);
     final updated = _connections.value
         .where((state) => state.endpointId != endpointId)
@@ -255,6 +304,10 @@ class McpConnectionsController {
     }
     try {
       final tools = await session.client.listTools();
+      final imported = await _replaceImportedTools(
+        session,
+        tools: tools,
+      );
       final existing = _findState(url);
       _upsertState(
         (existing ??
@@ -262,9 +315,14 @@ class McpConnectionsController {
                   url: url.trim(),
                   status: McpConnectionStatus.connected,
                 ))
-            .copyWith(tools: tools, errorMessage: null),
+            .copyWith(
+              tools: tools,
+              errorMessage: null,
+              importedToolIds: imported.importedToolIds,
+            ),
       );
     } catch (error) {
+      _runtimeCoordinator.removeSource(sessionKey);
       _upsertState(
         McpConnectionState(
           url: current?.url ?? url.trim(),
@@ -275,6 +333,8 @@ class McpConnectionsController {
           trusted: current?.trusted ?? false,
           requiresManualSecretEntry:
               current?.requiresManualSecretEntry ?? false,
+          runtimeSourceId: current?.runtimeSourceId,
+          importedToolIds: const <String>[],
         ),
       );
     }
@@ -288,8 +348,11 @@ class McpConnectionsController {
     required bool requiresManualSecretEntry,
     McpPersistedEndpoint? persistedEndpoint,
   }) async {
-    final sessionKey = persistedEndpoint?.id ?? runtimeUrl;
-    if (_sessions.containsKey(sessionKey)) {
+    final provisionalSourceId =
+        persistedEndpoint?.id ??
+        _liveSourceIdsByRuntimeUrl[runtimeUrl] ??
+        _nextLiveSourceId();
+    if (_sessions.containsKey(provisionalSourceId)) {
       return;
     }
 
@@ -301,12 +364,15 @@ class McpConnectionsController {
         endpointId: persistedEndpoint?.id,
         trusted: persistedEndpoint?.trusted ?? trusted,
         requiresManualSecretEntry: requiresManualSecretEntry,
+        runtimeSourceId: provisionalSourceId,
+        importedToolIds: const <String>[],
       ),
     );
 
     final transport = _transportFactory(Uri.parse(runtimeUrl));
     final session = _McpConnectionSession(
-      sessionKey: sessionKey,
+      sourceId: provisionalSourceId,
+      runtimeUrl: runtimeUrl,
       transport: transport,
     );
     try {
@@ -323,7 +389,26 @@ class McpConnectionsController {
         _persistedEndpoints[endpoint.id] = endpoint;
       }
 
-      _sessions[endpoint?.id ?? sessionKey] = session;
+      final sourceId = endpoint?.id ?? provisionalSourceId;
+      session
+        ..sourceId = sourceId
+        ..persistedEndpoint = endpoint
+        ..trusted = endpoint?.trusted ?? trusted
+        ..requiresManualSecretEntry =
+            endpoint?.requiresManualSecretEntry ?? requiresManualSecretEntry;
+      session.messageSubscription = transport.messages.listen((message) {
+        final runtimeEvent = _runtimeEventFromMessage(sourceId, message);
+        if (runtimeEvent != null) {
+          _runtimeCoordinator.emitSourceEvent(runtimeEvent);
+        }
+      });
+      _sessions[sourceId] = session;
+      if (endpoint == null) {
+        _liveSourceIdsByRuntimeUrl[runtimeUrl] = sourceId;
+      } else {
+        _liveSourceIdsByRuntimeUrl.remove(runtimeUrl);
+      }
+      final imported = await _replaceImportedTools(session, tools: tools);
       _upsertState(
         McpConnectionState(
           url: endpoint?.displayUri ?? displayUrl,
@@ -335,9 +420,14 @@ class McpConnectionsController {
           trusted: endpoint?.trusted ?? false,
           requiresManualSecretEntry:
               endpoint?.requiresManualSecretEntry ?? requiresManualSecretEntry,
+          runtimeSourceId: sourceId,
+          importedToolIds: imported.importedToolIds,
         ),
       );
     } catch (error) {
+      _runtimeCoordinator.removeSource(provisionalSourceId);
+      session.isActive = false;
+      await session.messageSubscription?.cancel();
       await session.client.close();
       _upsertState(
         McpConnectionState(
@@ -350,6 +440,8 @@ class McpConnectionsController {
           requiresManualSecretEntry:
               persistedEndpoint?.requiresManualSecretEntry ??
               requiresManualSecretEntry,
+          runtimeSourceId: provisionalSourceId,
+          importedToolIds: const <String>[],
         ),
       );
     }
@@ -368,7 +460,63 @@ class McpConnectionsController {
     McpConnectionState? state, {
     required String fallbackUrl,
   }) {
-    return state?.endpointId ?? fallbackUrl.trim();
+    return state?.runtimeSourceId ?? state?.endpointId ?? fallbackUrl.trim();
+  }
+
+  Future<McpImportedToolSnapshot> _replaceImportedTools(
+    _McpConnectionSession session, {
+    required List<McpTool> tools,
+  }) {
+    return _runtimeCoordinator.replaceSourceTools(
+      binding: McpRuntimeSourceBinding(
+        sourceId: session.sourceId,
+        client: session.client,
+        isActive: () => session.isActive,
+        requiresTrust: session.persistedEndpoint != null,
+        trusted: session.trusted,
+        requiresManualSecretEntry: session.requiresManualSecretEntry,
+        hasRequiredSecretMaterial: () => session.hasRequiredSecretMaterial(
+          _store,
+        ),
+      ),
+      discoveredTools: tools,
+    );
+  }
+
+  String _nextLiveSourceId() {
+    _liveSourceCounter += 1;
+    return 'live-$_liveSourceCounter';
+  }
+
+  McpRuntimeEvent? _runtimeEventFromMessage(
+    String sourceId,
+    McpTransportMessage message,
+  ) {
+    if (message.event == 'endpoint') {
+      return null;
+    }
+    final json = message.jsonRpcMessage;
+    final rawMethod = json?['method'];
+    final method = rawMethod is String ? rawMethod.trim() : '';
+    final payload = <String, Object?>{
+      if (message.data.trim().isNotEmpty) 'rawData': message.data.trim(),
+      if (method.isNotEmpty) 'method': method,
+    };
+    final params = json?['params'];
+    if (params is Map) {
+      payload['params'] = Map<String, Object?>.from(params);
+    }
+    final eventName = method.isNotEmpty ? method : message.event;
+    if (eventName.isEmpty) {
+      return null;
+    }
+    return McpRuntimeEvent(
+      sourceId: sourceId,
+      eventName: eventName,
+      payload: payload,
+      receivedAt: DateTime.now().toUtc(),
+      transportEvent: message.event,
+    );
   }
 
   void _upsertState(McpConnectionState state) {
@@ -409,10 +557,28 @@ class McpConnectionsController {
 }
 
 class _McpConnectionSession {
-  _McpConnectionSession({required this.sessionKey, required this.transport})
-    : client = McpClient(transport);
+  _McpConnectionSession({
+    required this.sourceId,
+    required this.runtimeUrl,
+    required this.transport,
+  }) : client = McpClient(transport);
 
-  final String sessionKey;
+  String sourceId;
+  final String runtimeUrl;
   final McpTransport transport;
   final McpClient client;
+  McpPersistedEndpoint? persistedEndpoint;
+  bool trusted = false;
+  bool requiresManualSecretEntry = false;
+  bool isActive = true;
+  StreamSubscription<McpTransportMessage>? messageSubscription;
+
+  Future<bool> hasRequiredSecretMaterial(McpConnectionStore store) async {
+    final endpoint = persistedEndpoint;
+    if (endpoint == null || !endpoint.requiresSecret) {
+      return true;
+    }
+    final runtimeUrl = await store.resolveRuntimeUrl(endpoint);
+    return runtimeUrl != null && runtimeUrl.trim().isNotEmpty;
+  }
 }

@@ -43,17 +43,28 @@ class TokenBudget {
 class SkillDefinition {
   const SkillDefinition({
     required this.id,
+    required this.displayName,
     required this.content,
+    required this.toolsRequired,
     this.triggerPatterns = const <String>[],
+    this.runtimeEligible = true,
   });
 
   final String id;
+  final String displayName;
   final String content;
+  final List<String> toolsRequired;
   final List<String> triggerPatterns;
+  final bool runtimeEligible;
 }
 
 abstract class SkillCatalog {
   List<SkillDefinition> listSkills();
+
+  void recordTurnState({
+    required List<String> matchedSkillIds,
+    required List<String> activeSkillIds,
+  }) {}
 }
 
 class InMemorySkillCatalog implements SkillCatalog {
@@ -62,7 +73,14 @@ class InMemorySkillCatalog implements SkillCatalog {
   final List<SkillDefinition> _skills;
 
   @override
-  List<SkillDefinition> listSkills() => List<SkillDefinition>.unmodifiable(_skills);
+  List<SkillDefinition> listSkills() =>
+      List<SkillDefinition>.unmodifiable(_skills);
+
+  @override
+  void recordTurnState({
+    required List<String> matchedSkillIds,
+    required List<String> activeSkillIds,
+  }) {}
 }
 
 abstract class IntentEmbedder {
@@ -390,8 +408,10 @@ class ContextAssembler {
     }
 
     addToolById('session_status');
+    addToolById('memory_save');
     addToolById('memory_search');
     addToolById('notify');
+    addToolById('settings_read');
 
     for (final entry in scored) {
       if (selected.length >= _toolLimit) {
@@ -403,8 +423,15 @@ class ContextAssembler {
     }
 
     if (intentSignal.primary == 'calendar') {
-      addToolById('calendar_read');
-      addToolById('calendar_write');
+      addToolById('trigger_create');
+      addToolById('trigger_list');
+      addToolById('alarm_set');
+      addToolById('cron_add');
+    }
+
+    if (intentSignal.primary == 'code') {
+      addToolById('file_read');
+      addToolById('file_write');
     }
 
     if (selected.any((tool) => tool.requiresConfirmation)) {
@@ -415,27 +442,42 @@ class ContextAssembler {
   }
 
   List<SkillDefinition> gateSkills(String userMessage) {
-    final lowered = userMessage.toLowerCase();
+    final normalizedTokens = _normalizeTokens(userMessage);
     final matched = <SkillDefinition>[];
+    final active = <SkillDefinition>[];
     for (final skill in _skillCatalog.listSkills()) {
+      if (!skill.runtimeEligible) {
+        continue;
+      }
       final hasMatch = skill.triggerPatterns.any(
-        (pattern) => lowered.contains(pattern.toLowerCase()),
+        (pattern) => _matchesPattern(
+          normalizedTokens,
+          _normalizeTokens(pattern),
+        ),
       );
       if (!hasMatch) {
         continue;
       }
-      matched.add(
+      matched.add(skill);
+      if (active.length >= _skillLimit) {
+        continue;
+      }
+      active.add(
         SkillDefinition(
           id: skill.id,
+          displayName: skill.displayName,
           content: _trimToTokens(skill.content, _skillTokenLimit),
+          toolsRequired: skill.toolsRequired,
           triggerPatterns: skill.triggerPatterns,
+          runtimeEligible: skill.runtimeEligible,
         ),
       );
-      if (matched.length >= _skillLimit) {
-        break;
-      }
     }
-    return matched;
+    _skillCatalog.recordTurnState(
+      matchedSkillIds: matched.map((skill) => skill.id).toList(growable: false),
+      activeSkillIds: active.map((skill) => skill.id).toList(growable: false),
+    );
+    return active;
   }
 
   TokenBudget estimateTokens(
@@ -490,8 +532,9 @@ class ContextAssembler {
   String _serializeTools(List<ToolDefinition> tools) {
     final buffer = StringBuffer('[AVAILABLE TOOLS]\n');
     for (final tool in tools) {
+      final suffix = tool.description.trim().isEmpty ? '' : ': ${tool.description.trim()}';
       buffer.writeln(
-        '- ${tool.id}${tool.requiresConfirmation ? ' (confirm)' : ''}',
+        '- ${tool.id}${tool.requiresConfirmation ? ' (confirm)' : ''}$suffix',
       );
     }
     buffer.write('[END TOOLS]');
@@ -501,11 +544,45 @@ class ContextAssembler {
   String _serializeSkills(List<SkillDefinition> skills) {
     final buffer = StringBuffer('[ACTIVE SKILLS]\n');
     for (final skill in skills) {
-      buffer.writeln('## ${skill.id}');
+      buffer.writeln('## ${skill.displayName}');
       buffer.writeln(skill.content);
     }
     buffer.write('[END SKILLS]');
     return buffer.toString();
+  }
+
+  static List<String> _normalizeTokens(String text) {
+    return text
+        .toLowerCase()
+        .split(RegExp(r'[^a-z0-9]+'))
+        .where((token) => token.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  static bool _matchesPattern(
+    List<String> userTokens,
+    List<String> patternTokens,
+  ) {
+    if (userTokens.isEmpty || patternTokens.isEmpty) {
+      return false;
+    }
+    if (patternTokens.length > userTokens.length) {
+      return false;
+    }
+
+    for (var start = 0; start <= userTokens.length - patternTokens.length; start++) {
+      var matched = true;
+      for (var offset = 0; offset < patternTokens.length; offset++) {
+        if (userTokens[start + offset] != patternTokens[offset]) {
+          matched = false;
+          break;
+        }
+      }
+      if (matched) {
+        return true;
+      }
+    }
+    return false;
   }
 
   static int _estimateMessagesTokens(List<AgentMessage> messages) {

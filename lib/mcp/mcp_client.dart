@@ -59,6 +59,24 @@ class McpClient {
         .toList(growable: false);
   }
 
+  Future<McpToolCallResult> callTool({
+    required String name,
+    Map<String, Object?> arguments = const <String, Object?>{},
+  }) async {
+    if (!_initialized) {
+      throw const McpProtocolException('client_not_initialized');
+    }
+
+    final response = await _transport.sendRequest(
+      'tools/call',
+      params: <String, Object?>{
+        'name': name,
+        'arguments': arguments,
+      },
+    );
+    return McpToolCallResult.fromJson(response.resultAsMap());
+  }
+
   Future<void> close() async {
     _connected = false;
     _initialized = false;

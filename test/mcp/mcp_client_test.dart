@@ -75,6 +75,43 @@ void main() {
       throwsA(isA<McpProtocolException>()),
     );
   });
+
+  test('callTool parses text content after initialize', () async {
+    final client = McpClient(
+      _FakeMcpTransport(
+        responses: <String, McpJsonRpcResponse>{
+          'initialize': const McpJsonRpcResponse(
+            id: 1,
+            result: <String, Object?>{
+              'protocolVersion': '2024-11-05',
+              'serverInfo': <String, Object?>{
+                'name': 'github',
+                'version': '2.1.0',
+              },
+            },
+          ),
+          'tools/call': const McpJsonRpcResponse(
+            id: 2,
+            result: <String, Object?>{
+              'content': <Map<String, Object?>>[
+                <String, Object?>{
+                  'type': 'text',
+                  'text': 'pong',
+                },
+              ],
+            },
+          ),
+        },
+      ),
+    );
+
+    await client.initialize(
+      clientInfo: const McpClientInfo(name: 'OpenReef', version: '0.1.0'),
+    );
+    final result = await client.callTool(name: 'ping');
+
+    expect(result.contentText, 'pong');
+  });
 }
 
 class _FakeMcpTransport implements McpTransport {

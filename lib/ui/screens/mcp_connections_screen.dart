@@ -156,7 +156,7 @@ class _ConnectionHeader extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              'Connect to SSE endpoints and inspect available MCP tools. Current runtime does not route these tools into the active agent loop.',
+              'Connect to SSE endpoints and import live MCP tools into the agent runtime when the connection is active and valid.',
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
                 height: 1.5,
@@ -185,7 +185,7 @@ class _ConnectionHeader extends StatelessWidget {
               contentPadding: EdgeInsets.zero,
               title: const Text('Persist connection for reconnect on boot'),
               subtitle: Text(
-                'Saves this endpoint and auto-reconnects on app startup. It does not currently execute background MCP tasks while the app is closed.',
+                'Saves this endpoint and auto-reconnects on app startup. Imported runtime tools only remain active while the app holds a live validated session.',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                   height: 1.4,
@@ -261,6 +261,25 @@ class _ConnectionCard extends StatelessWidget {
                 ),
               ),
             ],
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _ToolChip(label: connection.saved ? 'saved' : 'unsaved'),
+                _ToolChip(
+                  label: connection.trusted ? 'trusted' : 'untrusted',
+                ),
+                _ToolChip(
+                  label: connection.connected ? 'connected' : 'offline',
+                ),
+                _ToolChip(
+                  label: connection.toolsImportedIntoRuntime
+                      ? 'runtime ${connection.importedToolCount}'
+                      : 'runtime 0',
+                ),
+              ],
+            ),
             const SizedBox(height: 12),
             Text(
               'tools',
@@ -389,7 +408,7 @@ class _EmptyConnectionsCard extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              'Add an SSE endpoint to inspect server/tool metadata and connection status.',
+              'Add an SSE endpoint to inspect server metadata and import live MCP tools into the runtime catalog.',
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),

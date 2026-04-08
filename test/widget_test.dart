@@ -3,11 +3,13 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:openreef/agent/tool_router.dart';
 import 'package:openreef/memory/chat_session_repository.dart';
 import 'package:openreef/memory/memory_storage.dart';
 import 'package:openreef/memory/sqlite_memory_storage_backend.dart';
 import 'package:openreef/mcp/mcp_connection_store.dart';
 import 'package:openreef/mcp/mcp_connections_controller.dart';
+import 'package:openreef/mcp/mcp_runtime_coordinator.dart';
 import 'package:openreef/mcp/mcp_secret_store.dart';
 import 'package:openreef/models/litert_bridge.dart';
 import 'package:openreef/models/model_download_controller.dart';
@@ -15,8 +17,10 @@ import 'package:openreef/models/model_downloader.dart';
 import 'package:openreef/models/model_registry.dart';
 import 'package:openreef/models/model_storage.dart';
 import 'package:openreef/settings/settings_controller.dart';
+import 'package:openreef/settings/settings_store.dart';
 import 'package:openreef/skills/skill_registry.dart';
 import 'package:openreef/skills/skill_registry_controller.dart';
+import 'package:openreef/skills/skill_runtime_catalog.dart';
 import 'package:openreef/ui/chat_session_port.dart';
 import 'package:openreef/ui/mock_chat_session.dart';
 import 'package:openreef/ui/openreef_app.dart';
@@ -234,19 +238,38 @@ Future<Widget> _buildApp({
   final skillsDirectory = await Directory.systemTemp.createTemp(
     'widget-skills-',
   );
-  final skillRegistryController = SkillRegistryController(
+  final skillCatalog = SkillRuntimeCatalog(
     registry: SkillRegistry(rootPaths: <String>[skillsDirectory.path]),
+    toolCatalog: InMemoryToolCatalog(const <ToolDefinition>[]),
+    stateFile: File(
+      '${skillsDirectory.path}${Platform.pathSeparator}runtime_state.json',
+    ),
+  );
+  await skillCatalog.reload();
+  final skillRegistryController = SkillRegistryController(
+    catalog: skillCatalog,
   );
   final mcpConnectionsController = McpConnectionsController(
     store: McpConnectionStore(
       memoryStorage,
       secretStore: InMemoryMcpSecretStore(),
     ),
+    runtimeCoordinator: McpRuntimeCoordinator(
+      toolCatalog: RuntimeToolCatalog(),
+      embedText: (text) async => const <double>[0, 0, 0, 0, 1, 0, 0],
+    ),
     autoConnectPersisted: false,
   );
 
   return OpenReefApp(
-    settingsController: settingsController ?? SettingsController(),
+    settingsController: settingsController ??
+        SettingsController(
+          store: SettingsStore(
+            File(
+              '${sessionDirectory.path}${Platform.pathSeparator}settings.json',
+            ),
+          ),
+        ),
     chatSession: chatSession ?? MockChatSession(),
     chatSessionRepository: sessionRepository,
     modelDownloadController: ModelDownloadController(

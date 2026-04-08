@@ -99,6 +99,10 @@ void main() {
 
     expect(result.sessionResult, SessionResult.frozen);
     expect(result.reason, 'rejection_loop');
+    expect(
+      result.toolsUsed,
+      const <String>['volume_set', 'volume_set', 'volume_set'],
+    );
     expect(notifier.freezeCalls, 1);
   });
 
@@ -159,6 +163,10 @@ void main() {
 
       expect(result.sessionResult, SessionResult.frozen);
       expect(result.reason, 'exception_loop');
+      expect(
+        result.toolsUsed,
+        const <String>['explode', 'explode', 'explode'],
+      );
       expect(notifier.freezeCalls, 1);
     },
   );
@@ -234,6 +242,16 @@ void main() {
 
     expect(result.sessionResult, SessionResult.completed);
     expect(result.text, 'done');
+    expect(
+      result.toolsUsed,
+      const <String>[
+        'volume_set',
+        'volume_set',
+        'recover',
+        'volume_set',
+        'volume_set',
+      ],
+    );
     expect(notifier.freezeCalls, 0);
   });
 
@@ -311,10 +329,11 @@ void main() {
         compactRequested: true,
       );
 
-      expect(result.sessionResult, SessionResult.failed);
-      expect(result.reason, 'compaction_failure');
-      expect(result.text, contains('Compaction failed:'));
-    },
+    expect(result.sessionResult, SessionResult.failed);
+    expect(result.reason, 'compaction_failure');
+    expect(result.text, contains('Compaction failed:'));
+    expect(result.toolsUsed, isEmpty);
+  },
   );
 
   test('runs compaction before dispatch in the tool loop', () async {

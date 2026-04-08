@@ -69,14 +69,24 @@ class ToolManifestRegistry {
       arguments: validation.normalizedArguments,
     );
     final result = await handler.execute(normalizedInvocation, context);
-    return NativeToolExecutionResult(
-      content: result.content,
-      metadata: <String, Object?>{
-        'toolId': handler.manifest.id,
-        'category': handler.manifest.category,
-        ...result.metadata,
-      },
-    );
+    return switch (result.status) {
+      NativeToolExecutionStatus.success => NativeToolExecutionResult.success(
+        content: result.content,
+        metadata: <String, Object?>{
+          'toolId': handler.manifest.id,
+          'category': handler.manifest.category,
+          ...result.metadata,
+        },
+      ),
+      NativeToolExecutionStatus.failure => NativeToolExecutionResult.failure(
+        error: result.error!,
+        metadata: <String, Object?>{
+          'toolId': handler.manifest.id,
+          'category': handler.manifest.category,
+          ...result.metadata,
+        },
+      ),
+    };
   }
 
   Object _normalizeArgument(ToolArgumentSpec spec, Object value) {

@@ -1,11 +1,16 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:openreef/settings/app_settings.dart';
 import 'package:openreef/settings/settings_controller.dart';
+import 'package:openreef/settings/settings_store.dart';
 import 'package:openreef/voice/audio_service.dart';
 
 void main() {
   test('audio service speaks when Android TTS is enabled in settings', () async {
-    final settingsController = SettingsController();
+    final settingsController = SettingsController(
+      store: SettingsStore(File('${Directory.systemTemp.path}/audio_settings_1.json')),
+    );
     final ttsClient = _FakeVoiceTtsClient();
     final service = AudioService(
       settingsController: settingsController,
@@ -21,7 +26,9 @@ void main() {
   });
 
   test('audio service stays disabled when wake word is off', () async {
-    final settingsController = SettingsController();
+    final settingsController = SettingsController(
+      store: SettingsStore(File('${Directory.systemTemp.path}/audio_settings_2.json')),
+    );
     final ttsClient = _FakeVoiceTtsClient();
     final service = AudioService(
       settingsController: settingsController,
@@ -35,7 +42,9 @@ void main() {
   });
 
   test('audio service stays disabled for unsupported TTS engines', () async {
-    final settingsController = SettingsController();
+    final settingsController = SettingsController(
+      store: SettingsStore(File('${Directory.systemTemp.path}/audio_settings_3.json')),
+    );
     final ttsClient = _FakeVoiceTtsClient();
     final service = AudioService(
       settingsController: settingsController,
@@ -52,7 +61,9 @@ void main() {
   });
 
   test('audio service stops playback when settings disable voice output', () async {
-    final settingsController = SettingsController();
+    final settingsController = SettingsController(
+      store: SettingsStore(File('${Directory.systemTemp.path}/audio_settings_4.json')),
+    );
     final ttsClient = _FakeVoiceTtsClient();
     final service = AudioService(
       settingsController: settingsController,

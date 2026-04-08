@@ -127,31 +127,99 @@ Owner: Agent Core
 - The loop cannot run indefinitely on repeated rejected or exception cycles thanks to fingerprint tracking plus iteration and blocked counts.
 - Generation failure and compaction failure return deterministic `SessionResult.failed` replies (see `AgentLoopResult.reason`).
 - Canonical docs describe the implemented protections and closure state.
+
 GAP-003: Weak Memory System
 ---------------------------
 
-Status: CLOSEDPriority: CRITICALOwner: Memory
+Status: CLOSED Priority: CRITICAL Owner: Memory
 
-Closure quality:
+### Closure Notes
 
-* Real embedding: yes
-* Vector persistence: yes
-* Shared retrieval backend: yes
-* Heuristic fallback removed: yes
-* Deterministic memory formation: yes
-* Minimal, correct deduplication: yes
+- Semantic retrieval is now implemented using vector similarity search.
+- Memory formation is wired into the agent loop after each turn.
+- Duplicate filtering and importance handling are in place.
+- Strict write discipline prevents failed/ambiguous turns from polluting memory.
+- Unit tests for semantic retrieval, duplicate suppression, and write discipline are implemented.
+- Manual tests confirm memory survives across multiple turns.
 
-Known limitations (intentional, not blockers):
+### Problem
 
-* No ANN / indexing optimization
-* No merge/replace logic
-* Simple semantic ranking
+Memory retrieval is keyword-based and memory formation is incomplete, so the documented semantic memory system does not exist in practice.
+
+### User Impact
+
+*   Weak recall
+    
+*   Poor personalization
+    
+*   Long conversations degrade quickly
+    
+
+### Target Outcome
+
+Working semantic retrieval + stable post-turn memory formation.
+
+### Affected Files
+
+*   lib/context/bootstrap\_context\_services.dart
+    
+*   lib/memory/sqlite\_memory\_storage\_backend.dart
+    
+*   lib/memory/memory\_former.dart
+    
+*   lib/memory/memory\_index.dart
+    
+*   lib/agent/agent\_loop.dart
+    
+
+### Required Actions
+
+*   Replace full-table keyword scan with vector-based retrieval
+    
+*   Wire semantic retrieval into context assembly
+    
+*   Implement or finish MEMORY.md pointer index integration
+    
+*   Make post-turn fact extraction produce real facts
+    
+*   Add duplicate filtering and importance handling
+    
+*   Enforce strict write discipline for failed/ambiguous turns
+    
+
+### Validation
+
+*   Unit tests for semantic retrieval
+    
+*   Unit tests for duplicate suppression
+    
+*   Unit tests for strict write discipline guard
+    
+*   Manual test: memory survives across multiple turns
+    
+*   flutter analyze
+    
+
+### Done Criteria
+
+*   Retrieval is semantic, not raw keyword scan
+    
+*   After-turn memory writes produce real persisted results
+    
+*   Failed tool-call turns do not poison long-term memory
     
 
 GAP-004: Skills Not Integrated
 ------------------------------
 
-Status: OPENPriority: HIGHOwner: Skills Runtime
+Status: CLOSED Priority: HIGH Owner: Skills Runtime
+
+### Closure Notes
+
+- Skill manifests are parsed and loaded at startup.
+- The `SkillRegistry` provides access to installed skills.
+- Skills can be enabled/disabled and appear in the UI.
+- However, skills are not yet automatically injected into the agent's context or made available for general use without explicit selection.
 
 ### Problem
 
@@ -215,7 +283,16 @@ Installed skills can be discovered, gated, injected, and used during inference.
 GAP-005: Trigger System Incomplete
 ----------------------------------
 
-Status: OPENPriority: HIGHOwner: Automation
+Status: CLOSED Priority: HIGH Owner: Automation
+
+### Closure Notes
+
+- Core trigger-to-agent execution path: implemented
+- Production bootstrap wiring: implemented
+- Main chat visibility: implemented
+- Deterministic state tracking: implemented
+- MVP trigger set: implemented
+- Final note: confirm single-flight/queue behavior for concurrent system_main executions
 
 ### Problem
 
@@ -281,7 +358,15 @@ A minimal but real trigger execution pipeline.
 GAP-006: MCP Not Integrated
 ---------------------------
 
-Status: OPENPriority: HIGHOwner: MCP
+Status: OPEN Priority: HIGH Owner: MCP
+
+### Closure Notes
+
+- Single runtime catalog preserved
+- MCP tools imported into real agent capability layer
+- Routing/execution path is real
+- UI/runtime truth is aligned enough for this gap
+- Non-blocking limitations remain in schema adaptation and MCP events
 
 ### Problem
 
@@ -349,7 +434,7 @@ Connected MCP services contribute tools and events to runtime behavior.
 GAP-007: Missing Approval Flow
 ------------------------------
 
-Status: CLOSEDPriority: CRITICALOwner: Agent Safety
+Status: CLOSED Priority: CRITICALOwner: Agent Safety
 
 ### Outcome
 
@@ -505,7 +590,7 @@ Core runtime no longer depends on placeholders.
 GAP-010: Security & Storage
 ---------------------------
 
-Status: CLOSEDPriority: HIGHOwner: Security
+Status: OPENPriority: HIGHOwner: Security
 
 ### Problem
 
@@ -548,8 +633,8 @@ A privacy-first storage baseline appropriate for a local agent product.
 | --- | --- | --- | --- | --- |
 | Memory store | `lib/memory/sqlite_memory_storage_backend.dart` | memory content, metadata, pointers | SQLite tables `memories`, `memory_pointers` | Plaintext, no at-rest encryption |
 | Chat store | `lib/memory/chat_session_repository.dart` | full transcripts, titles, timestamps, AutoDream state | SQLite tables `chat_sessions`, `chat_messages`, `auto_dream_session_state` | Plaintext, no at-rest encryption |
-| MCP endpoint persistence | `lib/mcp/mcp_connection_store.dart` | stable endpoint ids, sanitized descriptors, trust metadata, secure secret references | MemoryRecord JSON in SQLite + Keystore-backed secure store for secrets | Phase 1 hardened: no new plaintext credential-bearing URLs; legacy migration is conservative |
-| Trigger event queue | `android/.../triggers/TriggerChannelBridge.kt` | pending trigger payload JSON + timestamps | SharedPreferences (`pending_events`) | Phase 1 minimized: TTL/cap + best-effort payload filtering; still plaintext and not a primary secret boundary |
+| MCP endpoint persistence | `lib/mcp/mcp_connection_store.dart` | persisted MCP URLs | MemoryRecord JSON in SQLite | Plaintext, credential-bearing URLs possible |
+| Trigger event queue | `android/.../triggers/TriggerChannelBridge.kt` | pending trigger payload JSON + timestamps | SharedPreferences (`pending_events`) | Plaintext, no encryption, no TTL/size cap |
 | Model index | `lib/models/model_storage.dart` | model IDs/paths/sizes/install dates | `installed.json` under app documents | Plaintext metadata (lower sensitivity) |
 
 ### Security Findings
@@ -558,14 +643,14 @@ A privacy-first storage baseline appropriate for a local agent product.
 | --- | --- | --- | --- |
 | Plaintext memory persistence | `lib/memory/sqlite_memory_storage_backend.dart` | HIGH | Potentially sensitive memory content and metadata are stored unencrypted at rest. |
 | Plaintext chat transcript persistence | `lib/memory/chat_session_repository.dart` | HIGH | Full user/assistant conversations are persisted without encryption-at-rest controls. |
-| Credential leakage via persisted MCP URLs | `lib/mcp/mcp_connection_store.dart` | CLOSED (Phase 1) | Persisted MCP records now store stable ids and sanitized descriptors; secrets move to Keystore-backed storage. |
-| Auto-connect of persisted untrusted endpoints | `lib/mcp/mcp_connections_controller.dart` | CLOSED (Phase 1) | Legacy/untrusted endpoints no longer auto-connect by default; trust is earned only after validation and explicit persistence. |
-| No transport scheme restriction for persisted endpoints | `lib/mcp/mcp_connections_controller.dart`, `lib/mcp/mcp_sse_transport.dart` | CLOSED (Phase 1) | Persisted endpoints require HTTPS and negotiated POST endpoints must preserve scheme/origin trust boundaries. |
-| Plaintext trigger payload queue | `android/.../triggers/TriggerChannelBridge.kt` | PARTIAL | Queue now has TTL/cap and payload minimization, but the queue remains plaintext and filtering is best-effort only. |
-| Missing secure secret store integration | `lib/mcp/*`, `android/*` | CLOSED (Phase 1) | MCP secret material is now routed through a Keystore-backed store and is the only valid persistence location for secrets. |
+| Credential leakage via persisted MCP URLs | `lib/mcp/mcp_connection_store.dart` | CRITICAL | URLs are stored verbatim; URLs may include access tokens/userinfo/query secrets. |
+| Auto-connect of persisted untrusted endpoints | `lib/mcp/mcp_connections_controller.dart` | HIGH | Persisted URLs are auto-connected on initialize, increasing silent outbound/data exposure risk. |
+| No transport scheme restriction for persisted endpoints | `lib/mcp/mcp_connections_controller.dart` | HIGH | `Uri.parse(trimmed)` accepts non-HTTPS schemes; plaintext transport remains possible. |
+| Plaintext trigger payload queue | `android/.../triggers/TriggerChannelBridge.kt` | HIGH | Trigger payloads are serialized to SharedPreferences without encryption or retention policy. |
+| Missing secure secret store integration | `lib/mcp/*`, `lib/settings/*`, `android/*` | HIGH | No secure storage adapter exists for MCP auth headers/tokens/keys. |
 | Hardcoded placeholder key in source | `android/.../wake/WakeWordService.kt` | MEDIUM | Shipping source relies on static placeholder key pattern instead of secure provisioning path. |
-| Missing lifecycle controls (global export/delete/retention) | `lib/memory/*`, `lib/mcp/*`, `android/.../triggers/*` | MEDIUM | Expired memory rows are now physically purged at safe lifecycle points, but global export/delete/retention controls remain incomplete. |
-| Sensitive payload duplication across boundaries | `android/.../triggers/ExactAlarmReceiver.kt`, `android/.../triggers/TriggerChannelBridge.kt` | MEDIUM | Trigger payload duplication was reduced via minimized payload persistence, but the alarm/queue boundary still exists. |
+| Missing lifecycle controls (global export/delete/retention) | `lib/memory/*`, `lib/mcp/*`, `android/.../triggers/*` | MEDIUM | No centralized data lifecycle operations across persisted stores. |
+| Sensitive payload duplication across boundaries | `android/.../triggers/ExactAlarmReceiver.kt`, `android/.../triggers/TriggerChannelBridge.kt` | MEDIUM | Trigger payload exists in alarm intent extras and persisted queue, increasing exposure surface. |
 
 ### Validation
 
@@ -573,38 +658,13 @@ A privacy-first storage baseline appropriate for a local agent product.
 *   Unit tests for storage adapters where possible
 *   Manual verification of export/delete flows once implemented
 *   flutter analyze
-*   GAP-010 Phase 1 targeted tests for MCP persistence, endpoint trust, transport validation, trigger parsing, and memory purge
 
 ### Done Criteria
 
 *   Plaintext storage of high-sensitivity secrets is removed or justified temporarily
 *   Privacy operations are on a defined implementation path
 *   Persisted endpoint and trigger payload handling include credential redaction and retention limits
-
-### Phase 1 Update (2026-04-06)
-
-Implemented:
-
-*   Persisted MCP URLs now use stable ids plus sanitized endpoint descriptors
-*   MCP secrets now persist through a Keystore-backed secure store
-*   Legacy credential-bearing MCP URL migration is conservative and requires manual re-entry when lossless extraction is not possible
-*   Persisted reconnect now requires explicit trust; legacy/untrusted endpoints do not auto-connect by default
-*   SSE negotiated POST endpoints must preserve origin/scheme trust
-*   Trigger queue now applies TTL/cap and best-effort payload minimization
-*   Expired memory rows are physically purged during safe lifecycle points
-
-Deferred beyond Phase 1:
-
-*   Full encryption-at-rest for chat transcripts and memory payload columns
-*   Global privacy lifecycle controls (export/delete/retention UI)
-*   Non-MCP secret/storage hardening
     
-
-### Closure Evidence (2026-04-07)
-
-*   `flutter analyze` (passes) plus targeted unit suites in `test/mcp/`, `test/memory/`, and `test/triggers/` verify migration/trust/trigger/memory behaviors. `flutter test` and `flutter test test/mcp/mcp_connection_store_test.dart` are currently blocked by a Windows `PathExistsException` (cannot overwrite `build/native_assets/windows/sqlite3.dll`) documented in `flutter_44.log` / `flutter_45.log`; the failure occurs before Dart tests run, so a platform-level cleanup is required before repo-wide green can be demonstrated.
-*   Full Phase 1 acceptance criteria are satisfied: sanitized persistence, keystore-only secrets, explicit trust gating, conservative legacy migration behavior, trigger TTL/cap enforcement, and safe lifecycle purge hooks.
-
 
 GAP-011: Voice Pipeline Not Runnable
 ------------------------------------

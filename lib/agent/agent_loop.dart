@@ -63,6 +63,7 @@ class AgentLoop {
     var activeBlockedFingerprint = '';
     var repeatedBlockedFingerprintCount = 0;
     final afterTurnMessageStart = context.messages.length;
+    final toolsUsed = <String>[];
     late AgentResponse response;
 
     try {
@@ -76,6 +77,7 @@ class AgentLoop {
         _generationFailureMessage(error),
         sessionKey: sessionKey,
         hasFailedToolCalls: failedToolCalls,
+        toolsUsed: toolsUsed,
       );
     }
 
@@ -87,6 +89,7 @@ class AgentLoop {
           hasFailedToolCalls: true,
           reason: 'iteration_cap',
           body: 'Agent loop stopped after hitting the iteration cap.',
+          toolsUsed: toolsUsed,
         );
       }
 
@@ -96,6 +99,7 @@ class AgentLoop {
           hasFailedToolCalls: true,
           reason: 'exception_loop',
           body: 'Repeated blocked tool errors occurred.',
+          toolsUsed: toolsUsed,
         );
       }
 
@@ -107,10 +111,12 @@ class AgentLoop {
           'Compaction failed: $error',
           sessionKey: sessionKey,
           hasFailedToolCalls: failedToolCalls,
+          toolsUsed: toolsUsed,
         );
       }
 
       final toolCall = response.toolCall!;
+      toolsUsed.add(toolCall.toolId);
       try {
         final result = await _toolRouter.dispatch(
           toolCall,
@@ -118,7 +124,7 @@ class AgentLoop {
         );
         context = context.appendToolResult(toolCall.id, result);
 
-        if (result.isRejected) {
+        if (result.isError) {
           failedToolCalls = true;
           final nextFingerprint = _fingerprintRejectedToolCall(
             toolCall,
@@ -138,6 +144,7 @@ class AgentLoop {
               hasFailedToolCalls: true,
               reason: 'rejection_loop',
               body: 'Repeated blocked tool rejections occurred.',
+              toolsUsed: toolsUsed,
             );
           }
         } else {
@@ -165,6 +172,7 @@ class AgentLoop {
             hasFailedToolCalls: true,
             reason: 'exception_loop',
             body: 'Repeated blocked tool errors occurred.',
+            toolsUsed: toolsUsed,
           );
         }
       }
@@ -180,6 +188,7 @@ class AgentLoop {
           _generationFailureMessage(error),
           sessionKey: sessionKey,
           hasFailedToolCalls: failedToolCalls,
+          toolsUsed: toolsUsed,
         );
       }
     }
@@ -197,6 +206,7 @@ class AgentLoop {
       sessionResult: SessionResult.completed,
       text: response.text,
       reason: 'completed',
+      toolsUsed: List<String>.unmodifiable(toolsUsed),
     );
   }
 
@@ -205,6 +215,7 @@ class AgentLoop {
     String message, {
     required String sessionKey,
     required bool hasFailedToolCalls,
+    required List<String> toolsUsed,
   }) async {
     await _memoryFormer.process(
       MemoryTurn(
@@ -219,6 +230,7 @@ class AgentLoop {
       sessionResult: SessionResult.failed,
       text: message,
       reason: reason,
+      toolsUsed: List<String>.unmodifiable(toolsUsed),
     );
   }
 
@@ -282,6 +294,7 @@ class AgentLoop {
     required bool hasFailedToolCalls,
     required String reason,
     required String body,
+    required List<String> toolsUsed,
   }) async {
     await _freezeSession(sessionKey, reason: reason, body: body);
     await _memoryFormer.process(
@@ -296,6 +309,7 @@ class AgentLoop {
       sessionResult: SessionResult.frozen,
       text: '',
       reason: reason,
+      toolsUsed: List<String>.unmodifiable(toolsUsed),
     );
   }
 
@@ -372,10 +386,12 @@ class AgentLoop {
   }
 
   String _fingerprintRejectedToolCall(ToolCall call, ToolResult result) {
+    final category = result.isRejected ? 'rejected' : 'failure';
     final reason =
         result.metadata[ToolRouter.rejectionReasonKey] as String? ??
-        'rejected_unknown';
-    return '${call.toolId}|${_canonicalizeValue(call.arguments)}|rejected|$reason';
+        result.metadata['errorCode'] as String? ??
+        '${category}_unknown';
+    return '${call.toolId}|${_canonicalizeValue(call.arguments)}|$category|$reason';
   }
 
   String _fingerprintToolException(ToolCall call, Object error) {

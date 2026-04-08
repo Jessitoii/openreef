@@ -39,6 +39,7 @@ void main() {
       const TriggerConfig(
         id: 'briefing',
         name: 'Morning briefing',
+        prompt: 'Deliver morning briefing.',
         type: TriggerType.schedule,
         priority: TriggerPriority.high,
         scheduleSpec: ScheduleTriggerSpec(hour: 8, minute: 15),
@@ -75,6 +76,7 @@ void main() {
       const TriggerConfig(
         id: 'ignored',
         name: 'Ignored',
+        prompt: 'Ignored schedule.',
         type: TriggerType.schedule,
         priority: TriggerPriority.low,
         scheduleSpec: ScheduleTriggerSpec(hour: 6, minute: 0),
@@ -83,5 +85,33 @@ void main() {
 
     expect(await backend.hasExactAlarmPermission(), isFalse);
     expect(calls, isEmpty);
+  });
+
+  test('serializes cron registration for Android', () async {
+    final backend = AndroidScheduleSchedulerBackend(
+      methodChannel: methodChannel,
+    );
+
+    await backend.registerSchedule(
+      const TriggerConfig(
+        id: 'weekday_digest',
+        name: 'Weekday digest',
+        prompt: 'Deliver weekday digest.',
+        type: TriggerType.cron,
+        priority: TriggerPriority.normal,
+        cronSpec: CronTriggerSpec(expression: '0 9 * * 1-5'),
+      ),
+    );
+
+    expect(calls[1].arguments, <String, Object?>{
+      'triggerId': 'weekday_digest',
+      'name': 'Weekday digest',
+      'type': 'cron',
+      'priority': 'normal',
+      'cronExpression': '0 9 * * 1-5',
+      'payload': <String, Object?>{},
+      'requiresUserAttention': false,
+      'isExpensive': false,
+    });
   });
 }

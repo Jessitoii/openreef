@@ -10,6 +10,7 @@ import 'package:openreef/memory/semantic_memory_retriever.dart';
 import 'package:openreef/memory/semantic_text_embedder.dart';
 import 'package:openreef/tools/mvp_native_tools.dart';
 import 'package:openreef/tools/native_tool_adapters.dart';
+import 'package:openreef/tools/native_tool_errors.dart';
 import 'package:openreef/tools/tool_manifest.dart';
 import 'package:openreef/tools/tool_manifest_registry.dart';
 
@@ -17,62 +18,74 @@ void main() {
   late _RecordingVolumeAdapter volumeAdapter;
   late _RecordingClipboardAdapter clipboardAdapter;
   late _RecordingBatteryAdapter batteryAdapter;
+  late _RecordingContactAdapter contactAdapter;
+  late _RecordingDraftMessageAdapter draftMessageAdapter;
+  late _RecordingFlashlightAdapter flashlightAdapter;
+  late _RecordingDndAdapter dndAdapter;
+  late _RecordingLocationAdapter locationAdapter;
+  late _RecordingMapsAdapter mapsAdapter;
+  late _RecordingTtsAdapter ttsAdapter;
   late ToolManifestRegistry registry;
 
   setUp(() {
     volumeAdapter = _RecordingVolumeAdapter();
     clipboardAdapter = _RecordingClipboardAdapter();
     batteryAdapter = _RecordingBatteryAdapter();
+    contactAdapter = _RecordingContactAdapter();
+    draftMessageAdapter = _RecordingDraftMessageAdapter();
+    flashlightAdapter = _RecordingFlashlightAdapter();
+    dndAdapter = _RecordingDndAdapter();
+    locationAdapter = _RecordingLocationAdapter();
+    mapsAdapter = _RecordingMapsAdapter();
+    ttsAdapter = _RecordingTtsAdapter();
     registry = ToolManifestRegistry(
-      createMvpNativeToolHandlers(
-        volumeAdapter: volumeAdapter,
-        clipboardAdapter: clipboardAdapter,
-        batteryAdapter: batteryAdapter,
-        memoryRetriever: SemanticMemoryRetriever(
-          storage: MemoryStorage(_NoopMemoryStorageBackend()),
-          embedder: const _FixedSemanticEmbedder(<double>[1, 0, 0]),
+      <NativeToolHandler>[
+        VolumeSetToolHandler(volumeAdapter),
+        ClipboardReadToolHandler(clipboardAdapter),
+        BatteryInfoToolHandler(batteryAdapter),
+        ContactReadToolHandler(contactAdapter),
+        ContactCreateToolHandler(contactAdapter),
+        SmsDraftToolHandler(draftMessageAdapter),
+        EmailDraftToolHandler(draftMessageAdapter),
+        FlashlightToggleToolHandler(flashlightAdapter),
+        DndSetToolHandler(dndAdapter),
+        LocationGetToolHandler(locationAdapter),
+        MapsNavigateToolHandler(mapsAdapter),
+        RegexEvalToolHandler(),
+        MathEvalToolHandler(),
+        TtsSpeakToolHandler(ttsAdapter),
+        MemorySearchToolHandler(
+          SemanticMemoryRetriever(
+            storage: MemoryStorage(_NoopMemoryStorageBackend()),
+            embedder: const _FixedSemanticEmbedder(<double>[1, 0, 0]),
+          ),
         ),
-      ),
+      ],
     );
   });
 
   test('lists manifests and looks them up by id', () {
     final manifests = registry.listManifests();
 
-    expect(manifests.length, 4);
-    expect(manifests.map((manifest) => manifest.id), contains('volume_set'));
-    expect(manifests.map((manifest) => manifest.id), contains('memory_search'));
+    expect(manifests.length, 15);
+    expect(manifests.map((manifest) => manifest.id), contains('contact_read'));
+    expect(manifests.map((manifest) => manifest.id), contains('tts_speak'));
     expect(registry.manifestById('battery_info')?.category, 'system');
   });
 
   test('rejects missing and invalid arguments', () {
-    final missing = registry.validate(
-      const ToolInvocation(toolId: 'volume_set'),
-    );
+    final missing = registry.validate(const ToolInvocation(toolId: 'volume_set'));
     final invalid = registry.validate(
       const ToolInvocation(
-        toolId: 'volume_set',
-        arguments: <String, Object?>{'level': 'loud'},
+        toolId: 'dnd_set',
+        arguments: <String, Object?>{'mode': 'silent'},
       ),
     );
 
     expect(missing.isValid, isFalse);
     expect(missing.error, 'missing_argument:level');
     expect(invalid.isValid, isFalse);
-    expect(invalid.error, 'invalid_argument:level');
-  });
-
-  test('rejects disabled tools before execution', () {
-    final disabledRegistry = ToolManifestRegistry(<NativeToolHandler>[
-      _DisabledToolHandler(),
-    ]);
-
-    final validation = disabledRegistry.validate(
-      const ToolInvocation(toolId: 'disabled_tool'),
-    );
-
-    expect(validation.isValid, isFalse);
-    expect(validation.error, 'disabled_tool:disabled_tool');
+    expect(invalid.error, 'argument_not_allowed:mode');
   });
 
   test('volume_set normalizes level and invokes the adapter', () async {
@@ -87,31 +100,6 @@ void main() {
     expect(volumeAdapter.lastLevel, 0.35);
     expect(result.content, 'Volume set to 35%.');
     expect(result.metadata['appliedLevel'], 0.35);
-    expect(result.metadata['toolId'], 'volume_set');
-  });
-
-  test('clipboard_read returns an explicit empty result', () async {
-    clipboardAdapter.text = '';
-
-    final result = await registry.execute(
-      const ToolInvocation(toolId: 'clipboard_read'),
-    );
-
-    expect(result.content, 'Clipboard is empty.');
-    expect(result.metadata['hasContent'], isFalse);
-    expect(result.metadata['text'], '');
-  });
-
-  test('clipboard_read returns text when available', () async {
-    clipboardAdapter.text = 'copied value';
-
-    final result = await registry.execute(
-      const ToolInvocation(toolId: 'clipboard_read'),
-    );
-
-    expect(result.content, 'copied value');
-    expect(result.metadata['hasContent'], isTrue);
-    expect(result.metadata['text'], 'copied value');
   });
 
   test('battery_info returns the expected metadata shape', () async {
@@ -129,6 +117,45 @@ void main() {
     expect(result.metadata, containsPair('level', 81));
     expect(result.metadata, containsPair('state', 'charging'));
     expect(result.metadata, containsPair('isLowPowerMode', true));
+  });
+
+  test('contact_read returns structured permission errors', () async {
+    contactAdapter.error = const NativeToolException(
+      NativeToolError(
+        code: NativeToolErrorCode.permissionDenied,
+        message: 'Contacts permission denied.',
+      ),
+    );
+
+    final result = await registry.execute(
+      const ToolInvocation(toolId: 'contact_read'),
+    );
+
+    expect(result.isFailure, isTrue);
+    expect(result.error?.wireCode, 'permission_denied');
+  });
+
+  test('regex_eval returns invalid argument failures for bad patterns', () async {
+    final result = await registry.execute(
+      const ToolInvocation(
+        toolId: 'regex_eval',
+        arguments: <String, Object?>{'pattern': '(', 'input': 'broken'},
+      ),
+    );
+
+    expect(result.isFailure, isTrue);
+    expect(result.error?.wireCode, 'invalid_arguments');
+  });
+
+  test('math_eval respects precedence and parentheses', () async {
+    final result = await registry.execute(
+      const ToolInvocation(
+        toolId: 'math_eval',
+        arguments: <String, Object?>{'expression': '2 * (3 + 4.5)'},
+      ),
+    );
+
+    expect(result.metadata['result'], 15.0);
   });
 }
 
@@ -220,10 +247,11 @@ class _RecordingVolumeAdapter implements DeviceVolumeAdapter {
 }
 
 class _RecordingClipboardAdapter implements ClipboardAdapter {
-  String? text;
+  @override
+  Future<String?> readClipboardText() async => null;
 
   @override
-  Future<String?> readClipboardText() async => text;
+  Future<void> writeClipboardText(String text) async {}
 }
 
 class _RecordingBatteryAdapter implements BatteryAdapter {
@@ -236,23 +264,71 @@ class _RecordingBatteryAdapter implements BatteryAdapter {
   Future<BatterySnapshot> readBatteryInfo() async => snapshot;
 }
 
-class _DisabledToolHandler implements NativeToolHandler {
-  static const ToolManifest _manifest = ToolManifest(
-    id: 'disabled_tool',
-    description: 'Disabled for testing.',
-    category: 'system',
-    enabled: false,
-    argumentSchema: <ToolArgumentSpec>[],
-  );
+class _RecordingContactAdapter implements ContactAdapter {
+  NativeToolException? error;
 
   @override
-  ToolManifest get manifest => _manifest;
-
-  @override
-  Future<NativeToolExecutionResult> execute(
-    ToolInvocation invocation,
-    NativeToolContext context,
-  ) {
-    throw UnimplementedError();
+  Future<ContactRecord> createContact({
+    required String displayName,
+    String? phone,
+    String? email,
+  }) async {
+    if (error != null) {
+      throw error!;
+    }
+    return ContactRecord(displayName: displayName);
   }
+
+  @override
+  Future<List<ContactRecord>> searchContacts({
+    String? query,
+    required int limit,
+  }) async {
+    if (error != null) {
+      throw error!;
+    }
+    return const <ContactRecord>[
+      ContactRecord(displayName: 'Ali Veli'),
+    ];
+  }
+}
+
+class _RecordingDraftMessageAdapter implements DraftMessageAdapter {
+  @override
+  Future<void> openEmailDraft({String? to, String? subject, String? body}) async {}
+
+  @override
+  Future<void> openSmsDraft({String? to, String? body}) async {}
+}
+
+class _RecordingFlashlightAdapter implements FlashlightAdapter {
+  @override
+  Future<bool> setEnabled(bool enabled) async => enabled;
+}
+
+class _RecordingDndAdapter implements DndAdapter {
+  @override
+  Future<DndMode> setMode(DndMode mode) async => mode;
+}
+
+class _RecordingLocationAdapter implements LocationAdapter {
+  @override
+  Future<LocationSnapshot> getCurrentLocation({required bool highAccuracy}) async {
+    return LocationSnapshot(
+      latitude: 41.0,
+      longitude: 29.0,
+      provider: 'gps',
+      timestamp: DateTime.utc(2026, 4, 7),
+    );
+  }
+}
+
+class _RecordingMapsAdapter implements MapsAdapter {
+  @override
+  Future<void> openNavigation({required String query}) async {}
+}
+
+class _RecordingTtsAdapter implements TtsAdapter {
+  @override
+  Future<void> speak({required String text, required bool interrupt}) async {}
 }

@@ -23,15 +23,19 @@ class LexicalIntentEmbedder implements IntentEmbedder {
   static const Map<String, List<String>> _domainLexicon =
       <String, List<String>>{
         'calendar': <String>[
+          'alarm',
           'agenda',
+          'automation',
           'appointment',
           'calendar',
+          'cron',
           'date',
           'event',
           'meeting',
           'plan',
           'reminder',
           'schedule',
+          'trigger',
           'tomorrow',
         ],
         'email': <String>[
@@ -51,6 +55,7 @@ class LexicalIntentEmbedder implements IntentEmbedder {
           'hydration',
           'medication',
           'pill',
+          'remind',
           'sleep',
           'steps',
           'symptom',
@@ -74,8 +79,11 @@ class LexicalIntentEmbedder implements IntentEmbedder {
           'brightness',
           'clipboard',
           'device',
+          'file',
+          'launch',
           'open',
           'phone',
+          'share',
           'settings',
           'system',
           'volume',
@@ -88,6 +96,7 @@ class LexicalIntentEmbedder implements IntentEmbedder {
           'recall',
           'remember',
           'saved',
+          'store',
           'stored',
         ],
         'code': <String>[

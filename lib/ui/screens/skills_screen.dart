@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:openreef/skills/skill.dart';
 import 'package:openreef/skills/skill_registry_controller.dart';
+import 'package:openreef/skills/skill_runtime_snapshot.dart';
 import 'package:openreef/ui/app_theme.dart';
 
 class SkillsScreen extends StatefulWidget {
@@ -17,22 +17,21 @@ class SkillsScreen extends StatefulWidget {
 
 class _SkillsScreenState extends State<SkillsScreen> {
   @override
-  void initState() {
-    super.initState();
-    widget.controller.reload();
-  }
-
-  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return ValueListenableBuilder<List<Skill>>(
+    return ValueListenableBuilder<List<SkillRuntimeSnapshot>>(
       valueListenable: widget.controller.skills,
       builder: (context, skills, _) {
+        final installedCount = skills.where((skill) => skill.installed).length;
+        final eligibleCount = skills.where((skill) => skill.runtimeEligible).length;
+        final activeCount = skills.where((skill) => skill.activeThisTurn).length;
         return ListView(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
           children: [
             _SkillsHeader(
-              skillCount: skills.length,
+              skillCount: installedCount,
+              runtimeEligibleCount: eligibleCount,
+              activeCount: activeCount,
               onRefresh: widget.controller.reload,
             ),
             const SizedBox(height: 12),
@@ -44,7 +43,11 @@ class _SkillsScreenState extends State<SkillsScreen> {
               ...skills.map(
                 (skill) => Padding(
                   padding: const EdgeInsets.only(bottom: 12),
-                  child: _SkillCard(skill: skill),
+                  child: _SkillCard(
+                    skill: skill,
+                    onEnabledChanged: (enabled) =>
+                        widget.controller.setSkillEnabled(skill.skill.id, enabled),
+                  ),
                 ),
               ),
             if (skills.isNotEmpty)
@@ -67,10 +70,14 @@ class _SkillsScreenState extends State<SkillsScreen> {
 class _SkillsHeader extends StatelessWidget {
   const _SkillsHeader({
     required this.skillCount,
+    required this.runtimeEligibleCount,
+    required this.activeCount,
     required this.onRefresh,
   });
 
   final int skillCount;
+  final int runtimeEligibleCount;
+  final int activeCount;
   final Future<void> Function() onRefresh;
 
   @override
@@ -91,7 +98,7 @@ class _SkillsHeader extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              'Lists discovered SKILL.md files from Documents/skills. Runtime injection is not active in the current bootstrap path.',
+              'Shows the real runtime skills catalog, including enablement, eligibility, and latest-turn matches from the shared agent wiring.',
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
                 height: 1.5,
@@ -105,6 +112,14 @@ class _SkillsHeader extends StatelessWidget {
                 _StatChip(
                   label: '$skillCount discovered',
                   accent: ReefPalette.coral,
+                ),
+                _StatChip(
+                  label: '$runtimeEligibleCount runtime-eligible',
+                  accent: ReefPalette.darkSuccess,
+                ),
+                _StatChip(
+                  label: '$activeCount active this turn',
+                  accent: ReefPalette.darkSuccess,
                 ),
                 _StatChip(
                   label: 'Documents/skills',
@@ -125,17 +140,22 @@ class _SkillsHeader extends StatelessWidget {
 }
 
 class _SkillCard extends StatelessWidget {
-  const _SkillCard({required this.skill});
+  const _SkillCard({
+    required this.skill,
+    required this.onEnabledChanged,
+  });
 
-  final Skill skill;
+  final SkillRuntimeSnapshot skill;
+  final ValueChanged<bool> onEnabledChanged;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final description = skill.manifest.description.trim().isEmpty
+    final description = skill.skill.manifest.description.trim().isEmpty
         ? 'No description provided in frontmatter.'
-        : skill.manifest.description.trim();
-    final tools = skill.manifest.toolsRequired;
+        : skill.skill.manifest.description.trim();
+    final tools = skill.skill.manifest.toolsRequired;
+    final triggerPatterns = skill.skill.manifest.triggerPatterns;
 
     return Card(
       clipBehavior: Clip.antiAlias,
@@ -149,34 +169,69 @@ class _SkillCard extends StatelessWidget {
               children: [
                 Expanded(
                   child: Text(
-                    skill.name,
+                    skill.skill.name,
                     style: theme.textTheme.titleMedium?.copyWith(
                       fontWeight: FontWeight.w700,
                     ),
                   ),
                 ),
                 const SizedBox(width: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 6,
-                  ),
-                  decoration: BoxDecoration(
-                    color: ReefPalette.darkSuccess.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(999),
-                    border: Border.all(
-                      color: ReefPalette.darkSuccess.withValues(alpha: 0.4),
-                    ),
-                  ),
-                  child: Text(
-                    'file loaded',
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: ReefPalette.darkSuccess,
-                    ),
-                  ),
+                Switch(
+                  value: skill.enabled,
+                  onChanged: onEnabledChanged,
                 ),
               ],
             ),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _StatusChip(
+                  label: skill.installed ? 'installed' : 'missing',
+                  active: skill.installed,
+                ),
+                _StatusChip(
+                  label: skill.enabled ? 'enabled' : 'disabled',
+                  active: skill.enabled,
+                ),
+                _StatusChip(
+                  label: skill.runtimeEligible
+                      ? 'runtime-eligible'
+                      : 'runtime-blocked',
+                  active: skill.runtimeEligible,
+                ),
+                _StatusChip(
+                  label: skill.matchedThisTurn
+                      ? 'matched this turn'
+                      : 'not matched',
+                  active: skill.matchedThisTurn,
+                ),
+                _StatusChip(
+                  label: skill.activeThisTurn
+                      ? 'active this turn'
+                      : 'inactive this turn',
+                  active: skill.activeThisTurn,
+                ),
+              ],
+            ),
+            if (!skill.runtimeEligible &&
+                skill.missingRequiredTools.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Text(
+                'Missing required runtime tools',
+                style: theme.textTheme.labelMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: skill.missingRequiredTools
+                    .map((tool) => _ToolChip(label: tool))
+                    .toList(),
+              ),
+            ],
             const SizedBox(height: 10),
             Text(
               description,
@@ -184,6 +239,22 @@ class _SkillCard extends StatelessWidget {
                 color: theme.colorScheme.onSurfaceVariant,
                 height: 1.45,
               ),
+            ),
+            const SizedBox(height: 14),
+            Text(
+              'trigger_patterns',
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children:
+                  (triggerPatterns.isEmpty ? const <String>['none'] : triggerPatterns)
+                      .map((pattern) => _ToolChip(label: pattern))
+                      .toList(),
             ),
             const SizedBox(height: 14),
             Text(
@@ -201,6 +272,40 @@ class _SkillCard extends StatelessWidget {
                   .toList(),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _StatusChip extends StatelessWidget {
+  const _StatusChip({
+    required this.label,
+    required this.active,
+  });
+
+  final String label;
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final accent = active
+        ? ReefPalette.darkSuccess
+        : theme.colorScheme.onSurfaceVariant;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: accent.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: accent.withValues(alpha: 0.35),
+        ),
+      ),
+      child: Text(
+        label,
+        style: theme.textTheme.labelSmall?.copyWith(
+          color: accent,
         ),
       ),
     );

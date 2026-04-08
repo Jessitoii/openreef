@@ -60,14 +60,56 @@ class SkillFrontmatterParser {
 
     final descriptionNode = parsedYaml['description'];
     final description = descriptionNode is String ? descriptionNode : '';
+    final nameNode = parsedYaml['name'];
+    final name = nameNode is String && nameNode.trim().isNotEmpty
+        ? nameNode.trim()
+        : null;
+    final triggerPatterns = _parseStringList(
+      parsedYaml['trigger_patterns'],
+      errorMessage: 'invalid_trigger_patterns',
+      normalize: true,
+    );
 
     return ParsedSkillMarkdown(
       manifest: SkillManifest(
         toolsRequired: toolsRequired,
+        name: name,
         description: description,
+        triggerPatterns: triggerPatterns,
       ),
       body: body,
     );
+  }
+
+  List<String> _parseStringList(
+    Object? rawValue, {
+    required String errorMessage,
+    bool normalize = false,
+  }) {
+    if (rawValue == null) {
+      return const <String>[];
+    }
+    if (rawValue is! YamlList) {
+      throw SkillParseException(errorMessage);
+    }
+
+    final values = <String>[];
+    for (final entry in rawValue) {
+      if (entry is! String) {
+        throw SkillParseException(errorMessage);
+      }
+      final value = normalize ? _normalizePattern(entry) : entry.trim();
+      if (value.isEmpty) {
+        continue;
+      }
+      values.add(value);
+    }
+    return List<String>.unmodifiable(values);
+  }
+
+  String _normalizePattern(String pattern) {
+    final normalized = pattern.trim().toLowerCase();
+    return normalized.replaceAll(RegExp(r'\s+'), ' ');
   }
 
   int? _findClosingDelimiter(String markdown) {

@@ -35,10 +35,6 @@ class AndroidScheduleSchedulerBackend implements ScheduleSchedulerBackend {
 
   @override
   Future<void> registerSchedule(TriggerConfig trigger) async {
-    final spec = trigger.scheduleSpec;
-    if (spec == null) {
-      throw StateError('schedule trigger missing scheduleSpec');
-    }
     if (!isSupported) {
       return;
     }
@@ -56,8 +52,10 @@ class AndroidScheduleSchedulerBackend implements ScheduleSchedulerBackend {
       'name': trigger.name,
       'type': trigger.type.name,
       'priority': trigger.priority.name,
-      'hour': spec.hour,
-      'minute': spec.minute,
+      if (trigger.scheduleSpec != null) 'hour': trigger.scheduleSpec!.hour,
+      if (trigger.scheduleSpec != null) 'minute': trigger.scheduleSpec!.minute,
+      if (trigger.cronSpec != null)
+        'cronExpression': trigger.cronSpec!.expression,
       'payload': Map<String, Object?>.from(trigger.payload),
       'requiresUserAttention': trigger.requiresUserAttention,
       'isExpensive': trigger.isExpensive,

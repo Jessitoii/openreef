@@ -12,6 +12,7 @@ void main() {
     directoryPath: '/skills/calendar_helper',
     skillMarkdownPath: '/skills/calendar_helper/SKILL.md',
     rawContent: '---\ntools_required: [calendar_read]\n---\n# Calendar Helper\n',
+    bodyContent: '# Calendar Helper\n',
     manifest: SkillManifest(toolsRequired: <String>['calendar_read']),
   );
 

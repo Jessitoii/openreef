@@ -1,33 +1,30 @@
 import 'package:flutter/foundation.dart';
-import 'package:openreef/context/context_assembler.dart';
-import 'package:openreef/skills/skill.dart';
-import 'package:openreef/skills/skill_registry.dart';
+import 'package:openreef/skills/skill_runtime_catalog.dart';
+import 'package:openreef/skills/skill_runtime_snapshot.dart';
 
 class SkillRegistryController {
   SkillRegistryController({
-    required SkillRegistry registry,
-  }) : _registry = registry;
-
-  final SkillRegistry _registry;
-  final ValueNotifier<List<Skill>> _skills =
-      ValueNotifier<List<Skill>>(const <Skill>[]);
-
-  ValueListenable<List<Skill>> get skills => _skills;
-
-  Future<void> reload() async {
-    final discovered = await _registry.discoverSkills();
-    _skills.value = discovered;
+    required SkillRuntimeCatalog catalog,
+  }) : _catalog = catalog {
+    _catalog.addListener(_syncSnapshots);
+    _syncSnapshots();
   }
 
-  List<SkillDefinition> toSkillDefinitions() {
-    return _skills.value
-        .map(
-          (skill) => SkillDefinition(
-            id: skill.id,
-            content: skill.rawContent,
-            triggerPatterns: const <String>[],
-          ),
-        )
-        .toList(growable: false);
+  final SkillRuntimeCatalog _catalog;
+  final ValueNotifier<List<SkillRuntimeSnapshot>> _skills =
+      ValueNotifier<List<SkillRuntimeSnapshot>>(const <SkillRuntimeSnapshot>[]);
+
+  ValueListenable<List<SkillRuntimeSnapshot>> get skills => _skills;
+
+  Future<void> reload() async {
+    await _catalog.reload();
+  }
+
+  Future<void> setSkillEnabled(String skillId, bool enabled) {
+    return _catalog.setSkillEnabled(skillId, enabled);
+  }
+
+  void _syncSnapshots() {
+    _skills.value = _catalog.snapshots;
   }
 }

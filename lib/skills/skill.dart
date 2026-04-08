@@ -7,6 +7,7 @@ class Skill {
     required this.directoryPath,
     required this.skillMarkdownPath,
     required this.rawContent,
+    required this.bodyContent,
     required this.manifest,
   });
 
@@ -15,5 +16,6 @@ class Skill {
   final String directoryPath;
   final String skillMarkdownPath;
   final String rawContent;
+  final String bodyContent;
   final SkillManifest manifest;
 }

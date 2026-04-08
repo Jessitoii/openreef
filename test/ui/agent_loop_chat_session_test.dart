@@ -1,24 +1,12 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:openreef/agent/agent_loop.dart';
-import 'package:openreef/agent/agent_model_adapter.dart';
+import 'package:openreef/agent/agent_task_executor.dart';
 import 'package:openreef/agent/agent_models.dart';
-import 'package:openreef/agent/agent_notifier.dart';
+import 'package:openreef/agent/execution_request.dart';
 import 'package:openreef/agent/mailbox.dart';
-import 'package:openreef/agent/tool_router.dart';
-import 'package:openreef/context/compactor.dart';
-import 'package:openreef/context/context_assembler.dart';
-import 'package:openreef/memory/memory_former.dart';
-import 'package:openreef/memory/memory_index.dart';
-import 'package:openreef/memory/memory_storage.dart';
-import 'package:openreef/memory/semantic_text_embedder.dart';
-import 'package:openreef/memory/sqlite_memory_storage_backend.dart';
 import 'package:openreef/ui/agent_loop_chat_session.dart';
 import 'package:openreef/ui/chat_session_port.dart';
-import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
-  setUpAll(sqfliteFfiInit);
-
   test(
     'controller exposes pending approval and resolves it through approve',
     () async {
@@ -156,131 +144,95 @@ void main() {
       );
     },
   );
+
+  test(
+    'system assistant injection appends assistant output without user turn',
+    () async {
+      final executor = _RecordingTaskExecutor(
+        result: const AgentLoopResult(
+          sessionResult: SessionResult.completed,
+          text: 'done',
+          reason: 'completed',
+        ),
+      );
+      final session = AgentLoopChatSession(taskExecutor: executor);
+
+      session.injectSystemAssistantEntry('Trigger output ready.');
+
+      expect(session.messages.last.sender, ChatMessageSender.assistant);
+      expect(session.messages.last.text, 'Trigger output ready.');
+      expect(
+        session.messages.where((message) => message.sender == ChatMessageSender.user),
+        isEmpty,
+      );
+      expect(executor.requests, isEmpty);
+    },
+  );
+
+  test('chat execution sink appends directly without recursive send', () async {
+    final executor = _RecordingTaskExecutor(
+      result: const AgentLoopResult(
+        sessionResult: SessionResult.completed,
+        text: 'done',
+        reason: 'completed',
+      ),
+    );
+    final session = AgentLoopChatSession(taskExecutor: executor);
+
+    await session.appendExecutionResult(
+      ExecutionRequest.fromTrigger(
+        sessionKey: 'system_main',
+        prompt: 'Run background task.',
+        source: ExecutionSource.trigger,
+      ),
+      const AgentLoopResult(
+        sessionResult: SessionResult.completed,
+        text: 'Background finished.',
+        reason: 'completed',
+      ),
+    );
+
+    expect(
+      session.messages.last.text,
+      'Background finished.',
+    );
+    expect(
+      session.messages.where((message) => message.sender == ChatMessageSender.user),
+      isEmpty,
+    );
+    expect(executor.requests, isEmpty);
+  });
 }
 
 Future<AgentLoopChatSession> _runSessionWithResult(
   AgentLoopResult result,
 ) async {
-  final storage = MemoryStorage(
-    SqliteMemoryStorageBackend(
-      path: inMemoryDatabasePath,
-      databaseFactory: databaseFactoryFfi,
-    ),
-  );
-  await storage.initialize();
-  final memoryIndex = MemoryIndex(storage);
-    final memoryFormer = MemoryFormer(
-      storage: storage,
-      memoryIndex: memoryIndex,
-      embedder: const _FixedSemanticEmbedder(<double>[1, 0, 0]),
-    );
-  final assembler = ContextAssembler(
-    memoryIndex: memoryIndex,
-    embedder: const _FixedEmbedder(<double>[1, 0, 0, 0, 0, 0, 0]),
-    toolCatalog: InMemoryToolCatalog(<ToolDefinition>[
-      ToolDefinition(
-        id: 'session_status',
-        embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
-        execute: (call) async => const ToolResult.success('ok'),
-      ),
-    ]),
-    skillCatalog: InMemorySkillCatalog(const <SkillDefinition>[]),
-  );
+  final executor = _RecordingTaskExecutor(result: result);
   final session = AgentLoopChatSession(
-    agentLoop: _StubAgentLoop(
-      result: result,
-      contextAssembler: assembler,
-      memoryFormer: memoryFormer,
-    ),
+    taskExecutor: executor,
   );
-  addTearDown(storage.close);
+  executor.chatSink = session;
   await session.sendMessage('hello');
   return session;
 }
 
-class _FixedEmbedder implements IntentEmbedder {
-  const _FixedEmbedder(this._embedding);
-
-  final List<double> _embedding;
-
-  @override
-  Future<List<double>> embed(String text) async => _embedding;
-}
-
-class _FixedSemanticEmbedder implements SemanticTextEmbedder {
-  const _FixedSemanticEmbedder(this._embedding);
-
-  final List<double> _embedding;
-
-  @override
-  String get modelId => 'test-embedder';
-
-  @override
-  Future<List<double>> embedDocument(String text) async => _embedding;
-
-  @override
-  Future<List<double>> embedQuery(String text) async => _embedding;
-}
-
-class _StubAgentLoop extends AgentLoop {
-  _StubAgentLoop({
-    required this.result,
-    required super.contextAssembler,
-    required super.memoryFormer,
-  }) : super(
-         compactor: const ReefCompactor(summarizer: _StaticSummarizer()),
-         modelAdapter: const _UnusedModelAdapter(),
-         toolRouter: ToolRouter(
-           catalog: InMemoryToolCatalog(<ToolDefinition>[
-             ToolDefinition(
-               id: 'session_status',
-               embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
-               execute: _okExecute,
-             ),
-           ]),
-           mailbox: AgentMailbox(),
-           confirmToolCall: (call) async => true,
-         ),
-         notifier: const NoopAgentNotifier(),
-       );
+class _RecordingTaskExecutor implements AgentTaskExecutor {
+  _RecordingTaskExecutor({required this.result});
 
   final AgentLoopResult result;
+  final List<ExecutionRequest> requests = <ExecutionRequest>[];
+  ChatExecutionSink? chatSink;
 
   @override
-  Future<AgentLoopResult> run(
-    String userMessage, {
-    required String sessionKey,
-    List<AgentMessage> conversationHistory = const <AgentMessage>[],
-    int modelContextWindow = 8192,
-    bool compactRequested = false,
-    List<String> recentFiles = const <String>[],
-  }) async {
+  Future<AgentLoopResult> execute(ExecutionRequest request) async {
+    requests.add(request);
+    await chatSink?.appendExecutionResult(request, result);
     return result;
   }
-}
-
-class _UnusedModelAdapter implements AgentModelAdapter {
-  const _UnusedModelAdapter();
 
   @override
-  Future<AgentResponse> generate(
-    AssembleResult context, {
-    required int maxTokens,
-  }) {
-    throw UnimplementedError('unused in stub loop');
+  Future<AgentTaskExecutionResult> executeTask(AgentTaskRequest request) async {
+    final loopResult = await execute(request.toExecutionRequest());
+    return AgentTaskExecutionResult.fromLoopResult(loopResult);
   }
-}
-
-class _StaticSummarizer implements CompactionSummarizer {
-  const _StaticSummarizer();
-
-  @override
-  Future<String> summarize(
-    List<AgentMessage> messages, {
-    required int maxTokens,
-  }) async => 'summary';
-}
-
-Future<ToolResult> _okExecute(ToolCall call) async {
-  return const ToolResult.success('ok');
 }

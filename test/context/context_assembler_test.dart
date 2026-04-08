@@ -83,9 +83,32 @@ void main() {
 
     final ids = selected.map((tool) => tool.id).toList(growable: false);
     expect(ids, contains('session_status'));
+    expect(ids, contains('memory_save'));
     expect(ids, contains('memory_search'));
     expect(ids, contains('notify'));
     expect(selected.length, lessThanOrEqualTo(8));
+  });
+
+  test('calendar intent pulls in trigger tools', () async {
+    final assembler = ContextAssembler(
+      memoryIndex: memoryIndex,
+      embedder: const _FixedEmbedder(<double>[1, 0, 0, 0, 0, 0, 0]),
+      toolCatalog: InMemoryToolCatalog(_toolFixtures),
+      skillCatalog: InMemorySkillCatalog(const <SkillDefinition>[]),
+    );
+
+    final selected = await assembler.selectTools(
+      userMessage: 'set a daily reminder for 8am',
+      intentSignal: const IntentSignal(
+        primary: 'calendar',
+        secondary: 'general',
+        confidence: 0.9,
+      ),
+    );
+
+    final ids = selected.map((tool) => tool.id).toSet();
+    expect(ids, contains('trigger_create'));
+    expect(ids, contains('alarm_set'));
   });
 
   test('skill gating injects at most 2 matching skills', () async {
@@ -97,17 +120,23 @@ void main() {
         const <SkillDefinition>[
           SkillDefinition(
             id: 'sleep_tracker',
+            displayName: 'sleep_tracker',
             content: 'Track sleep',
+            toolsRequired: <String>['notify'],
             triggerPatterns: <String>['sleep'],
           ),
           SkillDefinition(
             id: 'medication_reminder',
+            displayName: 'medication_reminder',
             content: 'Track pills',
+            toolsRequired: <String>['notify'],
             triggerPatterns: <String>['pill'],
           ),
           SkillDefinition(
             id: 'wellness_journal',
+            displayName: 'wellness_journal',
             content: 'Track health',
+            toolsRequired: <String>['notify'],
             triggerPatterns: <String>['sleep', 'pill'],
           ),
         ],
@@ -117,6 +146,45 @@ void main() {
     final gated = assembler.gateSkills('sleep pill reminder');
 
     expect(gated.length, 2);
+  });
+
+  test('skill gating ignores runtime-ineligible skills and injects eligible matches into context', () async {
+    final assembler = ContextAssembler(
+      memoryIndex: memoryIndex,
+      embedder: const _FixedEmbedder(<double>[0, 0, 1, 0, 0, 0, 0]),
+      toolCatalog: InMemoryToolCatalog(_toolFixtures),
+      skillCatalog: InMemorySkillCatalog(
+        const <SkillDefinition>[
+          SkillDefinition(
+            id: 'blocked_skill',
+            displayName: 'blocked_skill',
+            content: 'Do not inject',
+            toolsRequired: <String>['calendar_write'],
+            triggerPatterns: <String>['bedtime check'],
+            runtimeEligible: false,
+          ),
+          SkillDefinition(
+            id: 'sleep_tracker',
+            displayName: 'Sleep Tracker',
+            content: 'Use the bedtime checklist before responding.',
+            toolsRequired: <String>['notify'],
+            triggerPatterns: <String>['bedtime check'],
+          ),
+        ],
+      ),
+    );
+
+    final result = await assembler.assemble(
+      sessionKey: 'agent:main',
+      userMessage: 'Please run a bedtime check for tonight.',
+      conversationHistory: const <AgentMessage>[],
+      modelContextWindow: 4096,
+    );
+
+    expect(result.activeSkills.map((skill) => skill.id), <String>['sleep_tracker']);
+    expect(result.toPrompt(), contains('Sleep Tracker'));
+    expect(result.toPrompt(), contains('bedtime checklist'));
+    expect(result.toPrompt(), isNot(contains('Do not inject')));
   });
 
   test('budget allocation uses 60/30/10 split and reserves 1024 output tokens', () async {
@@ -218,6 +286,11 @@ final List<ToolDefinition> _toolFixtures = <ToolDefinition>[
     execute: _noopExecute,
   ),
   ToolDefinition(
+    id: 'memory_save',
+    embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
+    execute: _noopExecute,
+  ),
+  ToolDefinition(
     id: 'notify',
     embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
     execute: _noopExecute,
@@ -229,12 +302,27 @@ final List<ToolDefinition> _toolFixtures = <ToolDefinition>[
     execute: _noopExecute,
   ),
   ToolDefinition(
-    id: 'calendar_read',
+    id: 'trigger_create',
     embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
     execute: _noopExecute,
   ),
   ToolDefinition(
-    id: 'calendar_write',
+    id: 'trigger_list',
+    embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
+    execute: _noopExecute,
+  ),
+  ToolDefinition(
+    id: 'alarm_set',
+    embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
+    execute: _noopExecute,
+  ),
+  ToolDefinition(
+    id: 'file_read',
+    embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
+    execute: _noopExecute,
+  ),
+  ToolDefinition(
+    id: 'file_write',
     embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
     execute: _noopExecute,
   ),

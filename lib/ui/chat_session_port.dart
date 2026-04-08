@@ -113,6 +113,10 @@ abstract class ApprovalCapableChatSession {
   void rejectPendingApproval();
 }
 
+abstract class SystemAssistantInjectableChatSession {
+  void injectSystemAssistantEntry(String text);
+}
+
 extension ChatSessionApprovalState on ChatSessionPort {
   PendingToolApproval? get pendingApprovalOrNull =>
       this is ApprovalCapableChatSession
@@ -128,6 +132,13 @@ extension ChatSessionApprovalState on ChatSessionPort {
   void rejectPendingApprovalIfSupported() {
     if (this is ApprovalCapableChatSession) {
       (this as ApprovalCapableChatSession).rejectPendingApproval();
+    }
+  }
+
+  void injectSystemAssistantEntryIfSupported(String text) {
+    if (this is SystemAssistantInjectableChatSession) {
+      (this as SystemAssistantInjectableChatSession)
+          .injectSystemAssistantEntry(text);
     }
   }
 }

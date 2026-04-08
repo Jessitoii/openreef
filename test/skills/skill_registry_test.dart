@@ -59,9 +59,38 @@ void main() {
     expect(skills, hasLength(1));
     expect(skills.single.id, 'calendar_helper');
     expect(skills.single.name, 'calendar_helper');
+    expect(skills.single.bodyContent, '# Test Skill\n');
     expect(
       skills.single.manifest.toolsRequired,
       <String>['calendar_read', 'notify'],
+    );
+  });
+
+  test('prefers manifest display name and loads trigger patterns', () async {
+    await _createSkillDirectory(
+      root: tempRoot,
+      name: 'sleep_tracker',
+      markdown: '''---
+name: Sleep Tracker
+description: Tracks sleep routines.
+tools_required: [notify]
+trigger_patterns:
+  - bedtime check
+  - sleep reminder
+---
+# Sleep Tracker
+''',
+    );
+
+    final registry = SkillRegistry(rootPaths: <String>[tempRoot.path]);
+    final skills = await registry.discoverSkills();
+
+    expect(skills, hasLength(1));
+    expect(skills.single.id, 'sleep_tracker');
+    expect(skills.single.name, 'Sleep Tracker');
+    expect(
+      skills.single.manifest.triggerPatterns,
+      <String>['bedtime check', 'sleep reminder'],
     );
   });
 }

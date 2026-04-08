@@ -42,10 +42,11 @@ class SkillRegistry {
         discovered.add(
           Skill(
             id: name,
-            name: name,
+            name: parsed.manifest.name ?? name,
             directoryPath: entry.path,
             skillMarkdownPath: skillMarkdownPath,
             rawContent: rawContent,
+            bodyContent: parsed.body,
             manifest: parsed.manifest,
           ),
         );

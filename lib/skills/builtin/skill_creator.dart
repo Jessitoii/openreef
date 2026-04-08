@@ -206,15 +206,19 @@ class SkillCreator {
       intent: session.intent,
       triggers: session.triggers,
     );
-    final toolsRequired = session.toolsRequired.isEmpty
-        ? const <String>['none']
-        : session.toolsRequired;
+    final toolsRequired = session.toolsRequired;
+    final triggerPatterns = _parseTriggerPatterns(session.triggers);
 
     final buffer = StringBuffer()
       ..writeln('---')
       ..writeln('name: $name')
       ..writeln('description: ${_escapeYaml(description)}')
-      ..writeln('tools_required: [${toolsRequired.join(', ')}]')
+      ..writeln(
+        'tools_required: [${toolsRequired.map(_escapeInlineYaml).join(', ')}]',
+      )
+      ..writeln(
+        'trigger_patterns: [${triggerPatterns.map(_escapeInlineYaml).join(', ')}]',
+      )
       ..writeln('---')
       ..writeln()
       ..writeln('# ${_titleCase(session.intent)}')
@@ -319,5 +323,17 @@ class SkillCreator {
   static String _escapeYaml(String value) {
     final escaped = value.replaceAll('"', '\\"');
     return '"$escaped"';
+  }
+
+  static List<String> _parseTriggerPatterns(String rawTriggers) {
+    return rawTriggers
+        .split(RegExp(r'[,;\n]+'))
+        .map((entry) => entry.trim().toLowerCase())
+        .where((entry) => entry.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  static String _escapeInlineYaml(String value) {
+    return '"${value.replaceAll('"', '\\"')}"';
   }
 }

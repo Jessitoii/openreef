@@ -206,6 +206,22 @@ class McpTransportMessage {
   final Map<String, Object?>? jsonRpcMessage;
 }
 
+class McpRuntimeEvent {
+  const McpRuntimeEvent({
+    required this.sourceId,
+    required this.eventName,
+    required this.payload,
+    required this.receivedAt,
+    required this.transportEvent,
+  });
+
+  final String sourceId;
+  final String eventName;
+  final Map<String, Object?> payload;
+  final DateTime receivedAt;
+  final String transportEvent;
+}
+
 enum McpJsonSchemaType {
   object,
   string,
@@ -341,4 +357,51 @@ class McpTool {
   final String name;
   final String description;
   final McpToolInputSchema inputSchema;
+}
+
+class McpToolCallResult {
+  const McpToolCallResult({
+    required this.contentText,
+    this.structuredContent = const <String, Object?>{},
+    this.rawContent = const <Object?>[],
+    this.isError = false,
+  });
+
+  factory McpToolCallResult.fromJson(Map<String, Object?> json) {
+    final rawContent = json['content'];
+    final contentItems = rawContent is List ? List<Object?>.from(rawContent) : const <Object?>[];
+    final textBuffer = StringBuffer();
+
+    for (final item in contentItems) {
+      if (item is! Map) {
+        continue;
+      }
+      final typedItem = item.cast<String, Object?>();
+      if (typedItem['type'] == 'text' && typedItem['text'] is String) {
+        if (textBuffer.isNotEmpty) {
+          textBuffer.writeln();
+        }
+        textBuffer.write(typedItem['text'] as String);
+      }
+    }
+
+    final structuredContent =
+        (json['structuredContent'] as Map?)?.cast<String, Object?>() ??
+        const <String, Object?>{};
+    final contentText = textBuffer.toString().trim();
+
+    return McpToolCallResult(
+      contentText: contentText.isNotEmpty
+          ? contentText
+          : jsonEncode(rawContent ?? structuredContent),
+      structuredContent: structuredContent,
+      rawContent: contentItems,
+      isError: json['isError'] as bool? ?? false,
+    );
+  }
+
+  final String contentText;
+  final Map<String, Object?> structuredContent;
+  final List<Object?> rawContent;
+  final bool isError;
 }

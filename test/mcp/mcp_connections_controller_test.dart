@@ -1,9 +1,11 @@
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:openreef/agent/tool_router.dart';
 import 'package:openreef/mcp/mcp_connection_store.dart';
 import 'package:openreef/mcp/mcp_connections_controller.dart';
 import 'package:openreef/mcp/mcp_models.dart';
+import 'package:openreef/mcp/mcp_runtime_coordinator.dart';
 import 'package:openreef/mcp/mcp_secret_store.dart';
 import 'package:openreef/mcp/mcp_transport.dart';
 import 'package:openreef/memory/memory_record.dart';
@@ -18,6 +20,8 @@ void main() {
   late MemoryStorage storage;
   late InMemoryMcpSecretStore secretStore;
   late McpConnectionStore store;
+  late RuntimeToolCatalog runtimeToolCatalog;
+  late McpRuntimeCoordinator runtimeCoordinator;
   late List<Uri> connectedEndpoints;
 
   setUp(() async {
@@ -29,6 +33,11 @@ void main() {
     );
     await storage.initialize();
     secretStore = InMemoryMcpSecretStore();
+    runtimeToolCatalog = RuntimeToolCatalog();
+    runtimeCoordinator = McpRuntimeCoordinator(
+      toolCatalog: runtimeToolCatalog,
+      embedText: (text) async => const <double>[0, 0, 0, 1, 0, 0, 0],
+    );
     connectedEndpoints = <Uri>[];
     store = McpConnectionStore(
       storage,
@@ -63,6 +72,7 @@ void main() {
 
       final controller = McpConnectionsController(
         store: store,
+        runtimeCoordinator: runtimeCoordinator,
         transportFactory: (endpoint) {
           connectedEndpoints.add(endpoint);
           return _FakeMcpTransport(endpoint);
@@ -84,8 +94,14 @@ void main() {
         (state) => state.endpointId != trustedEndpoint.id,
       );
       expect(trustedState.status, McpConnectionStatus.connected);
+      expect(trustedState.connected, isTrue);
+      expect(trustedState.toolsImportedIntoRuntime, isTrue);
+      expect(trustedState.importedToolCount, 1);
       expect(legacyState.status, McpConnectionStatus.disconnected);
       expect(legacyState.trusted, isFalse);
+      expect(legacyState.saved, isTrue);
+      expect(legacyState.toolsImportedIntoRuntime, isFalse);
+      expect(runtimeToolCatalog.byId('${trustedEndpoint.id}/ping'), isNotNull);
     },
   );
 
@@ -106,6 +122,7 @@ void main() {
 
       final controller = McpConnectionsController(
         store: store,
+        runtimeCoordinator: runtimeCoordinator,
         transportFactory: (endpoint) => _FakeMcpTransport(endpoint),
       );
 
@@ -117,12 +134,14 @@ void main() {
       expect(state.status, McpConnectionStatus.error);
       expect(state.errorMessage, 'manual_secret_reentry_required');
       expect(state.requiresManualSecretEntry, isTrue);
+      expect(state.toolsImportedIntoRuntime, isFalse);
     },
   );
 
   test('rejects unsafe manual endpoint schemes before connect', () async {
     final controller = McpConnectionsController(
       store: store,
+      runtimeCoordinator: runtimeCoordinator,
       transportFactory: (endpoint) => _FakeMcpTransport(endpoint),
     );
 
@@ -131,6 +150,52 @@ void main() {
     final state = controller.connections.value.single;
     expect(state.status, McpConnectionStatus.error);
     expect(state.errorMessage, contains('unsafe_endpoint_scheme'));
+  });
+
+  test('disconnect removes imported MCP tools from runtime catalog', () async {
+    final controller = McpConnectionsController(
+      store: store,
+      runtimeCoordinator: runtimeCoordinator,
+      transportFactory: (endpoint) => _FakeMcpTransport(endpoint),
+    );
+
+    await controller.connect('https://example.com/sse', persist: false);
+    final state = controller.connections.value.single;
+
+    expect(state.toolsImportedIntoRuntime, isTrue);
+    expect(runtimeToolCatalog.listTools(), isNotEmpty);
+
+    await controller.disconnect(state.url);
+
+    expect(runtimeToolCatalog.listTools(), isEmpty);
+    expect(controller.connections.value.single.toolsImportedIntoRuntime, isFalse);
+  });
+
+  test('surfaces non-endpoint SSE messages as runtime events', () async {
+    late _FakeMcpTransport transport;
+    final controller = McpConnectionsController(
+      store: store,
+      runtimeCoordinator: runtimeCoordinator,
+      transportFactory: (endpoint) {
+        transport = _FakeMcpTransport(endpoint);
+        return transport;
+      },
+    );
+
+    await controller.connect('https://example.com/sse', persist: false);
+
+    final eventFuture = runtimeCoordinator.events.first;
+    transport.emit(
+      McpTransportMessage.fromRaw(
+        event: 'message',
+        data:
+            '{"jsonrpc":"2.0","method":"notifications/github.pr_merged","params":{"repo":"openreef"}}',
+      ),
+    );
+
+    final event = await eventFuture;
+    expect(event.eventName, 'notifications/github.pr_merged');
+    expect(event.payload['method'], 'notifications/github.pr_merged');
   });
 }
 
@@ -150,6 +215,10 @@ class _FakeMcpTransport implements McpTransport {
     _messages.add(
       McpTransportMessage(event: 'endpoint', data: endpoint.toString()),
     );
+  }
+
+  void emit(McpTransportMessage message) {
+    _messages.add(message);
   }
 
   @override

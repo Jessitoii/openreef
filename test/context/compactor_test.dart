@@ -64,7 +64,12 @@ void main() {
       _buildTurns(6),
       recentFiles: const <String>['lib/agent/agent_loop.dart'],
       activeSkills: const <SkillDefinition>[
-        SkillDefinition(id: 'skill-1', content: 'skill content'),
+        SkillDefinition(
+          id: 'skill-1',
+          displayName: 'skill-1',
+          content: 'skill content',
+          toolsRequired: <String>[],
+        ),
       ],
       compactRequested: true,
     );

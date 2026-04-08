@@ -97,6 +97,7 @@ class ToolCall {
 enum ToolResultStatus {
   success,
   rejected,
+  failure,
 }
 
 class ToolResult {
@@ -116,20 +117,29 @@ class ToolResult {
     this.metadata = const <String, Object?>{},
   }) : status = ToolResultStatus.rejected;
 
+  const ToolResult.failure(
+    this.content, {
+    this.metadata = const <String, Object?>{},
+  }) : status = ToolResultStatus.failure;
+
   final ToolResultStatus status;
   final String content;
   final Map<String, Object?> metadata;
 
   bool get isRejected => status == ToolResultStatus.rejected;
+  bool get isFailure => status == ToolResultStatus.failure;
+  bool get isError => isRejected || isFailure;
 
   String toContextString() => content;
 
   factory ToolResult.fromMap(Map<String, Object?> map) {
     final rawMetadata = map['metadata'];
     return ToolResult(
-      status: map['status'] == 'rejected'
-          ? ToolResultStatus.rejected
-          : ToolResultStatus.success,
+      status: switch (map['status']) {
+        'rejected' => ToolResultStatus.rejected,
+        'failure' => ToolResultStatus.failure,
+        _ => ToolResultStatus.success,
+      },
       content: map['content'] as String? ?? '',
       metadata: rawMetadata is Map<String, Object?>
           ? rawMetadata
@@ -144,6 +154,7 @@ class ToolResult {
       'status': switch (status) {
         ToolResultStatus.success => 'success',
         ToolResultStatus.rejected => 'rejected',
+        ToolResultStatus.failure => 'failure',
       },
       'content': content,
       'metadata': metadata,
@@ -176,11 +187,13 @@ class AgentLoopResult {
     required this.sessionResult,
     required this.text,
     this.reason,
+    this.toolsUsed = const <String>[],
   });
 
   final SessionResult sessionResult;
   final String text;
   final String? reason;
+  final List<String> toolsUsed;
 }
 
 class AgentResponseParser {
