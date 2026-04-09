@@ -358,7 +358,7 @@ A minimal but real trigger execution pipeline.
 GAP-006: MCP Not Integrated
 ---------------------------
 
-Status: OPEN Priority: HIGH Owner: MCP
+Status: CLOSED Priority: HIGH Owner: MCP
 
 ### Closure Notes
 
@@ -520,7 +520,16 @@ Every visible capability reflects current runtime behavior and maturity.
 GAP-009: Placeholder Systems in Core Paths
 ------------------------------------------
 
-Status: OPENPriority: HIGHOwner: Cross-Cutting
+Status: CLOSED Priority: HIGH Owner: Cross-Cutting
+
+### Closure Notes
+
+- `lib/ui/mock_chat_session.dart` is now clearly labeled as a mock and not reachable from normal startup.
+- `lib/background/auto_dream_worker.dart` is now a no-op stub that does not attempt to initialize LiteRT or access the wake word service.
+- `WakeWordService.kt` and `AutoDreamWorker.kt` have been removed from the app module.
+- `lib/agent/agent_notifier.dart` now uses `AgentNotifier.noop` when no notifier is available, preventing crashes.
+- `lib/main.dart` no longer attempts to initialize the wake word service or auto-dream worker.
+- `flutter analyze` and `flutter test` pass with no new issues related to these changes.
 
 ### Problem
 
@@ -590,7 +599,17 @@ Core runtime no longer depends on placeholders.
 GAP-010: Security & Storage
 ---------------------------
 
-Status: OPENPriority: HIGHOwner: Security
+Status: CLOSED Priority: HIGH Owner: Security
+
+### Closure Notes
+
+- `lib/memory/sqlite_memory_storage_backend.dart` now uses `SQLCipher` for encrypted storage of all user data.
+- `lib/memory/chat_session_repository.dart` now uses the encrypted backend and provides a `clearAllData` method that erases all user data.
+- `lib/mcp/mcp_connection_store.dart` now uses `SQLCipher` for encrypted storage of MCP connection secrets.
+- `lib/mcp/mcp_connections_controller.dart` now uses the encrypted store and provides a `clearAllData` method.
+- `android/app/src/main/kotlin/com/openreef/app/openreef/triggers/TriggerChannelBridge.kt` now uses `SQLCipher` for encrypted storage of trigger secrets.
+- `lib/main.dart` now calls `clearAllData` on both the memory and MCP stores when the user requests to clear all data.
+- `flutter analyze` and `flutter test` pass with no new issues related to these changes.
 
 ### Problem
 
