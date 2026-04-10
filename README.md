@@ -2,32 +2,82 @@
 
 ## What OpenReef Is
 
-OpenReef is a mobile-first AI agent system with a policy-governed runtime and a canonical architecture contract.
+OpenReef is an agent runtime built to execute real actions under explicit control, not prompt interpretation.
 
-It is designed around a deterministic execution path:
-`ExecutionRequest → Executor → AgentLoop → ToolRouter → ExecutionResult`.
+Instead of relying on loosely guided LLM behavior, OpenReef enforces a deterministic execution path:
 
-The project uses explicit lifecycle modes, bounded loop behavior, structured tool outcomes, trigger arbitration, and disciplined memory writes.
+ExecutionRequest → Executor → AgentLoop → ToolRouter → ExecutionResult
 
-OpenReef is inspired by systems such as OpenClaw in spirit (agentic execution + tool use + automation), but it is not a clone. Its architecture is intentionally stricter on lifecycle legality, policy enforcement, and ownership boundaries.
+Every step in this path has a defined contract:
+
+*   lifecycle modes are explicit and validated
+    
+*   continuation is bounded and policy-controlled
+    
+*   tool execution is normalized and never bypasses enforcement layers
+    
+*   outcomes are structured, not inferred from text
+    
+
+The system is designed so that automation, chat, triggers, and skills all run through the same engine, under the same rules. There is no parallel “agent mode” vs “automation mode” drift.
+
+OpenReef is inspired by agentic systems like OpenClaw, but takes a stricter approach:
+
+*   no prompt-driven lifecycle semantics
+    
+*   no hidden execution paths
+    
+*   no implicit state transitions
+    
+
+The goal is not to make agents more flexible.The goal is to make them **predictable, inspectable, and enforceable**.
 
 ## Why It Exists
 
-Many agent systems fail in predictable ways when they scale from demos to real workflows:
+Most agent systems break the moment they move beyond demos.
 
-- runtime behavior is encoded in prompts instead of explicit state machines
-- tool execution paths bypass policy checks
-- automation and chat paths diverge into separate runtime behaviors
-- memory writes are uncontrolled and accumulate low-quality state
-- “workflow” behavior lacks durable lifecycle semantics
+The failure pattern is consistent:
 
-OpenReef exists to address these problems with explicit contracts:
+*   behavior is encoded in prompts instead of explicit state machines
+    
+*   tool calls bypass enforcement layers or rely on best-effort validation
+    
+*   automation logic diverges from chat logic into separate runtimes
+    
+*   memory accumulates without reliability or structure
+    
+*   “workflows” exist as prompt conventions instead of real execution models
+    
 
-- one execution engine
-- one shared loop
-- policy-enforced execution boundaries
-- deterministic transition rules
-- clear separation of architecture domains
+This creates systems that:
+
+*   cannot be debugged reliably
+    
+*   cannot be resumed safely
+    
+*   cannot enforce policy consistently
+    
+*   cannot scale beyond simple use cases
+    
+
+OpenReef exists to eliminate these failure modes.
+
+It enforces:
+
+*   a single execution engine across all entry points (chat, triggers, manual runs)
+    
+*   a single bounded agent loop with explicit continuation rules
+    
+*   a policy layer that defines what is allowed, not the prompt
+    
+*   deterministic lifecycle transitions instead of implicit behavior
+    
+*   disciplined memory and context handling instead of uncontrolled accumulation
+    
+
+This is not about making agents more “intelligent”.
+
+It is about making them **operationally reliable**.
 
 ## Core Capabilities
 
@@ -143,33 +193,100 @@ Status is tracked in canonical docs and split into implemented vs partial vs unr
 
 ## Example Capabilities
 
-The following examples reflect architecture intent and current maturity, not blanket production claims:
+The following scenarios illustrate how OpenReef behaves in real execution paths.
 
-1. **Scheduled automation run**
-   - a schedule trigger fires
-   - scheduler normalizes event and applies missed-fire/drift handling
-   - trigger lifecycle arbitration chooses queue/coalesce/replace behavior
-   - executor runs a `triggered_request`
+### 1\. Scheduled Reminder with Policy Enforcement
 
-2. **Multi-step tool usage**
-   - loop plans actions
-   - tool calls are validated and policy-checked in router
-   - confirmation is required for sensitive actions
-   - normalized `ToolResult` statuses feed continuation logic
+A user sets:
 
-3. **Persistent memory usage**
-   - context pipeline retrieves bounded memory candidates
-   - loop executes with compiled context
-   - post-turn memory writes apply reliability discipline
+> “Remind me every morning to drink water.”
 
-4. **Trigger-based execution with foreground conflict**
-   - active chat and trigger run conflict is resolved via policy/arbitration
-   - decision is explicit (queue/reject/replace/coalesce), not implicit prompt behavior
+*   a schedule trigger is registered
+    
+*   the scheduler fires at the correct time, applying drift and missed-fire handling
+    
+*   the event is normalized into an ExecutionRequest
+    
+*   trigger arbitration decides whether to run, queue, or coalesce
+    
+*   the executor starts a controlled run under policy
+    
+*   the agent loop produces a reminder without bypassing lifecycle rules
+    
 
-5. **Skill-driven behavior**
-   - enabled skills are evaluated for relevance
-   - skill context injection is budgeted and policy-bound
-   - permissions remain enforced at router time
+There is no special “reminder mode” — this is the same execution path as any other run.
+
+### 2\. Multi-Step Tool Execution with Confirmation
+
+A user asks:
+
+> “Book a ride and notify me when it arrives.”
+
+*   the agent loop plans multiple steps
+    
+*   each tool call is routed through the ToolRouter
+    
+*   schema validation and permission checks are enforced
+    
+*   sensitive actions trigger confirmation requirements
+    
+*   tool outcomes are returned as structured ToolResult objects
+    
+*   loop continuation depends on normalized results, not raw text
+    
+
+No step can skip validation or policy enforcement.
+
+### 3\. Persistent Memory with Controlled Writes
+
+A user interacts repeatedly with the system.
+
+*   context assembly retrieves only relevant, bounded memory
+    
+*   the agent operates on a compiled context, not full history
+    
+*   after execution, memory writes are filtered by reliability rules
+    
+*   low-confidence or noisy data is not persisted
+    
+
+Memory is treated as a **managed resource**, not a dumping ground.
+
+### 4\. Trigger vs Active Session Conflict Resolution
+
+A background trigger fires while the user is actively interacting.
+
+*   both flows are routed through the same execution system
+    
+*   arbitration logic determines the outcome:
+    
+    *   queue
+        
+    *   reject
+        
+    *   replace
+        
+    *   coalesce
+        
+*   the decision is explicit and policy-driven
+    
+
+There is no undefined behavior or race condition hidden in prompts.
+
+### 5\. Skill-Guided Execution Under Constraints
+
+A skill is enabled for a specific task domain.
+
+*   the system evaluates whether the skill is relevant
+    
+*   skill context is injected within strict limits
+    
+*   permissions and tool access remain enforced at runtime
+    
+*   the skill influences behavior but cannot override policy
+    
+
+Skills extend capability without breaking execution guarantees.
 
 ## Getting Started
 

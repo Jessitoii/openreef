@@ -136,53 +136,88 @@ Deterministic, policy-based context assembly with clear inputs/outputs.
 
 ---
 
-GAP-015: System lacks a unified execution model for ephemeral and persistent agent tasks
-Status: OPEN
-Severity: HIGH
-Area: Execution Runtime / Workflow / Automation
+GAP-015: Missing unified execution lifecycle model for ephemeral and persistent tasks
+
+### Status
+Open
+
+### Severity
+High
+
+### Area
+Execution Runtime / Workflow / Automation
 
 ### Current State
-OpenReef currently supports conversational agent loops, trigger-based execution, and tool routing, but it does not have a clean unified execution model that separates short-lived requests from persisted resumable runs.
 
-As a result, immediate chat tasks, trigger-driven tasks, and future workflow-like behaviors are not modeled under a consistent lifecycle abstraction.
+OpenReef has an agent loop, tool routing, and trigger-based execution, but lacks a unified execution lifecycle model.
+
+Currently:
+- chat executions are ephemeral and implicit
+- trigger executions are partially modeled
+- automation behavior is simulated through prompt-driven logic
+
+There is no explicit distinction between:
+- short-lived execution
+- persisted, resumable execution
+
+There is also no consistent representation of:
+- run state
+- suspend/resume behavior
+- execution policy
+- lifecycle transitions
 
 ### Why This Matters
-Without an explicit execution lifecycle model:
 
-- short-lived chat executions and persistent automations blur together
-- workflow behavior becomes prompt-driven instead of state-driven
-- suspend/resume semantics remain unclear
-- execution policy becomes hard to define consistently
-- future automation features risk being bolted onto the loop in an ad hoc way
+Without an explicit lifecycle model:
+
+- automation becomes prompt-driven instead of state-driven
+- suspend/resume behavior is unclear and fragile
+- execution policy (retry, timeout, duplicate control) is inconsistent
+- chat and automation semantics blur together
+- debugging and replay are weak or impossible
+- future automation features will be bolted onto the loop ad hoc
 
 ### Target State
-The system should use a single execution engine and loop, while preserving explicit lifecycle distinctions between ephemeral requests and persistent/resumable runs.
 
-Execution behavior should be policy-driven, and long-lived automation should be represented through persisted run state rather than implicit prompt state.
+The system uses a **single execution engine and loop**, while explicitly modeling execution lifecycle.
+
+Execution must be:
+
+- classified into lifecycle-based modes (ephemeral, persistent, resume, triggered)
+- governed by explicit execution policy
+- backed by persisted run state for long-lived tasks
+- unified across chat, triggers, and resumable execution paths
+
+Lifecycle semantics must be represented in state, not inferred from prompts.
 
 ### In Scope
+
 - unified execution request model
-- explicit execution mode classification
+- execution mode classification
 - policy-driven execution behavior
-- persisted run state for long-lived tasks
-- shared execution loop across chat, trigger, and resumable execution paths
+- persisted run state for long-lived execution
+- suspend/resume lifecycle modeling
+- shared execution loop across all execution paths
 
 ### Out of Scope
+
 - DAG orchestration
-- distributed workflow workers
-- arbitrary nested workflows
-- parallel branch execution
-- full BPM-style engine complexity
+- distributed workflow engine
+- parallel execution graphs
+- nested workflows
+- full BPM system
 
 ### Closure Criteria
+
 This gap is closed when:
 
-- the system supports explicit execution modes for ephemeral and persistent execution
-- chat, trigger, and resumable execution all enter through the same executor
-- the runtime uses a shared execution loop with policy-driven behavior
+- execution is classified into explicit lifecycle modes
+- all execution paths (chat, trigger, resume) use the same executor
+- a shared execution loop is used across all modes
+- execution behavior is governed by explicit policy (not prompt logic)
 - persistent runs have explicit stored run state and lifecycle status
-- suspend/resume behavior is modeled explicitly rather than inferred from prompts
-- execution outcomes are inspectable as structured runtime results
+- suspend/resume behavior is modeled via state transitions
+- execution results are structured and inspectable (not just chat output)
 
 ---
 
