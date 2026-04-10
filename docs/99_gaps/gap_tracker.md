@@ -137,15 +137,9 @@ Deterministic, policy-based context assembly with clear inputs/outputs.
 ---
 
 GAP-015: Missing unified execution lifecycle model for ephemeral and persistent tasks
-
-### Status
-Open
-
-### Severity
-High
-
-### Area
-Execution Runtime / Workflow / Automation
+Status: OPEN
+Severity: HIGH
+Area: Execution Runtime / Workflow / Automation
 
 ### Current State
 

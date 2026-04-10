@@ -11,3 +11,8 @@ These are known partial-coverage areas with accepted direction but incomplete im
    - Why gap: target pipeline defined; end-to-end production validation pending.
 4. Full context compiler rollout milestones remain in-progress.
    - Why gap: compiler contract exists; staged migration from heuristic assembly still incomplete.
+
+5. Scheduler health and drift observability coverage is incomplete.
+   - Why gap: scheduler contract is defined, but runtime instrumentation coverage is not complete.
+6. Session projection conflict-resolution handling needs full runtime coverage.
+   - Why gap: projection rules are documented, but stale-event ordering handling is not fully implemented.
