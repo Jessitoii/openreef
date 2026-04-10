@@ -1,40 +1,79 @@
 # Memory Architecture
 
 ## Purpose
-Define memory store taxonomy, ownership boundaries, retrieval merge strategy, and degradation behavior.
+Define memory store taxonomy, ownership boundaries, retrieval merge strategy, index roles, and degraded behavior.
+
+## Scope
+In scope:
+- logical memory stores
+- retrieval and merge pipeline
+- pointer/index boundaries
+- failure/degradation handling
+
+Out of scope:
+- storage engine implementation details
+
+## Responsibilities
+- provide high-quality candidates for context assembly.
+- preserve durable memory with provenance references.
+- isolate lightweight index navigation from semantic payload ownership.
+
+## Core Concepts
+- semantic store and index are complementary, not interchangeable.
+- retrieval is multi-source merge + ranking.
+- degraded operation remains explicit and auditable.
 
 ## Store Taxonomy
-- **Session short-term store**: recent interaction state for active session continuity.
-- **Long-term semantic store**: durable facts/episodes approved by write discipline.
-- **Pointer/index store**: lightweight routing metadata for fast candidate lookup.
-- **Run audit references**: links to tool outcomes and transition logs used for provenance.
+- **Short-term/session store**: recent interaction continuity for active sessions.
+- **Long-term semantic store**: durable facts/episodes accepted by write discipline.
+- **Pointer/index store**: lightweight keys, anchors, and recency metadata.
+- **Run/audit reference store**: links to tool/run artifacts used for provenance.
 
-## Ownership Rules
-- `lib/memory/` owns retrieval and persistence behavior.
-- `lib/context/` consumes retrieval outputs; it does not own memory durability decisions.
-- Pointer/index updates are owned by memory services, not UI or loop logic.
+## Core Data Models
+### MemoryRecord
+- `memoryId`, `type`, `contentRef`, `importance`, `reliability`, `createdAt`, `updatedAt`
 
-## Pointer/Index Boundaries
-- Pointer/index is discovery metadata, not authoritative fact content.
-- Pointer/index entries may reference semantic records but cannot replace them.
-- Pointer/index failures degrade candidate discovery only; they must not corrupt semantic store.
+### MemoryPointer
+- `pointerId`, `memoryId`, `indexKey`, `scoreHints`, `lastAccessedAt`
+
+### RetrievalQuery
+- `queryId`, `sourceRequestId`, `filters`, `limit`, `mode`, `timestamp`
+
+### RetrievalResult
+- `queryId`, `candidateRefs`, `rankingTrace`, `degradedMode?`
 
 ## Retrieval Merge Strategy
-1. Retrieve candidates from long-term semantic store.
-2. Retrieve relevant short-term/session items.
-3. Merge and de-duplicate by stable semantic key.
-4. Apply recency + relevance + reliability ranking.
-5. Return bounded set for context assembly.
+1. Retrieve long-term semantic candidates.
+2. Retrieve short-term/session candidates.
+3. Retrieve pointer/index expansions.
+4. Merge and de-duplicate on stable semantic key.
+5. Rank by relevance, recency, and reliability.
+6. Return bounded candidate list with ranking trace.
 
 ## Fallback/Degradation Behavior
-- Semantic store unavailable: use short-term + pointer/index fallback and annotate degraded mode.
-- Pointer/index unavailable: use direct semantic queries with latency warning marker.
-- Full memory subsystem unavailable: continue with history-only context and explicit audit marker.
+- semantic store unavailable → use short-term + pointer/index path, set degraded flag.
+- pointer/index unavailable → direct semantic retrieval with latency marker.
+- full memory subsystem unavailable → history-only fallback with explicit degraded mode.
 
 ## Constraints
-- Memory writes remain governed by [Memory Write Discipline](./memory-write-discipline.md).
-- Retrieval failures must be explicit in observability traces.
+- memory ownership remains in `lib/memory/`; context layer consumes outputs only.
+- pointer/index cannot become authoritative fact storage.
+- every returned candidate must be traceable to source record.
+
+## Invariants
+- index references cannot orphan durable records.
+- merge stage cannot emit duplicate semantic keys.
+- degraded mode must always be annotated.
+
+## Observability
+- retrieval source counts
+- merge dedupe counts
+- ranking decisions and ties
+- degradation branch and reason
 
 ## Related Documents
 - [Context Assembly](./context-assembly.md)
 - [Memory Write Discipline](./memory-write-discipline.md)
+
+## Open Questions
+- final weighting formula among relevance/recency/reliability in ranking.

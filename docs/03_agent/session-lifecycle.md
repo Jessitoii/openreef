@@ -1,7 +1,27 @@
 # Session Lifecycle
 
 ## Purpose
-Define how request/run lifecycle is projected into session-visible UI and history state.
+Define deterministic projection from run/execution state into session-visible UI and interaction state.
+
+## Scope
+In scope:
+- session state machine
+- run transition to UI mapping
+- suspended/frozen/failure projection behavior
+
+Out of scope:
+- widget rendering details
+- storage engine implementation
+
+## Responsibilities
+- project execution lifecycle into user-visible session states.
+- preserve resumability metadata for suspended runs.
+- expose failure/frozen reasons without ambiguity.
+
+## Core Concepts
+- session state is a projection layer, not the source of lifecycle truth.
+- projection must follow `ExecutionResult.visibilityContract`.
+- projection failures do not mutate persisted terminal run status.
 
 ## Session State Machine
 `idle → processing → waiting_confirmation|waiting_input|waiting_event → suspended → resumed → processing → terminal`
@@ -12,29 +32,47 @@ Terminal states:
 - `frozen`
 - `cancelled`
 
-## Projection Mapping (Run → Session/UI)
-| Run transition | Session state | UI projection |
+## Projection Mapping
+| Run transition | Session state | Required projection |
 |---|---|---|
-| `created/queued` | `processing` | queued/running indicator with request metadata |
-| `running → waiting_for_confirmation` | `waiting_confirmation` | pending approval card/state |
-| `running → waiting_input` | `waiting_input` | user-input-required prompt |
-| `running → waiting_event` | `waiting_event` | external-event-wait marker |
-| `suspended` | `suspended` | resumable run badge + reason |
-| `completed` | `completed` | final response + completion metadata |
-| `failed` | `failed` | explicit failure reason/state |
-| `frozen` | `frozen` | blocked/no-progress terminal marker |
-| `cancelled` | `cancelled` | cancellation reason |
+| `created/queued` | processing | queue/running indicator with request metadata |
+| `running → waiting_for_confirmation` | waiting_confirmation | pending approval state with correlation id |
+| `running → waiting_input` | waiting_input | explicit input-required prompt |
+| `running → waiting_event` | waiting_event | external wait marker |
+| `suspended` | suspended | resumable marker + waiting reason |
+| `completed` | completed | final response and completion metadata |
+| `failed` | failed | structured error reason/code |
+| `frozen` | frozen | blocked/no-progress terminal marker |
+| `cancelled` | cancelled | cancellation reason and source |
 
-## Rules
-- Session projection must always follow `ExecutionResult.visibilityContract`.
-- Failed/frozen outcomes must display structured reasons, not generic prose.
-- Suspended sessions must retain resumable identifiers required for `resume_request`.
+## Execution Flow
+1. Receive run transition or terminal result event.
+2. Resolve session-state mapping.
+3. Apply visibility contract branch (`chat_visible|state_only|both`).
+4. Persist session projection event.
+5. Emit UI update event.
 
-## Failure and Frozen Projection
-- `failed`: render terminal error state with reason code and correlation id.
-- `frozen`: render terminal blocked state with freeze reason and recovery hint.
-- If UI projection fails, run remains terminal in storage and projection retry is logged.
+## Failure Modes
+- projection write failure: log projection error and retry; run terminal state remains authoritative.
+- missing correlation ids: project degraded status with explicit observability marker.
+- conflicting projections from stale events: reject stale update by sequence ordering.
+
+## Constraints
+- session projection cannot invent lifecycle states not in execution model.
+- terminal session states are immutable unless superseded by a new request.
+
+## Invariants
+- every terminal run event yields one terminal session projection event.
+- suspended session must carry resume identifiers.
+
+## Observability
+- projection event id, request/run correlation
+- source transition and mapped session state
+- projection success/failure and retry count
 
 ## Related Documents
 - [Execution Model](../02_system/execution-model.md)
 - [Execution Policy](../02_system/execution-policy.md)
+
+## Open Questions
+- final ordering semantics for cross-device/session replay scenarios.

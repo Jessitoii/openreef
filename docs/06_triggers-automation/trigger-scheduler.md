@@ -1,40 +1,86 @@
 # Trigger Scheduler
 
 ## Purpose
-Define timing semantics, missed-fire handling, jitter tolerance, and queue/backpressure interaction for scheduled trigger sources.
+Define operational timing behavior for schedule/interval trigger emission.
 
-## Ownership Boundaries
-- Scheduler owns time-based event emission (`schedule`, `interval`).
-- Arbitration/executor own concurrency, duplicate handling, and run conflict decisions.
-- Scheduler does not bypass arbitration or dispatch directly into loop.
+## Scope
+In scope:
+- cadence and timestamp semantics
+- missed-fire handling
+- drift/jitter tolerance
+- backpressure interaction
 
-## Timing Behavior
-- Schedules emit normalized `TriggerEvent` objects at configured cadence.
-- Intervals are measured from last successful fire timestamp (not UI refresh timing).
-- Scheduler records `scheduledAt` and `firedAt` for drift analysis.
+Out of scope:
+- arbitration decision logic
+
+## Responsibilities
+- emit normalized time-based `TriggerEvent`s.
+- preserve scheduler timing metadata for diagnostics.
+- prevent storm behavior under drift/recovery conditions.
+
+## Core Concepts
+- scheduler emits events; arbitration/executor decide concurrency handling.
+- missed-fire handling is bounded and explicit.
+- drift correction cannot bypass policy and queue limits.
+
+## Core Data Models
+### SchedulerTick
+- `triggerId`, `scheduledAt`, `firedAt`, `tickSource`, `clockSkewEstimate?`
+
+### MissedFireRecord
+- `triggerId`, `missedAt`, `recoveryAction` (`catch_up|skip|coalesce`), `reason`
+
+## Timing Semantics
+- schedule triggers fire at configured slot boundaries.
+- interval triggers measure from last successful emission.
+- each emission includes `scheduledAt` and `firedAt` timestamps.
 
 ## Missed-Fire Handling
-| Condition | Behavior |
+| Condition | Action |
 |---|---|
-| App/service paused then resumed | emit one catch-up event if within configured grace window |
-| Missed window exceeds grace | skip missed fire and record `missed_fire_skipped` |
-| Multiple missed interval slots | coalesce to one catch-up event with metadata count |
+| app paused then resumes within grace | emit single catch-up event |
+| missed window exceeds grace | skip and record reason |
+| multiple missed interval ticks | coalesce to one event with count metadata |
 
 ## Drift/Jitter Tolerance
-- Scheduler allows bounded fire jitter; out-of-bound drift is logged.
-- Repeated drift beyond tolerance raises scheduler health warning.
-- Drift correction must not create event storms; correction paths pass through arbitration.
+- bounded jitter tolerated per trigger config.
+- out-of-bound drift logged as scheduler health signal.
+- repeated drift triggers degraded scheduler health status.
 
 ## Backpressure and Queue Interaction
-- If arbitration/executor queue is saturated, scheduler marks event as deferred or dropped per policy.
-- Scheduler records queue latency and drop/defer reasons.
-- Scheduler never retries indefinitely; retries are bounded by execution policy.
+- if arbitration/executor backlog is saturated, scheduler marks event deferred/dropped per policy.
+- deferred events carry original `scheduledAt` for latency calculations.
+- scheduler retries are bounded and policy-governed.
+
+## Execution Flow
+1. Evaluate schedule/interval due set.
+2. Emit scheduler ticks.
+3. Apply missed-fire recovery logic if needed.
+4. Attach timing metadata and emit normalized events.
+5. Hand off to trigger lifecycle arbitration.
 
 ## Failure Modes
-- Invalid schedule config: disable trigger definition and emit validation diagnostics.
-- Clock/timezone anomalies: log anomaly and avoid duplicate same-slot emissions.
-- Executor unavailable: defer/queue per policy, then retry within bounds.
+- invalid schedule configuration → disable trigger and emit diagnostics.
+- clock anomalies/timezone jump → suppress duplicate slot emissions and log anomaly.
+- prolonged executor unavailability → bounded defer/drop path with reason.
+
+## Constraints
+- scheduler does not dispatch directly to loop.
+- scheduler cannot override arbitration/policy outcomes.
+
+## Invariants
+- each emitted event includes stable trigger id and timing metadata.
+- recovery logic never emits unbounded catch-up storms.
+
+## Observability
+- schedule drift distribution
+- missed-fire counts by action
+- deferred/drop counts due to backpressure
+- scheduler health status transitions
 
 ## Related Documents
 - [Trigger Lifecycle](./trigger-lifecycle.md)
 - [Execution Policy](../02_system/execution-policy.md)
+
+## Open Questions
+- default grace windows by trigger class and device power state.
