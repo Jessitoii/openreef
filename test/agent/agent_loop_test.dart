@@ -99,9 +99,14 @@ void main() {
 
     expect(result.sessionResult, SessionResult.frozen);
     expect(result.reason, 'rejection_loop');
+    expect(result.toolsUsed, const <String>[
+      'volume_set',
+      'volume_set',
+      'volume_set',
+    ]);
     expect(
-      result.toolsUsed,
-      const <String>['volume_set', 'volume_set', 'volume_set'],
+      result.toolResults.map((toolResult) => toolResult.status),
+      everyElement(ToolResultStatus.rejected),
     );
     expect(notifier.freezeCalls, 1);
   });
@@ -163,9 +168,10 @@ void main() {
 
       expect(result.sessionResult, SessionResult.frozen);
       expect(result.reason, 'exception_loop');
+      expect(result.toolsUsed, const <String>['explode', 'explode', 'explode']);
       expect(
-        result.toolsUsed,
-        const <String>['explode', 'explode', 'explode'],
+        result.toolResults.map((toolResult) => toolResult.status),
+        everyElement(ToolResultStatus.executionError),
       );
       expect(notifier.freezeCalls, 1);
     },
@@ -243,17 +249,91 @@ void main() {
     expect(result.sessionResult, SessionResult.completed);
     expect(result.text, 'done');
     expect(
-      result.toolsUsed,
-      const <String>[
-        'volume_set',
-        'volume_set',
-        'recover',
-        'volume_set',
-        'volume_set',
+      result.toolResults.map((toolResult) => toolResult.status),
+      <ToolResultStatus>[
+        ToolResultStatus.rejected,
+        ToolResultStatus.rejected,
+        ToolResultStatus.success,
+        ToolResultStatus.rejected,
+        ToolResultStatus.rejected,
       ],
     );
+    expect(result.toolsUsed, const <String>[
+      'volume_set',
+      'volume_set',
+      'recover',
+      'volume_set',
+      'volume_set',
+    ]);
     expect(notifier.freezeCalls, 0);
   });
+
+  test(
+    'parallel structured tool calls dispatch sequentially through router',
+    () async {
+      final notifier = _RecordingNotifier();
+      final executed = <String>[];
+      final loop = _buildLoop(
+        memoryIndex: memoryIndex,
+        memoryFormer: memoryFormer,
+        modelAdapter: _QueueModelAdapter(<AgentResponse>[
+          const AgentResponse(
+            text: '',
+            toolCalls: <ToolCall>[
+              ToolCall(id: '1', toolId: 'first'),
+              ToolCall(id: '2', toolId: 'second'),
+            ],
+          ),
+          const AgentResponse(text: 'done'),
+        ]),
+        toolCatalog: InMemoryToolCatalog(<ToolDefinition>[
+          ToolDefinition(
+            id: 'session_status',
+            embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
+            execute: _okExecute,
+          ),
+          ToolDefinition(
+            id: 'memory_search',
+            embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
+            execute: _okExecute,
+          ),
+          ToolDefinition(
+            id: 'notify',
+            embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
+            execute: _okExecute,
+          ),
+          ToolDefinition(
+            id: 'first',
+            embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
+            execute: (call) async {
+              executed.add(call.toolId);
+              return const ToolResult.success('first ok');
+            },
+          ),
+          ToolDefinition(
+            id: 'second',
+            embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
+            execute: (call) async {
+              executed.add(call.toolId);
+              return const ToolResult.success('second ok');
+            },
+          ),
+        ]),
+        notifier: notifier,
+      );
+
+      final result = await loop.run('run two tools', sessionKey: 'agent:main');
+
+      expect(result.sessionResult, SessionResult.completed);
+      expect(executed, const <String>['first', 'second']);
+      expect(result.toolsUsed, const <String>['first', 'second']);
+      expect(result.toolResults, hasLength(2));
+      expect(
+        result.toolResults.map((toolResult) => toolResult.status),
+        everyElement(ToolResultStatus.success),
+      );
+    },
+  );
 
   test('generation failure returns failed result', () async {
     final notifier = _RecordingNotifier();
@@ -329,11 +409,11 @@ void main() {
         compactRequested: true,
       );
 
-    expect(result.sessionResult, SessionResult.failed);
-    expect(result.reason, 'compaction_failure');
-    expect(result.text, contains('Compaction failed:'));
-    expect(result.toolsUsed, isEmpty);
-  },
+      expect(result.sessionResult, SessionResult.failed);
+      expect(result.reason, 'compaction_failure');
+      expect(result.text, contains('Compaction failed:'));
+      expect(result.toolsUsed, isEmpty);
+    },
   );
 
   test('runs compaction before dispatch in the tool loop', () async {

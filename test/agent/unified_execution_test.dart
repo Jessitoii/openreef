@@ -9,6 +9,7 @@ import 'package:openreef/agent/agent_task_executor.dart';
 import 'package:openreef/agent/execution_log.dart';
 import 'package:openreef/agent/execution_request.dart';
 import 'package:openreef/agent/mailbox.dart';
+import 'package:openreef/agent/run_state.dart';
 import 'package:openreef/agent/tool_router.dart';
 import 'package:openreef/context/compactor.dart';
 import 'package:openreef/context/context_assembler.dart';
@@ -30,68 +31,71 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 void main() {
   setUpAll(sqfliteFfiInit);
 
-  test('user, trigger, and mcp event paths all use the same executor', () async {
-    final executor = _RecordingExecutor();
-    final chatSession = AgentLoopChatSession(taskExecutor: executor);
-    final triggerSystem = TriggerSystem(
-      scheduleBackend: _NoopScheduleBackend(),
-      intervalBackend: _NoopIntervalBackend(),
-      miniKairos: MiniKairos(
-        contextLoader: () async => const KairosContext(
-          isAppForeground: true,
-          batteryLevel: 100,
-          activeSubAgents: 0,
+  test(
+    'user, trigger, and mcp event paths all use the same executor',
+    () async {
+      final executor = _RecordingExecutor();
+      final chatSession = AgentLoopChatSession(taskExecutor: executor);
+      final triggerSystem = TriggerSystem(
+        scheduleBackend: _NoopScheduleBackend(),
+        intervalBackend: _NoopIntervalBackend(),
+        miniKairos: MiniKairos(
+          contextLoader: () async => const KairosContext(
+            isAppForeground: true,
+            batteryLevel: 100,
+            activeSubAgents: 0,
+          ),
         ),
-      ),
-      taskExecutor: executor,
-      systemSessionKey: 'system_main',
-    );
-    final runtimeCoordinator = McpRuntimeCoordinator(
-      toolCatalog: RuntimeToolCatalog(),
-      embedText: (text) async => const <double>[1, 0, 0, 0, 0, 0, 0],
-      taskExecutor: executor,
-    );
-    await runtimeCoordinator.replaceSourceTools(
-      binding: McpRuntimeSourceBinding(
-        sourceId: 'source-1',
-        client: McpClient(_NoopTransport()),
-        isActive: () => true,
-        requiresTrust: false,
-        trusted: true,
-        requiresManualSecretEntry: false,
-        hasRequiredSecretMaterial: () async => true,
-      ),
-      discoveredTools: const <McpTool>[],
-    );
+        taskExecutor: executor,
+        systemSessionKey: 'system_main',
+      );
+      final runtimeCoordinator = McpRuntimeCoordinator(
+        toolCatalog: RuntimeToolCatalog(),
+        embedText: (text) async => const <double>[1, 0, 0, 0, 0, 0, 0],
+        taskExecutor: executor,
+      );
+      await runtimeCoordinator.replaceSourceTools(
+        binding: McpRuntimeSourceBinding(
+          sourceId: 'source-1',
+          client: McpClient(_NoopTransport()),
+          isActive: () => true,
+          requiresTrust: false,
+          trusted: true,
+          requiresManualSecretEntry: false,
+          hasRequiredSecretMaterial: () async => true,
+        ),
+        discoveredTools: const <McpTool>[],
+      );
 
-    await chatSession.sendMessage('hello');
-    await triggerSystem.register(
-      const TriggerConfig(
-        id: 'manual_sync',
-        name: 'Manual sync',
-        prompt: 'Run trigger task.',
-        type: TriggerType.manual,
-        priority: TriggerPriority.normal,
-      ),
-    );
-    triggerSystem.setRuntimeReady(true);
-    await triggerSystem.fireManual('manual_sync');
-    runtimeCoordinator.emitSourceEvent(
-      McpRuntimeEvent(
-        sourceId: 'source-1',
-        eventName: 'repo.updated',
-        payload: const <String, Object?>{'prompt': 'Handle repo update.'},
-        receivedAt: DateTime.utc(2026, 4, 7, 12),
-        transportEvent: 'notification',
-      ),
-    );
-    await Future<void>.delayed(Duration.zero);
+      await chatSession.sendMessage('hello');
+      await triggerSystem.register(
+        const TriggerConfig(
+          id: 'manual_sync',
+          name: 'Manual sync',
+          prompt: 'Run trigger task.',
+          type: TriggerType.manual,
+          priority: TriggerPriority.normal,
+        ),
+      );
+      triggerSystem.setRuntimeReady(true);
+      await triggerSystem.fireManual('manual_sync');
+      runtimeCoordinator.emitSourceEvent(
+        McpRuntimeEvent(
+          sourceId: 'source-1',
+          eventName: 'repo.updated',
+          payload: const <String, Object?>{'prompt': 'Handle repo update.'},
+          receivedAt: DateTime.utc(2026, 4, 7, 12),
+          transportEvent: 'notification',
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
 
-    expect(executor.requests, hasLength(3));
-    expect(executor.requests[0].source, ExecutionSource.user);
-    expect(executor.requests[1].source, ExecutionSource.trigger);
-    expect(executor.requests[2].source, ExecutionSource.mcpEvent);
-  });
+      expect(executor.requests, hasLength(3));
+      expect(executor.requests[0].source, ExecutionSource.user);
+      expect(executor.requests[1].source, ExecutionSource.trigger);
+      expect(executor.requests[2].source, ExecutionSource.mcpEvent);
+    },
+  );
 
   test('executor rejects overlapping runs for the same session key', () async {
     final harness = await _ExecutorHarness.create(
@@ -111,10 +115,9 @@ void main() {
     );
     await Future<void>.delayed(Duration.zero);
     final secondResult = await harness.executor.execute(
-      ExecutionRequest.fromTrigger(
+      ExecutionRequest.fromUserMessage(
         sessionKey: 'system_main',
         prompt: 'second',
-        source: ExecutionSource.trigger,
         id: 'second',
         createdAt: DateTime.utc(2026, 4, 7, 12, 0, 1),
       ),
@@ -126,6 +129,184 @@ void main() {
     expect(harness.logStore.records.value.last.failureReason, 'session_busy');
 
     unawaited(firstFuture);
+  });
+
+  test(
+    'ephemeral chat execution is classified and does not persist run state',
+    () async {
+      final harness = await _ExecutorHarness.create(
+        modelAdapter: _BlockingModelAdapter(onGenerate: () async {}),
+      );
+      addTearDown(harness.dispose);
+
+      final request = ExecutionRequest.fromUserMessage(
+        sessionKey: 'chat-session',
+        prompt: 'hello',
+        id: 'chat-1',
+        createdAt: DateTime.utc(2026, 4, 7, 12),
+      );
+      final result = await harness.executor.execute(request);
+
+      expect(request.mode, ExecutionLifecycleMode.ephemeralRequest);
+      expect(result.sessionResult, SessionResult.completed);
+      expect(harness.executor.runStateStore.runs.value, isEmpty);
+    },
+  );
+
+  test(
+    'triggered persistent execution creates inspectable run state',
+    () async {
+      final harness = await _ExecutorHarness.create(
+        modelAdapter: _BlockingModelAdapter(onGenerate: () async {}),
+      );
+      addTearDown(harness.dispose);
+
+      final request = ExecutionRequest.fromTrigger(
+        sessionKey: 'system_main',
+        prompt: 'sync',
+        source: ExecutionSource.trigger,
+        id: 'trigger-request-1',
+        createdAt: DateTime.utc(2026, 4, 7, 12),
+        metadata: const <String, dynamic>{
+          'triggerId': 'standing-sync',
+          'appliedStandingOrderIds': <String>['rule-1'],
+        },
+      );
+
+      await harness.executor.execute(request);
+      final run = await harness.executor.runStateStore.byId('standing-sync');
+
+      expect(request.mode, ExecutionLifecycleMode.triggeredRequest);
+      expect(run, isNotNull);
+      expect(run!.status, ExecutionLifecycleStatus.completed);
+      expect(
+        run.transitions.map((entry) => entry.to),
+        contains(ExecutionLifecycleStatus.running),
+      );
+      expect(
+        run.transitions.map((entry) => entry.to),
+        contains(ExecutionLifecycleStatus.completed),
+      );
+    },
+  );
+
+  test('resume request loads suspended stored run state', () async {
+    final harness = await _ExecutorHarness.create(
+      modelAdapter: _BlockingModelAdapter(onGenerate: () async {}),
+    );
+    addTearDown(harness.dispose);
+    final createdAt = DateTime.utc(2026, 4, 7, 12);
+    await harness.executor.runStateStore.save(
+      RunState(
+        runId: 'run-1',
+        requestIdOrigin: 'origin-1',
+        status: ExecutionLifecycleStatus.suspended,
+        mode: ExecutionLifecycleMode.triggeredRequest,
+        currentStepIndex: 1,
+        variables: const <String, Object?>{'previous': 'ok'},
+        createdAt: createdAt,
+        updatedAt: createdAt,
+        sessionId: 'system_main',
+        waitingReason: 'waiting_input',
+      ),
+    );
+
+    final result = await harness.executor.execute(
+      ExecutionRequest.resume(
+        sessionKey: 'system_main',
+        prompt: 'continue',
+        runId: 'run-1',
+        id: 'resume-1',
+        createdAt: DateTime.utc(2026, 4, 7, 12, 1),
+      ),
+    );
+    final run = await harness.executor.runStateStore.byId('run-1');
+
+    expect(result.sessionResult, SessionResult.completed);
+    expect(
+      run!.transitions.map((entry) => entry.reason),
+      contains('resume_request'),
+    );
+    expect(run.status, ExecutionLifecycleStatus.completed);
+  });
+
+  test('duplicate standing-order style runs reject while active', () async {
+    final gate = Completer<void>();
+    final harness = await _ExecutorHarness.create(
+      modelAdapter: _BlockingModelAdapter(onGenerate: () => gate.future),
+    );
+    addTearDown(harness.dispose);
+    final first = ExecutionRequest.fromTrigger(
+      sessionKey: 'system_main',
+      prompt: 'first',
+      source: ExecutionSource.trigger,
+      id: 'trigger-1',
+      metadata: const <String, dynamic>{
+        'triggerId': 'standing-sync',
+        'appliedStandingOrderIds': <String>['rule-1'],
+      },
+    );
+    final firstFuture = harness.executor.execute(first);
+    await Future<void>.delayed(Duration.zero);
+
+    final duplicate = await harness.executor.execute(
+      ExecutionRequest.fromTrigger(
+        sessionKey: 'system_main',
+        prompt: 'second',
+        source: ExecutionSource.trigger,
+        id: 'trigger-2',
+        metadata: const <String, dynamic>{
+          'triggerId': 'standing-sync',
+          'appliedStandingOrderIds': <String>['rule-1'],
+        },
+      ),
+    );
+
+    expect(duplicate.sessionResult, SessionResult.failed);
+    expect(duplicate.reason, 'duplicate_active_run');
+    gate.complete();
+    expect((await firstFuture).sessionResult, SessionResult.completed);
+  });
+
+  test('chat preempts queued background work in the same session', () async {
+    final firstGate = Completer<void>();
+    final harness = await _ExecutorHarness.create(
+      modelAdapter: _BlockingModelAdapter(onGenerate: () => firstGate.future),
+    );
+    addTearDown(harness.dispose);
+    final running = harness.executor.execute(
+      ExecutionRequest.fromTrigger(
+        sessionKey: 'system_main',
+        prompt: 'running',
+        source: ExecutionSource.trigger,
+        id: 'running-trigger',
+        metadata: const <String, dynamic>{'triggerId': 'running-trigger'},
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    final queued = harness.executor.execute(
+      ExecutionRequest.fromTrigger(
+        sessionKey: 'system_main',
+        prompt: 'queued',
+        source: ExecutionSource.trigger,
+        id: 'queued-trigger',
+        metadata: const <String, dynamic>{'triggerId': 'queued-trigger'},
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+    final chat = await harness.executor.execute(
+      ExecutionRequest.fromUserMessage(
+        sessionKey: 'system_main',
+        prompt: 'foreground',
+        id: 'chat-preempt',
+      ),
+    );
+
+    expect(chat.reason, 'session_busy');
+    firstGate.complete();
+    expect((await queued).reason, 'preempted_by_chat');
+    expect((await running).sessionResult, SessionResult.completed);
   });
 
   test('executor allows overlapping runs for different session keys', () async {
@@ -167,19 +348,29 @@ class _RecordingExecutor implements AgentTaskExecutor {
   final List<ExecutionRequest> requests = <ExecutionRequest>[];
 
   @override
-  Future<AgentLoopResult> execute(ExecutionRequest request) async {
+  Future<ExecutionResult> execute(ExecutionRequest request) async {
     requests.add(request);
-    return const AgentLoopResult(
-      sessionResult: SessionResult.completed,
-      text: 'done',
-      reason: 'completed',
+    return ExecutionResult(
+      requestId: request.id,
+      sessionKey: request.sessionKey,
+      source: request.source,
+      mode: request.mode,
+      terminalStatus: ExecutionLifecycleStatus.completed,
+      admissionOutcome: ExecutionAdmissionOutcome.admitted,
+      policyReason: 'completed',
+      visibility: request.visibility,
+      loopResult: const AgentLoopResult(
+        sessionResult: SessionResult.completed,
+        text: 'done',
+        reason: 'completed',
+      ),
     );
   }
 
   @override
   Future<AgentTaskExecutionResult> executeTask(AgentTaskRequest request) async {
     final result = await execute(request.toExecutionRequest());
-    return AgentTaskExecutionResult.fromLoopResult(result);
+    return AgentTaskExecutionResult.fromLoopResult(result.toAgentLoopResult());
   }
 }
 
@@ -286,7 +477,15 @@ class _FixedIntentEmbedder implements IntentEmbedder {
   const _FixedIntentEmbedder();
 
   @override
-  Future<List<double>> embed(String text) async => const <double>[1, 0, 0, 0, 0, 0, 0];
+  Future<List<double>> embed(String text) async => const <double>[
+    1,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+  ];
 }
 
 class _FixedSemanticEmbedder implements SemanticTextEmbedder {
@@ -296,7 +495,11 @@ class _FixedSemanticEmbedder implements SemanticTextEmbedder {
   String get modelId => 'test-semantic';
 
   @override
-  Future<List<double>> embedDocument(String text) async => const <double>[1, 0, 0];
+  Future<List<double>> embedDocument(String text) async => const <double>[
+    1,
+    0,
+    0,
+  ];
 
   @override
   Future<List<double>> embedQuery(String text) async => const <double>[1, 0, 0];
@@ -344,7 +547,8 @@ class _NoopIntervalBackend implements IntervalSchedulerBackend {
 
 class _NoopTransport implements McpTransport {
   @override
-  Stream<McpTransportMessage> get messages => const Stream<McpTransportMessage>.empty();
+  Stream<McpTransportMessage> get messages =>
+      const Stream<McpTransportMessage>.empty();
 
   @override
   Future<void> close() async {}

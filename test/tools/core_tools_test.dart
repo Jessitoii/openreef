@@ -115,32 +115,32 @@ void main() {
     }
   });
 
-  test('memory_save followed by memory_search returns the persisted fact', () async {
-    await registry.execute(
-      const ToolInvocation(
-        toolId: 'memory_save',
-        arguments: <String, Object?>{
-          'content': 'Prefers concise updates',
-          'category': 'user_prefs',
-          'importance': 5,
-          'key': 'prefs_concise',
-        },
-      ),
-    );
+  test(
+    'memory_save followed by memory_search returns the persisted fact',
+    () async {
+      await registry.execute(
+        const ToolInvocation(
+          toolId: 'memory_save',
+          arguments: <String, Object?>{
+            'content': 'Prefers concise updates',
+            'category': 'user_prefs',
+            'importance': 5,
+            'key': 'prefs_concise',
+          },
+        ),
+      );
 
-    final result = await registry.execute(
-      const ToolInvocation(
-        toolId: 'memory_search',
-        arguments: <String, Object?>{
-          'query': 'concise updates',
-          'top_k': 1,
-        },
-      ),
-    );
+      final result = await registry.execute(
+        const ToolInvocation(
+          toolId: 'memory_search',
+          arguments: <String, Object?>{'query': 'concise updates', 'top_k': 1},
+        ),
+      );
 
-    expect(result.content, contains('Prefers concise updates'));
-    expect(result.metadata['results_json'], contains('prefs_concise'));
-  });
+      expect(result.content, contains('Prefers concise updates'));
+      expect(result.metadata['results_json'], contains('prefs_concise'));
+    },
+  );
 
   test('file_write and file_read operate on real absolute paths', () async {
     final path = '${tempDir.path}${Platform.pathSeparator}notes.txt';
@@ -148,10 +148,7 @@ void main() {
     await registry.execute(
       ToolInvocation(
         toolId: 'file_write',
-        arguments: <String, Object?>{
-          'path': path,
-          'content': 'reef tools',
-        },
+        arguments: <String, Object?>{'path': path, 'content': 'reef tools'},
       ),
     );
     final result = await registry.execute(
@@ -188,49 +185,55 @@ void main() {
     expect(appLauncherAdapter.lastPackageName, 'com.example.app');
   });
 
-  test('settings_write persists and settings_read returns the new value', () async {
-    await registry.execute(
-      const ToolInvocation(
-        toolId: 'settings_write',
-        arguments: <String, Object?>{
-          'key': 'theme.mode',
-          'string_value': 'light',
-        },
-      ),
-    );
+  test(
+    'settings_write persists and settings_read returns the new value',
+    () async {
+      await registry.execute(
+        const ToolInvocation(
+          toolId: 'settings_write',
+          arguments: <String, Object?>{
+            'key': 'theme.mode',
+            'string_value': 'light',
+          },
+        ),
+      );
 
-    final result = await registry.execute(
-      const ToolInvocation(
-        toolId: 'settings_read',
-        arguments: <String, Object?>{'key': 'theme.mode'},
-      ),
-    );
+      final result = await registry.execute(
+        const ToolInvocation(
+          toolId: 'settings_read',
+          arguments: <String, Object?>{'key': 'theme.mode'},
+        ),
+      );
 
-    expect(result.content, 'theme.mode=light');
-  });
+      expect(result.content, 'theme.mode=light');
+    },
+  );
 
-  test('alarm_set creates a persisted daily reminder and trigger_list exposes it', () async {
-    await registry.execute(
-      const ToolInvocation(
-        toolId: 'alarm_set',
-        arguments: <String, Object?>{
-          'name': 'Drink water',
-          'prompt': 'Remind me to drink water.',
-          'hour': 8,
-          'minute': 0,
-        },
-      ),
-    );
+  test(
+    'alarm_set creates a persisted daily reminder and trigger_list exposes it',
+    () async {
+      await registry.execute(
+        const ToolInvocation(
+          toolId: 'alarm_set',
+          arguments: <String, Object?>{
+            'name': 'Drink water',
+            'prompt': 'Remind me to drink water.',
+            'hour': 8,
+            'minute': 0,
+          },
+        ),
+      );
 
-    final persisted = await triggerRepository.loadAll();
-    final listed = await registry.execute(
-      const ToolInvocation(toolId: 'trigger_list'),
-    );
+      final persisted = await triggerRepository.loadAll();
+      final listed = await registry.execute(
+        const ToolInvocation(toolId: 'trigger_list'),
+      );
 
-    expect(scheduleBackend.registeredIds, hasLength(1));
-    expect(persisted.single.scheduleSpec?.hour, 8);
-    expect(listed.content, contains('schedule'));
-  });
+      expect(scheduleBackend.registeredIds, hasLength(1));
+      expect(persisted.single.scheduleSpec?.hour, 8);
+      expect(listed.content, contains('schedule'));
+    },
+  );
 
   test('cron_add then cron_remove controls interval-backed triggers', () async {
     final created = await registry.execute(
@@ -246,7 +249,9 @@ void main() {
     final triggerId =
         ((created.metadata['trigger'] as Map<String, Object?>)['id'] as String);
 
-    final listed = await registry.execute(const ToolInvocation(toolId: 'cron_list'));
+    final listed = await registry.execute(
+      const ToolInvocation(toolId: 'cron_list'),
+    );
     await registry.execute(
       ToolInvocation(
         toolId: 'cron_remove',
@@ -281,18 +286,28 @@ class _MappedSemanticEmbedder implements SemanticTextEmbedder {
 
 class _NoopTaskExecutor implements AgentTaskExecutor {
   @override
-  Future<AgentLoopResult> execute(ExecutionRequest request) async {
-    return const AgentLoopResult(
-      sessionResult: SessionResult.completed,
-      text: 'ok',
-      reason: 'completed',
+  Future<ExecutionResult> execute(ExecutionRequest request) async {
+    return ExecutionResult(
+      requestId: request.id,
+      sessionKey: request.sessionKey,
+      source: request.source,
+      mode: request.mode,
+      terminalStatus: ExecutionLifecycleStatus.completed,
+      admissionOutcome: ExecutionAdmissionOutcome.admitted,
+      policyReason: 'completed',
+      visibility: request.visibility,
+      loopResult: const AgentLoopResult(
+        sessionResult: SessionResult.completed,
+        text: 'ok',
+        reason: 'completed',
+      ),
     );
   }
 
   @override
   Future<AgentTaskExecutionResult> executeTask(AgentTaskRequest request) async {
     final result = await execute(request.toExecutionRequest());
-    return AgentTaskExecutionResult.fromLoopResult(result);
+    return AgentTaskExecutionResult.fromLoopResult(result.toAgentLoopResult());
   }
 }
 
@@ -322,7 +337,8 @@ class _RecordingIntervalBackend implements IntervalSchedulerBackend {
 
 class _NoopVolumeAdapter implements DeviceVolumeAdapter {
   @override
-  Future<double> setVolumeLevel(double normalizedLevel) async => normalizedLevel;
+  Future<double> setVolumeLevel(double normalizedLevel) async =>
+      normalizedLevel;
 }
 
 class _MemoryClipboardAdapter implements ClipboardAdapter {
@@ -356,7 +372,11 @@ class _NoopContactAdapter implements ContactAdapter {
 
 class _NoopDraftMessageAdapter implements DraftMessageAdapter {
   @override
-  Future<void> openEmailDraft({String? to, String? subject, String? body}) async {}
+  Future<void> openEmailDraft({
+    String? to,
+    String? subject,
+    String? body,
+  }) async {}
 
   @override
   Future<void> openSmsDraft({String? to, String? body}) async {}
@@ -420,8 +440,5 @@ class _RecordingAppLauncherAdapter implements AppLauncherAdapter {
 
 class _NoopShareAdapter implements ShareAdapter {
   @override
-  Future<void> shareText({
-    required String text,
-    String? subject,
-  }) async {}
+  Future<void> shareText({required String text, String? subject}) async {}
 }

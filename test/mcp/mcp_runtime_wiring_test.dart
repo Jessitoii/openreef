@@ -141,10 +141,7 @@ void main() {
       },
     );
     final controller = McpConnectionsController(
-      store: McpConnectionStore(
-        storage,
-        secretStore: InMemoryMcpSecretStore(),
-      ),
+      store: McpConnectionStore(storage, secretStore: InMemoryMcpSecretStore()),
       runtimeCoordinator: runtimeCoordinator,
       autoConnectPersisted: false,
       transportFactory: (endpoint) => transport,
@@ -159,69 +156,212 @@ void main() {
     );
 
     final result = await router.dispatch(
-      ToolCall(
-        id: 'call-1',
-        toolId: '${state.runtimeSourceId}/ping',
-      ),
+      ToolCall(id: 'call-1', toolId: '${state.runtimeSourceId}/ping'),
       sessionKey: 'session-1',
     );
 
     expect(result.content, 'pong');
+    expect(result.status, ToolResultStatus.success);
+    expect(result.toolId, '${state.runtimeSourceId}/ping');
+    expect(result.callId, 'call-1');
     expect(transport.requestedMethods, contains('tools/call'));
   });
 
-  test('refresh atomically replaces the full imported tool set for one source', () async {
-    final runtimeToolCatalog = RuntimeToolCatalog();
-    final runtimeCoordinator = McpRuntimeCoordinator(
-      toolCatalog: runtimeToolCatalog,
-      embedText: (text) async => const <double>[0, 0, 0, 1, 0, 0, 0],
-    );
-    final storage = await _createMemoryStorage();
-    addTearDown(storage.close);
-    final transport = _SequencedMcpTransport(
-      endpoint: Uri.parse('https://docs.example.com/sse'),
-      toolLists: <List<Map<String, Object?>>>[
-        <Map<String, Object?>>[
-          <String, Object?>{
-            'name': 'ping',
-            'description': 'Returns pong',
-            'inputSchema': <String, Object?>{'type': 'object'},
-          },
+  test(
+    'refresh atomically replaces the full imported tool set for one source',
+    () async {
+      final runtimeToolCatalog = RuntimeToolCatalog();
+      final runtimeCoordinator = McpRuntimeCoordinator(
+        toolCatalog: runtimeToolCatalog,
+        embedText: (text) async => const <double>[0, 0, 0, 1, 0, 0, 0],
+      );
+      final storage = await _createMemoryStorage();
+      addTearDown(storage.close);
+      final transport = _SequencedMcpTransport(
+        endpoint: Uri.parse('https://docs.example.com/sse'),
+        toolLists: <List<Map<String, Object?>>>[
+          <Map<String, Object?>>[
+            <String, Object?>{
+              'name': 'ping',
+              'description': 'Returns pong',
+              'inputSchema': <String, Object?>{'type': 'object'},
+            },
+          ],
+          <Map<String, Object?>>[
+            <String, Object?>{
+              'name': 'search_docs',
+              'description': 'Search docs',
+              'inputSchema': <String, Object?>{'type': 'object'},
+            },
+          ],
         ],
-        <Map<String, Object?>>[
-          <String, Object?>{
-            'name': 'search_docs',
-            'description': 'Search docs',
-            'inputSchema': <String, Object?>{'type': 'object'},
+      );
+      final controller = McpConnectionsController(
+        store: McpConnectionStore(
+          storage,
+          secretStore: InMemoryMcpSecretStore(),
+        ),
+        runtimeCoordinator: runtimeCoordinator,
+        autoConnectPersisted: false,
+        transportFactory: (endpoint) => transport,
+      );
+
+      await controller.connect('https://docs.example.com/sse', persist: false);
+      final state = controller.connections.value.single;
+      expect(
+        runtimeToolCatalog.byId('${state.runtimeSourceId}/ping'),
+        isNotNull,
+      );
+
+      await controller.refresh(state.url);
+
+      expect(runtimeToolCatalog.byId('${state.runtimeSourceId}/ping'), isNull);
+      expect(
+        runtimeToolCatalog.byId('${state.runtimeSourceId}/search_docs'),
+        isNotNull,
+      );
+      expect(controller.connections.value.single.importedToolCount, 1);
+    },
+  );
+
+  test(
+    'runtime coordinator fails deterministically for stale, missing, untrusted, and secret-missing sessions',
+    () async {
+      final runtimeToolCatalog = RuntimeToolCatalog();
+      final runtimeCoordinator = McpRuntimeCoordinator(
+        toolCatalog: runtimeToolCatalog,
+        embedText: (text) async => const <double>[0, 0, 0, 1, 0, 0, 0],
+      );
+      final transport = _SequencedMcpTransport(
+        endpoint: Uri.parse('https://docs.example.com/sse'),
+        toolLists: const <List<Map<String, Object?>>>[],
+        toolCallResponses: <String, Map<String, Object?>>{
+          'ping': <String, Object?>{
+            'content': <Map<String, Object?>>[
+              <String, Object?>{'type': 'text', 'text': 'pong'},
+            ],
           },
+        },
+      );
+
+      var isActive = true;
+      await runtimeCoordinator.replaceSourceTools(
+        binding: McpRuntimeSourceBinding(
+          sourceId: 'source-a',
+          client: transport.client,
+          isActive: () => isActive,
+          requiresTrust: false,
+          trusted: true,
+          requiresManualSecretEntry: false,
+          hasRequiredSecretMaterial: () async => true,
+        ),
+        discoveredTools: const <McpTool>[
+          McpTool(
+            name: 'ping',
+            description: 'Returns pong',
+            inputSchema: McpToolInputSchema(
+              type: McpJsonSchemaType.object,
+              properties: <String, McpToolInputSchemaProperty>{},
+            ),
+          ),
         ],
-      ],
-    );
-    final controller = McpConnectionsController(
-      store: McpConnectionStore(
-        storage,
-        secretStore: InMemoryMcpSecretStore(),
-      ),
-      runtimeCoordinator: runtimeCoordinator,
-      autoConnectPersisted: false,
-      transportFactory: (endpoint) => transport,
-    );
+      );
 
-    await controller.connect('https://docs.example.com/sse', persist: false);
-    final state = controller.connections.value.single;
-    expect(runtimeToolCatalog.byId('${state.runtimeSourceId}/ping'), isNotNull);
+      isActive = false;
+      final stale = await runtimeCoordinator.executeTool(
+        sourceId: 'source-a',
+        runtimeToolId: 'source-a/ping',
+        mcpToolName: 'ping',
+        arguments: const <String, Object?>{},
+      );
+      expect(stale.status, ToolResultStatus.unavailable);
+      expect(
+        stale.metadata['errorCode'],
+        McpRuntimeCoordinator.staleSessionError,
+      );
 
-    await controller.refresh(state.url);
+      runtimeCoordinator.removeSource('source-a');
+      final missing = await runtimeCoordinator.executeTool(
+        sourceId: 'source-a',
+        runtimeToolId: 'source-a/ping',
+        mcpToolName: 'ping',
+        arguments: const <String, Object?>{},
+      );
+      expect(missing.status, ToolResultStatus.unavailable);
+      expect(
+        missing.metadata['errorCode'],
+        McpRuntimeCoordinator.missingSessionError,
+      );
 
-    expect(runtimeToolCatalog.byId('${state.runtimeSourceId}/ping'), isNull);
-    expect(
-      runtimeToolCatalog.byId('${state.runtimeSourceId}/search_docs'),
-      isNotNull,
-    );
-    expect(controller.connections.value.single.importedToolCount, 1);
-  });
+      await runtimeCoordinator.replaceSourceTools(
+        binding: McpRuntimeSourceBinding(
+          sourceId: 'source-b',
+          client: transport.client,
+          isActive: () => true,
+          requiresTrust: true,
+          trusted: false,
+          requiresManualSecretEntry: false,
+          hasRequiredSecretMaterial: () async => true,
+        ),
+        discoveredTools: const <McpTool>[
+          McpTool(
+            name: 'ping',
+            description: 'Returns pong',
+            inputSchema: McpToolInputSchema(
+              type: McpJsonSchemaType.object,
+              properties: <String, McpToolInputSchemaProperty>{},
+            ),
+          ),
+        ],
+      );
+      final untrusted = await runtimeCoordinator.executeTool(
+        sourceId: 'source-b',
+        runtimeToolId: 'source-b/ping',
+        mcpToolName: 'ping',
+        arguments: const <String, Object?>{},
+      );
+      expect(untrusted.status, ToolResultStatus.permissionDenied);
+      expect(
+        untrusted.metadata['errorCode'],
+        McpRuntimeCoordinator.untrustedSourceError,
+      );
 
-  test('runtime coordinator fails deterministically for stale, missing, untrusted, and secret-missing sessions', () async {
+      await runtimeCoordinator.replaceSourceTools(
+        binding: McpRuntimeSourceBinding(
+          sourceId: 'source-c',
+          client: transport.client,
+          isActive: () => true,
+          requiresTrust: true,
+          trusted: true,
+          requiresManualSecretEntry: false,
+          hasRequiredSecretMaterial: () async => false,
+        ),
+        discoveredTools: const <McpTool>[
+          McpTool(
+            name: 'ping',
+            description: 'Returns pong',
+            inputSchema: McpToolInputSchema(
+              type: McpJsonSchemaType.object,
+              properties: <String, McpToolInputSchemaProperty>{},
+            ),
+          ),
+        ],
+      );
+      final missingSecret = await runtimeCoordinator.executeTool(
+        sourceId: 'source-c',
+        runtimeToolId: 'source-c/ping',
+        mcpToolName: 'ping',
+        arguments: const <String, Object?>{},
+      );
+      expect(missingSecret.status, ToolResultStatus.permissionDenied);
+      expect(
+        missingSecret.metadata['errorCode'],
+        McpRuntimeCoordinator.secretRequiredError,
+      );
+    },
+  );
+
+  test('MCP tools/call isError maps to execution_error', () async {
     final runtimeToolCatalog = RuntimeToolCatalog();
     final runtimeCoordinator = McpRuntimeCoordinator(
       toolCatalog: runtimeToolCatalog,
@@ -232,19 +372,22 @@ void main() {
       toolLists: const <List<Map<String, Object?>>>[],
       toolCallResponses: <String, Map<String, Object?>>{
         'ping': <String, Object?>{
+          'isError': true,
           'content': <Map<String, Object?>>[
-            <String, Object?>{'type': 'text', 'text': 'pong'},
+            <String, Object?>{'type': 'text', 'text': 'server boom'},
           ],
         },
       },
     );
+    await transport.client.initialize(
+      clientInfo: const McpClientInfo(name: 'OpenReef', version: '0.1.0'),
+    );
 
-    var isActive = true;
     await runtimeCoordinator.replaceSourceTools(
       binding: McpRuntimeSourceBinding(
-        sourceId: 'source-a',
+        sourceId: 'source-error',
         client: transport.client,
-        isActive: () => isActive,
+        isActive: () => true,
         requiresTrust: false,
         trusted: true,
         requiresManualSecretEntry: false,
@@ -262,90 +405,115 @@ void main() {
       ],
     );
 
-    isActive = false;
-    expect(
-      () => runtimeCoordinator.executeTool(
-        sourceId: 'source-a',
-        runtimeToolId: 'source-a/ping',
-        mcpToolName: 'ping',
-        arguments: const <String, Object?>{},
-      ),
-      throwsA(isA<StateError>()),
+    final result = await runtimeCoordinator.executeTool(
+      sourceId: 'source-error',
+      runtimeToolId: 'source-error/ping',
+      mcpToolName: 'ping',
+      arguments: const <String, Object?>{},
     );
 
-    runtimeCoordinator.removeSource('source-a');
-    expect(
-      () => runtimeCoordinator.executeTool(
-        sourceId: 'source-a',
-        runtimeToolId: 'source-a/ping',
-        mcpToolName: 'ping',
-        arguments: const <String, Object?>{},
-      ),
-      throwsA(isA<StateError>()),
-    );
-
-    await runtimeCoordinator.replaceSourceTools(
-      binding: McpRuntimeSourceBinding(
-        sourceId: 'source-b',
-        client: transport.client,
-        isActive: () => true,
-        requiresTrust: true,
-        trusted: false,
-        requiresManualSecretEntry: false,
-        hasRequiredSecretMaterial: () async => true,
-      ),
-      discoveredTools: const <McpTool>[
-        McpTool(
-          name: 'ping',
-          description: 'Returns pong',
-          inputSchema: McpToolInputSchema(
-            type: McpJsonSchemaType.object,
-            properties: <String, McpToolInputSchemaProperty>{},
-          ),
-        ),
-      ],
-    );
-    expect(
-      () => runtimeCoordinator.executeTool(
-        sourceId: 'source-b',
-        runtimeToolId: 'source-b/ping',
-        mcpToolName: 'ping',
-        arguments: const <String, Object?>{},
-      ),
-      throwsA(isA<StateError>()),
-    );
-
-    await runtimeCoordinator.replaceSourceTools(
-      binding: McpRuntimeSourceBinding(
-        sourceId: 'source-c',
-        client: transport.client,
-        isActive: () => true,
-        requiresTrust: true,
-        trusted: true,
-        requiresManualSecretEntry: false,
-        hasRequiredSecretMaterial: () async => false,
-      ),
-      discoveredTools: const <McpTool>[
-        McpTool(
-          name: 'ping',
-          description: 'Returns pong',
-          inputSchema: McpToolInputSchema(
-            type: McpJsonSchemaType.object,
-            properties: <String, McpToolInputSchemaProperty>{},
-          ),
-        ),
-      ],
-    );
-    expect(
-      () => runtimeCoordinator.executeTool(
-        sourceId: 'source-c',
-        runtimeToolId: 'source-c/ping',
-        mcpToolName: 'ping',
-        arguments: const <String, Object?>{},
-      ),
-      throwsA(isA<StateError>()),
-    );
+    expect(result.status, ToolResultStatus.executionError);
+    expect(result.summary, 'server boom');
+    expect(result.metadata['errorCode'], 'mcp_tool_error');
   });
+
+  test(
+    'MCP callTool protocol exceptions are normalized by public adapter',
+    () async {
+      final runtimeToolCatalog = RuntimeToolCatalog();
+      final runtimeCoordinator = McpRuntimeCoordinator(
+        toolCatalog: runtimeToolCatalog,
+        embedText: (text) async => const <double>[0, 0, 0, 1, 0, 0, 0],
+      );
+      final transport = _SequencedMcpTransport(
+        endpoint: Uri.parse('https://docs.example.com/sse'),
+        toolLists: const <List<Map<String, Object?>>>[],
+      );
+
+      await runtimeCoordinator.replaceSourceTools(
+        binding: McpRuntimeSourceBinding(
+          sourceId: 'source-uninitialized',
+          client: transport.client,
+          isActive: () => true,
+          requiresTrust: false,
+          trusted: true,
+          requiresManualSecretEntry: false,
+          hasRequiredSecretMaterial: () async => true,
+        ),
+        discoveredTools: const <McpTool>[
+          McpTool(
+            name: 'ping',
+            description: 'Returns pong',
+            inputSchema: McpToolInputSchema(
+              type: McpJsonSchemaType.object,
+              properties: <String, McpToolInputSchemaProperty>{},
+            ),
+          ),
+        ],
+      );
+
+      final result = await runtimeCoordinator.executeTool(
+        sourceId: 'source-uninitialized',
+        runtimeToolId: 'source-uninitialized/ping',
+        mcpToolName: 'ping',
+        arguments: const <String, Object?>{},
+      );
+
+      expect(result.status, ToolResultStatus.unavailable);
+      expect(result.retryable, isTrue);
+      expect(result.metadata['errorCode'], 'client_not_initialized');
+    },
+  );
+
+  test(
+    'imported MCP tools retain schema for structured model declarations',
+    () async {
+      final runtimeToolCatalog = RuntimeToolCatalog();
+      final runtimeCoordinator = McpRuntimeCoordinator(
+        toolCatalog: runtimeToolCatalog,
+        embedText: (text) async => const <double>[0, 0, 0, 1, 0, 0, 0],
+      );
+      await runtimeCoordinator.replaceSourceTools(
+        binding: McpRuntimeSourceBinding(
+          sourceId: 'source-schema',
+          client: _SequencedMcpTransport(
+            endpoint: Uri.parse('https://docs.example.com/sse'),
+            toolLists: const <List<Map<String, Object?>>>[],
+          ).client,
+          isActive: () => true,
+          requiresTrust: false,
+          trusted: true,
+          requiresManualSecretEntry: false,
+          hasRequiredSecretMaterial: () async => true,
+        ),
+        discoveredTools: const <McpTool>[
+          McpTool(
+            name: 'search_docs',
+            description: 'Search external docs.',
+            inputSchema: McpToolInputSchema(
+              type: McpJsonSchemaType.object,
+              required: <String>{'query'},
+              properties: <String, McpToolInputSchemaProperty>{
+                'query': McpToolInputSchemaProperty(
+                  name: 'query',
+                  type: McpJsonSchemaType.string,
+                  description: 'Search query',
+                ),
+              },
+            ),
+          ),
+        ],
+      );
+
+      final tool = runtimeToolCatalog.byId('source-schema/search_docs');
+      expect(tool, isNotNull);
+      expect(tool!.source, McpRuntimeCoordinator.category);
+      expect(tool.category, McpRuntimeCoordinator.category);
+      expect(tool.argumentSchema, hasLength(1));
+      expect(tool.argumentSchema.single.name, 'query');
+      expect(tool.argumentSchema.single.isRequired, isTrue);
+    },
+  );
 }
 
 Future<MemoryStorage> _createMemoryStorage() async {
@@ -376,7 +544,8 @@ class _SequencedMcpTransport implements McpTransport {
   _SequencedMcpTransport({
     required this.endpoint,
     required List<List<Map<String, Object?>>> toolLists,
-    Map<String, Map<String, Object?>> toolCallResponses = const <String, Map<String, Object?>>{},
+    Map<String, Map<String, Object?>> toolCallResponses =
+        const <String, Map<String, Object?>>{},
   }) : _toolLists = List<List<Map<String, Object?>>>.from(toolLists),
        _toolCallResponses = Map<String, Map<String, Object?>>.from(
          toolCallResponses,
@@ -420,10 +589,7 @@ class _SequencedMcpTransport implements McpTransport {
         id: 1,
         result: <String, Object?>{
           'protocolVersion': '2024-11-05',
-          'serverInfo': <String, Object?>{
-            'name': 'docs',
-            'version': '1.0.0',
-          },
+          'serverInfo': <String, Object?>{'name': 'docs', 'version': '1.0.0'},
         },
       );
     }

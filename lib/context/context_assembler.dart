@@ -174,7 +174,7 @@ class AssembleResult {
           content: result.toContextString(),
           toolCallId: toolCallId,
           turnNumber: _nextTurnNumber(messages),
-          metadata: result.metadata,
+          metadata: result.toMap(),
         ),
       );
     return copyWith(messages: nextMessages);

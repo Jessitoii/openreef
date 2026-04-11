@@ -1,15 +1,16 @@
+import 'package:openreef/agent/run_state.dart';
 import 'package:openreef/triggers/trigger_models.dart';
 
 class StandingOrderApplication {
   const StandingOrderApplication({
     required this.appliedIds,
-    required this.instructions,
+    required this.evaluations,
   });
 
   final List<String> appliedIds;
-  final String instructions;
+  final List<StandingOrderEvaluationRecord> evaluations;
 
-  bool get hasInstructions => instructions.trim().isNotEmpty;
+  bool get hasAppliedDirectives => appliedIds.isNotEmpty;
 }
 
 class StandingOrderApplicator {
@@ -19,20 +20,58 @@ class StandingOrderApplicator {
     required Iterable<TriggerConfig> standingOrders,
     required TriggerConfig trigger,
     required Map<String, Object?> payload,
+    required String runId,
+    required DateTime evaluatedAt,
   }) {
-    final matches = standingOrders
-        .where((candidate) => candidate.enabled)
-        .where((candidate) => candidate.type == TriggerType.standingOrder)
-        .where((candidate) => _matches(candidate, trigger, payload))
-        .toList(growable: false)
-      ..sort((left, right) => left.id.compareTo(right.id));
+    final candidates =
+        standingOrders
+            .where((candidate) => candidate.enabled)
+            .where((candidate) => candidate.type == TriggerType.standingOrder)
+            .toList(growable: false)
+          ..sort((left, right) => left.id.compareTo(right.id));
+    final evaluations = <StandingOrderEvaluationRecord>[];
+    final appliedIds = <String>[];
 
+    for (final candidate in candidates) {
+      final matched = _matches(candidate, trigger, payload);
+      if (matched) {
+        appliedIds.add(candidate.id);
+      }
+      final spec = candidate.standingOrderSpec;
+      evaluations.add(
+        StandingOrderEvaluationRecord(
+          evaluationId:
+              '${runId}_${candidate.id}_${evaluatedAt.microsecondsSinceEpoch}',
+          runId: runId,
+          ruleId: candidate.id,
+          triggerType: trigger.type.name,
+          condition: <String, Object?>{
+            'appliesToTypes':
+                spec?.appliesToTypes.map((type) => type.name).toList() ??
+                const <String>[],
+            'payloadMatches': spec?.payloadMatches ?? const <String, Object?>{},
+          },
+          action: <String, Object?>{
+            'type': 'apply_structured_directive',
+            'ruleName': candidate.name,
+          },
+          priority: candidate.priority.index,
+          status: matched
+              ? StandingOrderEvaluationStatus.matchedApplied
+              : StandingOrderEvaluationStatus.notMatched,
+          reason: matched ? 'matched' : 'predicate_not_matched',
+          evaluatedAt: evaluatedAt,
+          displayText: candidate.prompt.trim().isEmpty
+              ? null
+              : candidate.prompt.trim(),
+        ),
+      );
+    }
     return StandingOrderApplication(
-      appliedIds: matches.map((entry) => entry.id).toList(growable: false),
-      instructions: matches
-          .map((entry) => entry.prompt.trim())
-          .where((entry) => entry.isNotEmpty)
-          .join('\n'),
+      appliedIds: List<String>.unmodifiable(appliedIds),
+      evaluations: List<StandingOrderEvaluationRecord>.unmodifiable(
+        evaluations,
+      ),
     );
   }
 

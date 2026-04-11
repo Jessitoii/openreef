@@ -244,7 +244,7 @@ class SubAgentRunner {
     final executor = SubAgentRootBridgeRegistry.toolExecutor;
     final result = executor == null
         ? const ToolResult.rejected(
-            content: 'unsupported_background_operation',
+            summary: 'unsupported_background_operation',
           )
         : await executor(
             call,

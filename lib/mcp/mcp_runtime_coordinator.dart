@@ -30,9 +30,7 @@ class McpRuntimeSourceBinding {
 }
 
 class McpImportedToolSnapshot {
-  const McpImportedToolSnapshot({
-    required this.importedToolIds,
-  });
+  const McpImportedToolSnapshot({required this.importedToolIds});
 
   final List<String> importedToolIds;
 
@@ -91,6 +89,15 @@ class McpRuntimeCoordinator {
           description: manifest.description,
           enabled: manifest.enabled,
           requiresConfirmation: manifest.requiresConfirmation,
+          argumentSchema: manifest.argumentSchema,
+          category: manifest.category,
+          tags: manifest.tags,
+          source: category,
+          runtimeMetadata: <String, Object?>{
+            'sourceId': binding.sourceId,
+            'mcpToolName': tool.name,
+            'manifestId': manifest.id,
+          },
           execute: (call) => executeTool(
             sourceId: binding.sourceId,
             runtimeToolId: runtimeToolId,
@@ -132,7 +139,7 @@ class McpRuntimeCoordinator {
         .toList(growable: false);
   }
 
-  Future<AgentLoopResult?> executeEvent({
+  Future<ExecutionResult?> executeEvent({
     required String sessionKey,
     required String eventName,
     required String prompt,
@@ -179,29 +186,109 @@ class McpRuntimeCoordinator {
   }) async {
     final source = _sources[sourceId];
     if (source == null) {
-      throw StateError(missingSessionError);
+      return _failure(
+        runtimeToolId: runtimeToolId,
+        status: ToolResultStatus.unavailable,
+        summary: 'MCP source session is missing.',
+        errorCode: missingSessionError,
+        retryable: true,
+      );
     }
     if (!source.binding.isActive()) {
-      throw StateError(staleSessionError);
+      return _failure(
+        runtimeToolId: runtimeToolId,
+        status: ToolResultStatus.unavailable,
+        summary: 'MCP source session is stale.',
+        errorCode: staleSessionError,
+        retryable: true,
+      );
     }
     if (source.binding.requiresTrust && !source.binding.trusted) {
-      throw StateError(untrustedSourceError);
+      return _failure(
+        runtimeToolId: runtimeToolId,
+        status: ToolResultStatus.permissionDenied,
+        summary: 'MCP source is not trusted.',
+        errorCode: untrustedSourceError,
+      );
     }
     if (source.binding.requiresManualSecretEntry) {
-      throw StateError(secretRequiredError);
+      return _failure(
+        runtimeToolId: runtimeToolId,
+        status: ToolResultStatus.permissionDenied,
+        summary: 'MCP source requires secret material.',
+        errorCode: secretRequiredError,
+      );
     }
-    final hasRequiredSecretMaterial =
-        await source.binding.hasRequiredSecretMaterial();
+    final hasRequiredSecretMaterial = await source.binding
+        .hasRequiredSecretMaterial();
     if (!hasRequiredSecretMaterial) {
-      throw StateError(secretRequiredError);
+      return _failure(
+        runtimeToolId: runtimeToolId,
+        status: ToolResultStatus.permissionDenied,
+        summary: 'MCP source requires secret material.',
+        errorCode: secretRequiredError,
+      );
     }
 
-    final result = await source.binding.client.callTool(
-      name: mcpToolName,
-      arguments: arguments,
-    );
+    late final McpToolCallResult result;
+    try {
+      result = await source.binding.client.callTool(
+        name: mcpToolName,
+        arguments: arguments,
+      );
+    } on McpProtocolException catch (error) {
+      return _failure(
+        runtimeToolId: runtimeToolId,
+        status: error.message == 'client_not_initialized'
+            ? ToolResultStatus.unavailable
+            : ToolResultStatus.executionError,
+        summary: 'MCP tool call failed: ${error.message}',
+        errorCode: error.message,
+        retryable: error.message == 'client_not_initialized',
+      );
+    } on McpTransportException catch (error) {
+      return _failure(
+        runtimeToolId: runtimeToolId,
+        status: ToolResultStatus.unavailable,
+        summary: 'MCP transport failed: ${error.message}',
+        errorCode: 'mcp_transport_error',
+        retryable: true,
+      );
+    } catch (error) {
+      return _failure(
+        runtimeToolId: runtimeToolId,
+        status: ToolResultStatus.executionError,
+        summary: 'MCP tool call failed: $error',
+        errorCode: 'mcp_call_exception',
+      );
+    }
+    final payload = <String, Object?>{
+      'mcpToolName': mcpToolName,
+      if (result.structuredContent.isNotEmpty)
+        'structuredContent': result.structuredContent,
+    };
+    if (result.isError) {
+      return ToolResult.failure(
+        result.contentText.isEmpty
+            ? 'MCP tool returned an error.'
+            : result.contentText,
+        toolId: runtimeToolId,
+        status: ToolResultStatus.executionError,
+        payload: payload,
+        metadata: <String, Object?>{
+          'toolId': runtimeToolId,
+          'category': category,
+          'mcpToolName': mcpToolName,
+          'reason': 'mcp_tool_error',
+          'errorCode': 'mcp_tool_error',
+          'isError': true,
+        },
+      );
+    }
     return ToolResult.success(
       result.contentText,
+      toolId: runtimeToolId,
+      payload: payload,
       metadata: <String, Object?>{
         'toolId': runtimeToolId,
         'category': category,
@@ -209,6 +296,28 @@ class McpRuntimeCoordinator {
         'isError': result.isError,
         if (result.structuredContent.isNotEmpty)
           'structuredContent': result.structuredContent,
+      },
+    );
+  }
+
+  ToolResult _failure({
+    required String runtimeToolId,
+    required ToolResultStatus status,
+    required String summary,
+    required String errorCode,
+    bool retryable = false,
+  }) {
+    return ToolResult.failure(
+      summary,
+      toolId: runtimeToolId,
+      status: status,
+      retryable: retryable,
+      userVisibleMessage: summary,
+      metadata: <String, Object?>{
+        'toolId': runtimeToolId,
+        'category': category,
+        'reason': errorCode,
+        'errorCode': errorCode,
       },
     );
   }

@@ -162,7 +162,9 @@ void main() {
       expect(session.messages.last.sender, ChatMessageSender.assistant);
       expect(session.messages.last.text, 'Trigger output ready.');
       expect(
-        session.messages.where((message) => message.sender == ChatMessageSender.user),
+        session.messages.where(
+          (message) => message.sender == ChatMessageSender.user,
+        ),
         isEmpty,
       );
       expect(executor.requests, isEmpty);
@@ -185,22 +187,54 @@ void main() {
         prompt: 'Run background task.',
         source: ExecutionSource.trigger,
       ),
+      ExecutionResult(
+        requestId: 'background',
+        sessionKey: 'system_main',
+        source: ExecutionSource.trigger,
+        mode: ExecutionLifecycleMode.triggeredRequest,
+        terminalStatus: ExecutionLifecycleStatus.completed,
+        admissionOutcome: ExecutionAdmissionOutcome.admitted,
+        policyReason: 'completed',
+        visibility: ExecutionVisibility.chat,
+        loopResult: const AgentLoopResult(
+          sessionResult: SessionResult.completed,
+          text: 'Background finished.',
+          reason: 'completed',
+        ),
+      ),
+    );
+
+    expect(session.messages.last.text, 'Background finished.');
+    expect(
+      session.messages.where(
+        (message) => message.sender == ChatMessageSender.user,
+      ),
+      isEmpty,
+    );
+    expect(executor.requests, isEmpty);
+  });
+
+  test('normalized tool result renders in activity details', () async {
+    final session = await _runSessionWithResult(
       const AgentLoopResult(
         sessionResult: SessionResult.completed,
-        text: 'Background finished.',
+        text: 'done',
         reason: 'completed',
+        toolResults: <ToolResult>[
+          ToolResult(
+            toolId: 'battery_info',
+            callId: 'call-1',
+            status: ToolResultStatus.success,
+            summary: 'Battery at 42%.',
+          ),
+        ],
       ),
     );
 
     expect(
-      session.messages.last.text,
-      'Background finished.',
+      session.activities.single.details,
+      contains('Tool battery_info [call-1] success: Battery at 42%.'),
     );
-    expect(
-      session.messages.where((message) => message.sender == ChatMessageSender.user),
-      isEmpty,
-    );
-    expect(executor.requests, isEmpty);
   });
 }
 
@@ -208,9 +242,7 @@ Future<AgentLoopChatSession> _runSessionWithResult(
   AgentLoopResult result,
 ) async {
   final executor = _RecordingTaskExecutor(result: result);
-  final session = AgentLoopChatSession(
-    taskExecutor: executor,
-  );
+  final session = AgentLoopChatSession(taskExecutor: executor);
   executor.chatSink = session;
   await session.sendMessage('hello');
   return session;
@@ -224,15 +256,28 @@ class _RecordingTaskExecutor implements AgentTaskExecutor {
   ChatExecutionSink? chatSink;
 
   @override
-  Future<AgentLoopResult> execute(ExecutionRequest request) async {
+  Future<ExecutionResult> execute(ExecutionRequest request) async {
     requests.add(request);
-    await chatSink?.appendExecutionResult(request, result);
-    return result;
+    final executionResult = ExecutionResult(
+      requestId: request.id,
+      sessionKey: request.sessionKey,
+      source: request.source,
+      mode: request.mode,
+      terminalStatus: ExecutionLifecycleStatus.completed,
+      admissionOutcome: ExecutionAdmissionOutcome.admitted,
+      policyReason: result.reason ?? 'completed',
+      visibility: request.visibility,
+      loopResult: result,
+    );
+    await chatSink?.appendExecutionResult(request, executionResult);
+    return executionResult;
   }
 
   @override
   Future<AgentTaskExecutionResult> executeTask(AgentTaskRequest request) async {
     final loopResult = await execute(request.toExecutionRequest());
-    return AgentTaskExecutionResult.fromLoopResult(loopResult);
+    return AgentTaskExecutionResult.fromLoopResult(
+      loopResult.toAgentLoopResult(),
+    );
   }
 }

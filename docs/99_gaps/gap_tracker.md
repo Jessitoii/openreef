@@ -116,23 +116,51 @@ Every execution must produce a deterministic final visible response in UI.
 GAP-014: ContextAssembler Heuristic-Based
 Status: OPEN
 Severity: HIGH
-Area: Context System
+Agent Runtime / Context Assembly / Execution Reliability
 
-### Problem
+### Current State
+`ContextAssembler` currently handles:
+- intent detection
+- tool selection
+- skill gating
+- memory retrieval
+- standing order retrieval
+- history slicing
+- token budgeting
+- final message assembly
 
-Context assembly relies on heuristics instead of a structured, policy-driven system.
+This is enough for MVP-level prompt construction, but the design is still fundamentally a heuristic prompt packer rather than a production-grade context policy engine.
 
-### Current Behavior
+Current weaknesses:
+- intent detection is centroid-based and too weak for reliable routing
+- tool selection is embedding-similarity-driven rather than policy/schema-aware
+- skill activation is pattern-trigger based and brittle
+- history selection is mostly newest-first token slicing
+- memory retrieval is not clearly multi-class, ranked, or continuity-aware
+- tool results are not reduced aggressively enough into structured summaries
+- workflow state is not first-class context
+- execution mode is not explicit
+- token allocation is static rather than adaptive
+- compaction is externally requested, not policy-driven
+- context assembly lacks auditability and deterministic policy traces
 
-Context is inconsistently constructed; important signals may be missing.
+### Why This Matters
+This gap directly affects:
+- multi-step reliability
+- tool misuse prevention
+- long-session quality
+- workflow continuation
+- compaction safety
+- failure recovery
+- debugging and observability
+- context budget efficiency
 
-### Why Insufficient
-
-Leads to unstable agent reasoning and unpredictable behavior.
-
-### Target Behavior
-
-Deterministic, policy-based context assembly with clear inputs/outputs.
+If left as-is, the agent will remain “working but fragile”:
+- more hallucination under long context
+- unnecessary tool exposure
+- stale or irrelevant history pollution
+- weak recovery after failed tool calls
+- poor scaling to persistent workflows and trigger-driven execution
 
 ---
 
@@ -238,26 +266,69 @@ Explicit execution policy (queueing, prioritization, cancellation).
 
 ---
 
-GAP-017: Tool Runtime Failures Not Standardized
-Status: OPEN
-Severity: HIGH
-Area: Tooling
+GAP-017: Tool pipeline is wired but tool execution is failing at runtime
 
-### Problem
+Status: Open
 
-Tool failures are not consistently handled or normalized.
+Severity: Critical
 
-### Current Behavior
+Area: Tool Runtime / Dispatch / Integration Reliability
 
-Different tools fail in different ways.
+### Current State
 
-### Why Insufficient
+The agent performs tool calling, but the tools do not actually execute successfully. The tool pipeline shape appears correct, but real runtime dispatch or integration is broken.
 
-Agent cannot reason about failures reliably.
+This means the architecture is claiming capabilities that are not delivered end to end.
 
-### Target Behavior
+Possible failure surfaces:
 
-Standardized tool result schema with explicit failure modes.
+* manifest and runtime implementation mismatch
+* argument schema mismatch
+* permission/approval dead path
+* MCP connection state mismatch
+* async result propagation failure
+* tool result not returned into loop context
+* platform bridge failure on Android/native side
+
+### Why This Matters
+
+This is a product credibility failure.
+
+If tool calling is visible but tool execution fails:
+
+* automation is fake
+* workflow layer cannot be trusted
+* user mental model collapses
+* debugging becomes noisy because reasoning path looks correct while effect path is dead
+
+### Target State
+
+Every exposed tool must pass an end-to-end execution contract:
+
+* listed in registry
+* invokable through router
+* validates args
+* enforces confirmation policy
+* executes real implementation
+* returns normalized result
+* emits visible execution state
+* injects reduced result back into context
+* persists execution record
+
+### Required Fix Direction
+
+Create a tool validation matrix:
+
+* tool ID
+* manifest present
+* implementation bound
+* permission path works
+* confirmation path works
+* returns result
+* result visible in loop
+* result visible in UI step trace
+
+Do not debug this abstractly. Prove each boundary per tool category.
 
 ---
 

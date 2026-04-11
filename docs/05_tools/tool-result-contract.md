@@ -41,10 +41,16 @@ Optional:
 - `success`
 - `rejected`
 - `validation_error`
+- `permission_denied`
 - `execution_error`
 - `timeout`
 - `unavailable`
-- `blocked_by_policy`
+- `cancelled`
+
+Compatibility:
+- older `blocked_by_policy` serialized values are read as `permission_denied`.
+- malformed or unknown serialized statuses normalize to `execution_error` with
+  an `invalid_status` reason; they must not silently become success.
 
 ## Status Mapping Rules
 | Source branch | ToolResult status |
@@ -55,7 +61,8 @@ Optional:
 | adapter exception | `execution_error` |
 | execution exceeds timeout | `timeout` |
 | tool missing/unavailable | `unavailable` |
-| policy permission block | `blocked_by_policy` |
+| policy permission block | `permission_denied` |
+| pending tool execution cancelled | `cancelled` |
 
 ## Context Injection Rules
 Inject into loop context:
@@ -69,6 +76,8 @@ Persist with run/session records:
 - call metadata (`requestId/runId/callId/toolId` correlation)
 - terminal status and reason fields
 - pointer/reference to full payload/audit artifact
+- normalized `ToolResult` summaries/statuses on execution records, so durable
+  runtime history is not reduced to a tool-id string list only.
 
 ## Failure Modes
 - malformed result object from adapter layer → convert to `execution_error` with normalization failure code.

@@ -30,10 +30,7 @@ class MainAgentApprovalController extends ChangeNotifier {
   Future<bool> confirmToolCall(ToolCall call) {
     final completer = Completer<bool>();
     _approvalQueue.add(
-      _PendingApprovalEntry.main(
-        call: call,
-        completer: completer,
-      ),
+      _PendingApprovalEntry.main(call: call, completer: completer),
     );
     _promoteNextApproval();
     return completer.future;
@@ -115,22 +112,22 @@ class _PendingApprovalEntry {
   _PendingApprovalEntry.main({
     required ToolCall call,
     required Completer<bool> completer,
-  })  : presentation = PendingToolApproval(
-          toolCallId: call.id,
-          toolId: call.toolId,
-          arguments: Map<String, Object?>.unmodifiable(call.arguments),
-        ),
-        requestId = null,
-        mainDecision = completer;
+  }) : presentation = PendingToolApproval(
+         toolCallId: call.id,
+         toolId: call.toolId,
+         arguments: Map<String, Object?>.unmodifiable(call.arguments),
+       ),
+       requestId = null,
+       mainDecision = completer;
 
   _PendingApprovalEntry.mailbox(ApprovalRequest request)
-      : presentation = PendingToolApproval(
-          toolCallId: request.call.id,
-          toolId: request.call.toolId,
-          arguments: Map<String, Object?>.unmodifiable(request.call.arguments),
-        ),
-        requestId = request.requestId,
-        mainDecision = null;
+    : presentation = PendingToolApproval(
+        toolCallId: request.call.id,
+        toolId: request.call.toolId,
+        arguments: Map<String, Object?>.unmodifiable(request.call.arguments),
+      ),
+      requestId = request.requestId,
+      mainDecision = null;
 
   final PendingToolApproval presentation;
   final String? requestId;
@@ -187,7 +184,8 @@ class AgentLoopChatSession extends ChangeNotifier
       List<SubAgentActivity>.unmodifiable(_activities);
 
   @override
-  PendingToolApproval? get pendingApproval => _approvalController?.pendingApproval;
+  PendingToolApproval? get pendingApproval =>
+      _approvalController?.pendingApproval;
 
   @override
   List<ChatTranscriptMessage> get messages =>
@@ -257,8 +255,9 @@ class AgentLoopChatSession extends ChangeNotifier
         ),
       );
 
-      final responseText = _normalizeResponse(result);
-      if (_shouldTrackAssistantTurn(result)) {
+      final loopResult = result.toAgentLoopResult();
+      final responseText = _normalizeResponse(loopResult);
+      if (_shouldTrackAssistantTurn(loopResult)) {
         _conversationHistory.add(
           AgentMessage(
             role: AgentMessageRole.assistant,
@@ -272,17 +271,18 @@ class AgentLoopChatSession extends ChangeNotifier
         SubAgentActivity(
           id: 'agent-loop',
           label: 'agent.loop',
-          summary: _activitySummaryForResult(result, responseText),
+          summary: _activitySummaryForResult(loopResult, responseText),
           details: <String>[
-            'Result: ${result.sessionResult.name}',
+            'Result: ${result.terminalStatus.name}',
+            ...loopResult.toolResults.map(_formatToolResultDetail),
             if (responseText.isNotEmpty)
               'Response length: ${responseText.length} chars',
           ],
           status: _isProtectivePauseMessage(responseText)
               ? SubAgentActivityStatus.completed
-              : result.sessionResult == SessionResult.completed
-                  ? SubAgentActivityStatus.completed
-                  : SubAgentActivityStatus.failed,
+              : loopResult.sessionResult == SessionResult.completed
+              ? SubAgentActivityStatus.completed
+              : SubAgentActivityStatus.failed,
         ),
       ]);
       _setStatus(ChatSessionStatus.completed);
@@ -326,12 +326,14 @@ class AgentLoopChatSession extends ChangeNotifier
     }
     if (result.sessionResult == SessionResult.failed) {
       return switch (result.reason) {
-        'session_busy' => 'Another execution is already running for this session.',
+        'session_busy' =>
+          'Another execution is already running for this session.',
         'compaction_failure' =>
           'The agent turn failed while compacting context.',
         'generation_failure' =>
           'The agent turn failed during model generation.',
-        'executor_failure' => 'The agent turn failed before execution completed.',
+        'executor_failure' =>
+          'The agent turn failed before execution completed.',
         _ => 'The agent turn failed before completion.',
       };
     }
@@ -353,13 +355,19 @@ class AgentLoopChatSession extends ChangeNotifier
       return 'Generation paused to protect the device from low-memory crashes.';
     }
     return switch (result.sessionResult) {
-      SessionResult.completed =>
-        'Agent loop completed successfully.',
-      SessionResult.frozen =>
-        'Agent loop entered a protected frozen state.',
-      SessionResult.failed =>
-        'Agent loop ended with a runtime failure.',
+      SessionResult.completed => 'Agent loop completed successfully.',
+      SessionResult.frozen => 'Agent loop entered a protected frozen state.',
+      SessionResult.failed => 'Agent loop ended with a runtime failure.',
+      SessionResult.cancelled =>
+        'Agent loop was cancelled by execution policy.',
+      SessionResult.suspended => 'Agent loop suspended with resumable state.',
     };
+  }
+
+  String _formatToolResultDetail(ToolResult result) {
+    final toolId = result.toolId ?? 'unknown';
+    final callId = result.callId ?? 'unknown';
+    return 'Tool $toolId [$callId] ${result.statusName}: ${result.userVisibleMessage ?? result.summary}';
   }
 
   bool _shouldTrackAssistantTurn(AgentLoopResult result) {
@@ -437,9 +445,9 @@ class AgentLoopChatSession extends ChangeNotifier
   @override
   Future<void> appendExecutionResult(
     ExecutionRequest request,
-    AgentLoopResult result,
+    ExecutionResult result,
   ) async {
-    final responseText = _normalizeResponse(result);
+    final responseText = _normalizeResponse(result.toAgentLoopResult());
     if (responseText.trim().isEmpty) {
       return;
     }

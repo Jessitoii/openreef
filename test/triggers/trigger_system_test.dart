@@ -83,7 +83,10 @@ void main() {
 
     expect(result.decision, TriggerDecision.execute);
     expect(taskExecutor.requests.single.sessionKey, 'system_main');
-    expect(taskExecutor.requests.single.triggerMetadata?.deliveryType, 'manual');
+    expect(
+      taskExecutor.requests.single.triggerMetadata?.deliveryType,
+      'manual',
+    );
     expect(system.stateById('manual_sync')?.lastResult, 'done');
     expect(system.stateById('manual_sync')?.history, hasLength(1));
     expect(
@@ -178,47 +181,53 @@ void main() {
     );
   });
 
-  test('MCP_EVENT reaches trigger execution when source and payload match', () async {
-    final system = buildSystem();
-    await system.register(_mcpEventTrigger());
-    system.setRuntimeReady(true);
+  test(
+    'MCP_EVENT reaches trigger execution when source and payload match',
+    () async {
+      final system = buildSystem();
+      await system.register(_mcpEventTrigger());
+      system.setRuntimeReady(true);
 
-    final results = await system.handleMcpRuntimeEvent(
-      McpRuntimeEvent(
-        sourceId: 'source-a',
-        eventName: 'notifications/github.pr_merged',
-        payload: <String, Object?>{
-          'method': 'notifications/github.pr_merged',
-          'params': <String, Object?>{'repo': 'openreef'},
-        },
-        receivedAt: DateTime.utc(2026, 4, 7, 12),
-        transportEvent: 'message',
-      ),
-    );
+      final results = await system.handleMcpRuntimeEvent(
+        McpRuntimeEvent(
+          sourceId: 'source-a',
+          eventName: 'notifications/github.pr_merged',
+          payload: <String, Object?>{
+            'method': 'notifications/github.pr_merged',
+            'params': <String, Object?>{'repo': 'openreef'},
+          },
+          receivedAt: DateTime.utc(2026, 4, 7, 12),
+          transportEvent: 'message',
+        ),
+      );
 
-    expect(results, hasLength(1));
-    expect(taskExecutor.requests, hasLength(1));
-    expect(
-      taskExecutor.requests.single.triggerMetadata?.triggerType,
-      TriggerType.mcpEvent.name,
-    );
-  });
+      expect(results, hasLength(1));
+      expect(taskExecutor.requests, hasLength(1));
+      expect(
+        taskExecutor.requests.single.triggerMetadata?.triggerType,
+        TriggerType.mcpEvent.name,
+      );
+    },
+  );
 
-  test('standing order deterministically influences execution metadata', () async {
-    final system = buildSystem();
-    await system.register(_manualTrigger());
-    await system.register(_standingOrderTrigger());
-    system.setRuntimeReady(true);
+  test(
+    'standing order deterministically influences execution metadata',
+    () async {
+      final system = buildSystem();
+      await system.register(_manualTrigger());
+      await system.register(_standingOrderTrigger());
+      system.setRuntimeReady(true);
 
-    await system.fireManual('manual_sync');
+      await system.fireManual('manual_sync');
 
-    final triggerMetadata = taskExecutor.requests.single.triggerMetadata;
-    expect(triggerMetadata?.appliedStandingOrderIds, <String>['boss_rule']);
-    expect(
-      triggerMetadata?.standingOrderInstructions,
-      contains('Escalate anything tagged work-critical first.'),
-    );
-  });
+      final triggerMetadata = taskExecutor.requests.single.triggerMetadata;
+      expect(triggerMetadata?.appliedStandingOrderIds, <String>['boss_rule']);
+      expect(
+        triggerMetadata?.standingOrderInstructions,
+        contains('Escalate anything tagged work-critical first.'),
+      );
+    },
+  );
 
   test('BATTERY registration routes to battery backend', () async {
     final system = buildSystem();
@@ -243,7 +252,8 @@ void main() {
         deliveries.add(delivery);
       },
       pollInterval: const Duration(minutes: 1),
-      timerFactory: (every, onTick) => _FakeTimerHandle(every: every, onTick: onTick),
+      timerFactory: (every, onTick) =>
+          _FakeTimerHandle(every: every, onTick: onTick),
       timerCanceler: (handle) {},
     );
 
@@ -388,7 +398,7 @@ class _RecordingTaskExecutor implements AgentTaskExecutor {
   final List<AgentTaskRequest> requests = <AgentTaskRequest>[];
 
   @override
-  Future<AgentLoopResult> execute(ExecutionRequest request) async {
+  Future<ExecutionResult> execute(ExecutionRequest request) async {
     throw UnimplementedError();
   }
 

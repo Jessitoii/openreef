@@ -83,7 +83,8 @@ class TriggerSystem {
       return const TriggerValidationResult.invalid('missing_prompt');
     }
 
-    if (trigger.type == TriggerType.manual || trigger.type == TriggerType.boot) {
+    if (trigger.type == TriggerType.manual ||
+        trigger.type == TriggerType.boot) {
       if (_countDefinedSpecs(trigger) != 0) {
         return const TriggerValidationResult.invalid('invalid_trigger_spec');
       }
@@ -162,11 +163,15 @@ class TriggerSystem {
 
     final spec = trigger.standingOrderSpec;
     if (_countDefinedSpecs(trigger) != 1 || spec == null) {
-      return const TriggerValidationResult.invalid('invalid_standing_order_spec');
+      return const TriggerValidationResult.invalid(
+        'invalid_standing_order_spec',
+      );
     }
     if (spec.appliesToTypes.isEmpty ||
         spec.appliesToTypes.contains(TriggerType.standingOrder)) {
-      return const TriggerValidationResult.invalid('invalid_standing_order_scope');
+      return const TriggerValidationResult.invalid(
+        'invalid_standing_order_scope',
+      );
     }
     return const TriggerValidationResult.valid();
   }
@@ -187,8 +192,9 @@ class TriggerSystem {
     }
 
     _triggers[trigger.id] = trigger;
-    _states[trigger.id] = (_states[trigger.id] ?? TriggerState(enabled: trigger.enabled))
-        .copyWith(enabled: trigger.enabled);
+    _states[trigger.id] =
+        (_states[trigger.id] ?? TriggerState(enabled: trigger.enabled))
+            .copyWith(enabled: trigger.enabled);
 
     if (trigger.enabled) {
       await _activate(trigger);
@@ -216,8 +222,10 @@ class TriggerSystem {
       return false;
     }
     if (trigger.enabled == enabled) {
-      _states[triggerId] = (_states[triggerId] ?? TriggerState(enabled: enabled))
-          .copyWith(enabled: enabled);
+      _states[triggerId] =
+          (_states[triggerId] ?? TriggerState(enabled: enabled)).copyWith(
+            enabled: enabled,
+          );
       return true;
     }
 
@@ -346,7 +354,8 @@ class TriggerSystem {
   }
 
   Future<void> _activate(TriggerConfig trigger) async {
-    if (trigger.type == TriggerType.schedule || trigger.type == TriggerType.cron) {
+    if (trigger.type == TriggerType.schedule ||
+        trigger.type == TriggerType.cron) {
       await _scheduleBackend.registerSchedule(trigger);
       return;
     }
@@ -364,7 +373,8 @@ class TriggerSystem {
   }
 
   Future<void> _deactivate(TriggerConfig trigger) async {
-    if (trigger.type == TriggerType.schedule || trigger.type == TriggerType.cron) {
+    if (trigger.type == TriggerType.schedule ||
+        trigger.type == TriggerType.cron) {
       await _scheduleBackend.cancel(trigger.id);
       return;
     }
@@ -527,21 +537,21 @@ class TriggerSystem {
     required TriggerDelivery delivery,
     required TriggerState baselineState,
   }) async {
-    final payload = <String, Object?>{
-      ...trigger.payload,
-      ...delivery.payload,
-    };
+    final payload = <String, Object?>{...trigger.payload, ...delivery.payload};
     final standingOrders = _standingOrderApplicator.apply(
       standingOrders: _triggers.values,
       trigger: trigger,
       payload: payload,
+      runId: trigger.id,
+      evaluatedAt: delivery.deliveredAt,
     );
     final executionResult = await _taskExecutor.executeTask(
       AgentTaskRequest(
         sessionKey: systemSessionKey,
         prompt: trigger.prompt,
         source:
-            trigger.type == TriggerType.schedule || trigger.type == TriggerType.cron
+            trigger.type == TriggerType.schedule ||
+                trigger.type == TriggerType.cron
             ? ExecutionSource.schedule
             : trigger.type == TriggerType.mcpEvent
             ? ExecutionSource.mcpEvent
@@ -556,7 +566,13 @@ class TriggerSystem {
           deliveredAt: delivery.deliveredAt,
           scheduledAt: delivery.scheduledAt,
           appliedStandingOrderIds: standingOrders.appliedIds,
-          standingOrderInstructions: standingOrders.instructions.trim(),
+          standingOrderDirectives: standingOrders.appliedIds.isEmpty
+              ? const <String, Object?>{}
+              : <String, Object?>{
+                  'ruleIds': standingOrders.appliedIds,
+                  'effect': 'apply_runtime_directive',
+                },
+          standingOrderEvaluations: standingOrders.evaluations,
         ),
       ),
     );
@@ -621,10 +637,7 @@ class TriggerSystem {
     required TriggerState state,
     required TriggerHistoryEntry historyEntry,
   }) {
-    final history = <TriggerHistoryEntry>[
-      ...state.history,
-      historyEntry,
-    ];
+    final history = <TriggerHistoryEntry>[...state.history, historyEntry];
     final trimmed = history.length > historyLimit
         ? history.sublist(history.length - historyLimit)
         : history;
@@ -639,7 +652,8 @@ class TriggerSystem {
     return switch (status) {
       AgentTaskExecutionStatus.completed => TriggerExecutionStatus.completed,
       AgentTaskExecutionStatus.frozen => TriggerExecutionStatus.frozen,
-      AgentTaskExecutionStatus.failed => TriggerExecutionStatus.failed,
+      AgentTaskExecutionStatus.failed ||
+      AgentTaskExecutionStatus.rejected => TriggerExecutionStatus.failed,
     };
   }
 
@@ -647,7 +661,8 @@ class TriggerSystem {
     return switch (status) {
       AgentTaskExecutionStatus.completed => TriggerRuntimeStatus.completed,
       AgentTaskExecutionStatus.frozen => TriggerRuntimeStatus.frozen,
-      AgentTaskExecutionStatus.failed => TriggerRuntimeStatus.failed,
+      AgentTaskExecutionStatus.failed ||
+      AgentTaskExecutionStatus.rejected => TriggerRuntimeStatus.failed,
     };
   }
 

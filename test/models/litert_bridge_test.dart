@@ -1,6 +1,10 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_gemma/flutter_gemma.dart';
+import 'package:openreef/agent/agent_models.dart';
+import 'package:openreef/agent/tool_router.dart';
 import 'package:openreef/models/litert_bridge.dart';
+import 'package:openreef/tools/tool_manifest.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -53,6 +57,39 @@ void main() {
       throwsA(isA<StateError>()),
     );
   });
+
+  test(
+    'tool call config only enables function calls when tools are selected',
+    () {
+      final empty = bridge.buildToolCallConfig(const <ToolDefinition>[]);
+      expect(empty.tools, isEmpty);
+      expect(empty.supportsFunctionCalls, isFalse);
+      expect(empty.toolChoice, ToolChoice.none);
+
+      final withTools = bridge.buildToolCallConfig(<ToolDefinition>[
+        ToolDefinition(
+          id: 'mcp_source/search_docs',
+          embedding: const <double>[1, 0, 0],
+          description: 'Search docs',
+          source: 'mcp',
+          category: 'mcp',
+          argumentSchema: const <ToolArgumentSpec>[
+            ToolArgumentSpec(
+              name: 'query',
+              type: ToolArgumentType.string,
+              description: 'Search query',
+            ),
+          ],
+          execute: (call) async => const ToolResult.success('ok'),
+        ),
+      ]);
+
+      expect(withTools.tools, hasLength(1));
+      expect(withTools.tools.single.name, 'mcp_source/search_docs');
+      expect(withTools.supportsFunctionCalls, isTrue);
+      expect(withTools.toolChoice, ToolChoice.auto);
+    },
+  );
 
   test('crash shield exception prints user-facing message', () {
     const error = LiteRtCrashShieldException('Low RAM');

@@ -80,8 +80,8 @@ class ToolCall {
       arguments: rawArguments is Map<String, Object?>
           ? rawArguments
           : rawArguments is Map
-              ? Map<String, Object?>.from(rawArguments)
-              : const <String, Object?>{},
+          ? Map<String, Object?>.from(rawArguments)
+          : const <String, Object?>{},
     );
   }
 
@@ -97,67 +97,216 @@ class ToolCall {
 enum ToolResultStatus {
   success,
   rejected,
-  failure,
+  validationError,
+  permissionDenied,
+  unavailable,
+  timeout,
+  executionError,
+  cancelled,
 }
 
 class ToolResult {
   const ToolResult({
     required this.status,
-    required this.content,
+    required this.summary,
+    this.toolId,
+    this.callId,
+    this.payload = const <String, Object?>{},
+    this.retryable = false,
+    this.userVisibleMessage,
     this.metadata = const <String, Object?>{},
   });
 
   const ToolResult.success(
-    this.content, {
-    this.metadata = const <String, Object?>{},
-  }) : status = ToolResultStatus.success;
+    String content, {
+    String? toolId,
+    String? callId,
+    Map<String, Object?> payload = const <String, Object?>{},
+    String? userVisibleMessage,
+    Map<String, Object?> metadata = const <String, Object?>{},
+  }) : this(
+         status: ToolResultStatus.success,
+         summary: content,
+         toolId: toolId,
+         callId: callId,
+         payload: payload,
+         userVisibleMessage: userVisibleMessage,
+         metadata: metadata,
+       );
 
   const ToolResult.rejected({
-    this.content = 'rejected',
-    this.metadata = const <String, Object?>{},
-  }) : status = ToolResultStatus.rejected;
+    String summary = 'rejected',
+    String? toolId,
+    String? callId,
+    Map<String, Object?> payload = const <String, Object?>{},
+    String? userVisibleMessage,
+    Map<String, Object?> metadata = const <String, Object?>{},
+  }) : this(
+         status: ToolResultStatus.rejected,
+         summary: summary,
+         toolId: toolId,
+         callId: callId,
+         payload: payload,
+         userVisibleMessage: userVisibleMessage,
+         metadata: metadata,
+       );
 
   const ToolResult.failure(
-    this.content, {
-    this.metadata = const <String, Object?>{},
-  }) : status = ToolResultStatus.failure;
+    String content, {
+    String? toolId,
+    String? callId,
+    ToolResultStatus status = ToolResultStatus.executionError,
+    Map<String, Object?> payload = const <String, Object?>{},
+    bool retryable = false,
+    String? userVisibleMessage,
+    Map<String, Object?> metadata = const <String, Object?>{},
+  }) : this(
+         status: status,
+         summary: content,
+         toolId: toolId,
+         callId: callId,
+         payload: payload,
+         retryable: retryable,
+         userVisibleMessage: userVisibleMessage,
+         metadata: metadata,
+       );
 
+  final String? toolId;
+  final String? callId;
   final ToolResultStatus status;
-  final String content;
+  final String summary;
+  final Map<String, Object?> payload;
+  final bool retryable;
+  final String? userVisibleMessage;
   final Map<String, Object?> metadata;
 
+  String get content => summary;
   bool get isRejected => status == ToolResultStatus.rejected;
-  bool get isFailure => status == ToolResultStatus.failure;
-  bool get isError => isRejected || isFailure;
+  bool get isFailure => status != ToolResultStatus.success && !isRejected;
+  bool get isError => status != ToolResultStatus.success;
+  String get statusName => _statusToWire(status);
 
-  String toContextString() => content;
+  ToolResult withCall(ToolCall call) {
+    return ToolResult(
+      status: status,
+      summary: summary,
+      toolId: toolId ?? call.toolId,
+      callId: callId ?? call.id,
+      payload: payload,
+      retryable: retryable,
+      userVisibleMessage: userVisibleMessage,
+      metadata: metadata,
+    );
+  }
+
+  String toContextString() {
+    final buffer = StringBuffer()
+      ..writeln('toolId: ${toolId ?? 'unknown'}')
+      ..writeln('callId: ${callId ?? 'unknown'}')
+      ..writeln('status: $statusName')
+      ..write('summary: ${userVisibleMessage ?? summary}');
+    if (isError) {
+      final reason =
+          metadata['reason'] ??
+          metadata['errorCode'] ??
+          metadata['outcome_reason'];
+      if (reason != null) {
+        buffer.write('\nreason: $reason');
+      }
+    }
+    return buffer.toString();
+  }
 
   factory ToolResult.fromMap(Map<String, Object?> map) {
     final rawMetadata = map['metadata'];
+    final rawPayload = map['payload'] ?? map['structuredPayload'];
+    final fallbackContent = map['content'] as String?;
+    final parsedStatus = _statusFromWire(map['status']);
+    final metadata = _mapOrEmpty(rawMetadata);
+    final normalizedMetadata = _isKnownStatusWire(map['status'])
+        ? metadata
+        : <String, Object?>{
+            ...metadata,
+            'reason': 'invalid_status',
+            'errorCode': 'invalid_status',
+            'rawStatus': map['status']?.toString(),
+          };
     return ToolResult(
-      status: switch (map['status']) {
-        'rejected' => ToolResultStatus.rejected,
-        'failure' => ToolResultStatus.failure,
-        _ => ToolResultStatus.success,
-      },
-      content: map['content'] as String? ?? '',
-      metadata: rawMetadata is Map<String, Object?>
-          ? rawMetadata
-          : rawMetadata is Map
-              ? Map<String, Object?>.from(rawMetadata)
-              : const <String, Object?>{},
+      toolId: map['toolId'] as String? ?? map['tool_id'] as String?,
+      callId: map['callId'] as String? ?? map['call_id'] as String?,
+      status: parsedStatus,
+      summary: map['summary'] as String? ?? fallbackContent ?? '',
+      payload: _mapOrEmpty(rawPayload),
+      retryable: map['retryable'] as bool? ?? false,
+      userVisibleMessage:
+          map['userVisibleMessage'] as String? ??
+          map['user_visible_message'] as String?,
+      metadata: normalizedMetadata,
     );
   }
 
   Map<String, Object?> toMap() {
     return <String, Object?>{
-      'status': switch (status) {
-        ToolResultStatus.success => 'success',
-        ToolResultStatus.rejected => 'rejected',
-        ToolResultStatus.failure => 'failure',
-      },
+      'toolId': toolId,
+      'callId': callId,
+      'status': statusName,
+      'summary': summary,
       'content': content,
+      'payload': payload,
+      'retryable': retryable,
+      'userVisibleMessage': userVisibleMessage,
       'metadata': metadata,
+    };
+  }
+
+  static Map<String, Object?> _mapOrEmpty(Object? value) {
+    if (value is Map<String, Object?>) {
+      return value;
+    }
+    if (value is Map) {
+      return Map<String, Object?>.from(value);
+    }
+    return const <String, Object?>{};
+  }
+
+  static ToolResultStatus _statusFromWire(Object? status) {
+    return switch (status) {
+      'rejected' => ToolResultStatus.rejected,
+      'validation_error' => ToolResultStatus.validationError,
+      'permission_denied' ||
+      'blocked_by_policy' => ToolResultStatus.permissionDenied,
+      'unavailable' => ToolResultStatus.unavailable,
+      'timeout' => ToolResultStatus.timeout,
+      'execution_error' || 'failure' => ToolResultStatus.executionError,
+      'cancelled' => ToolResultStatus.cancelled,
+      null => ToolResultStatus.executionError,
+      _ => ToolResultStatus.executionError,
+    };
+  }
+
+  static bool _isKnownStatusWire(Object? status) {
+    return status == 'success' ||
+        status == 'rejected' ||
+        status == 'validation_error' ||
+        status == 'permission_denied' ||
+        status == 'blocked_by_policy' ||
+        status == 'unavailable' ||
+        status == 'timeout' ||
+        status == 'execution_error' ||
+        status == 'failure' ||
+        status == 'cancelled';
+  }
+
+  static String _statusToWire(ToolResultStatus status) {
+    return switch (status) {
+      ToolResultStatus.success => 'success',
+      ToolResultStatus.rejected => 'rejected',
+      ToolResultStatus.validationError => 'validation_error',
+      ToolResultStatus.permissionDenied => 'permission_denied',
+      ToolResultStatus.unavailable => 'unavailable',
+      ToolResultStatus.timeout => 'timeout',
+      ToolResultStatus.executionError => 'execution_error',
+      ToolResultStatus.cancelled => 'cancelled',
     };
   }
 }
@@ -166,21 +315,87 @@ class AgentResponse {
   const AgentResponse({
     required this.text,
     this.toolCall,
+    this.toolCalls = const <ToolCall>[],
     this.rawOutput,
   });
 
   final String text;
   final ToolCall? toolCall;
+  final List<ToolCall> toolCalls;
   final String? rawOutput;
 
-  bool get hasToolCall => toolCall != null;
+  bool get hasToolCall => effectiveToolCalls.isNotEmpty;
+
+  List<ToolCall> get effectiveToolCalls {
+    final first = toolCall;
+    if (first == null) {
+      return toolCalls;
+    }
+    if (toolCalls.isEmpty) {
+      return <ToolCall>[first];
+    }
+    if (identical(toolCalls.first, first) || toolCalls.first.id == first.id) {
+      return toolCalls;
+    }
+    return <ToolCall>[first, ...toolCalls];
+  }
 }
 
-enum SessionResult {
-  completed,
-  frozen,
-  failed,
+class CancellationSignal {
+  var _isCancelled = false;
+  String? _reason;
+
+  bool get isCancelled => _isCancelled;
+
+  String? get reason => _reason;
+
+  void cancel([String reason = 'cancelled']) {
+    _isCancelled = true;
+    _reason = reason;
+  }
 }
+
+class LoopControl {
+  const LoopControl({
+    this.maxSteps = 12,
+    this.maxToolCalls = 8,
+    this.timeout = const Duration(seconds: 30),
+    this.cancellationSignal,
+  });
+
+  final int maxSteps;
+  final int maxToolCalls;
+  final Duration timeout;
+  final CancellationSignal? cancellationSignal;
+}
+
+class LoopContinuation {
+  const LoopContinuation({
+    this.currentStepIndex = 0,
+    this.variables = const <String, Object?>{},
+    this.waitingReason,
+    this.waitingMetadata = const <String, Object?>{},
+    this.resumeToken,
+  });
+
+  final int currentStepIndex;
+  final Map<String, Object?> variables;
+  final String? waitingReason;
+  final Map<String, Object?> waitingMetadata;
+  final String? resumeToken;
+
+  Map<String, Object?> toMetadata() {
+    return <String, Object?>{
+      'currentStepIndex': currentStepIndex,
+      'variables': variables,
+      if (waitingReason != null) 'waitingReason': waitingReason,
+      if (waitingMetadata.isNotEmpty) 'waitingMetadata': waitingMetadata,
+      if (resumeToken != null) 'resumeToken': resumeToken,
+    };
+  }
+}
+
+enum SessionResult { completed, frozen, failed, cancelled, suspended }
 
 class AgentLoopResult {
   const AgentLoopResult({
@@ -188,12 +403,20 @@ class AgentLoopResult {
     required this.text,
     this.reason,
     this.toolsUsed = const <String>[],
+    this.toolResults = const <ToolResult>[],
+    this.stepCount = 0,
+    this.toolCallCount = 0,
+    this.continuation = const LoopContinuation(),
   });
 
   final SessionResult sessionResult;
   final String text;
   final String? reason;
   final List<String> toolsUsed;
+  final List<ToolResult> toolResults;
+  final int stepCount;
+  final int toolCallCount;
+  final LoopContinuation continuation;
 }
 
 class AgentResponseParser {
@@ -206,14 +429,12 @@ class AgentResponseParser {
       return AgentResponse(
         text: decoded['text'] as String? ?? '',
         toolCall: _parseToolCall(decoded),
+        toolCalls: _parseToolCalls(decoded),
         rawOutput: output,
       );
     }
 
-    return AgentResponse(
-      text: trimmed,
-      rawOutput: output,
-    );
+    return AgentResponse(text: trimmed, rawOutput: output);
   }
 
   ToolCall? _parseToolCall(Map<String, Object?> decoded) {
@@ -225,6 +446,17 @@ class AgentResponseParser {
       return ToolCall.fromMap(Map<String, Object?>.from(rawToolCall));
     }
     return null;
+  }
+
+  List<ToolCall> _parseToolCalls(Map<String, Object?> decoded) {
+    final rawToolCalls = decoded['toolCalls'] ?? decoded['tool_calls'];
+    if (rawToolCalls is! List) {
+      return const <ToolCall>[];
+    }
+    return rawToolCalls
+        .whereType<Map>()
+        .map((entry) => ToolCall.fromMap(Map<String, Object?>.from(entry)))
+        .toList(growable: false);
   }
 
   Map<String, Object?>? _tryDecodeObject(String output) {

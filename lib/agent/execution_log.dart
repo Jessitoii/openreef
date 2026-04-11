@@ -1,7 +1,15 @@
 import 'package:flutter/foundation.dart';
+import 'package:openreef/agent/agent_models.dart';
 import 'package:openreef/agent/execution_request.dart';
 
-enum ExecutionStatus { running, completed, failed, frozen }
+enum ExecutionStatus {
+  running,
+  completed,
+  failed,
+  frozen,
+  cancelled,
+  suspended,
+}
 
 class ExecutionRecord {
   const ExecutionRecord({
@@ -11,6 +19,7 @@ class ExecutionRecord {
     required this.status,
     required this.toolsUsed,
     required this.createdAt,
+    this.toolResults = const <ToolResult>[],
     this.finishedAt,
     this.failureReason,
     this.errorSummary,
@@ -21,6 +30,7 @@ class ExecutionRecord {
   final ExecutionSource source;
   final ExecutionStatus status;
   final List<String> toolsUsed;
+  final List<ToolResult> toolResults;
   final DateTime createdAt;
   final DateTime? finishedAt;
   final String? failureReason;
@@ -29,6 +39,7 @@ class ExecutionRecord {
   ExecutionRecord copyWith({
     ExecutionStatus? status,
     List<String>? toolsUsed,
+    List<ToolResult>? toolResults,
     DateTime? finishedAt,
     bool clearFinishedAt = false,
     String? failureReason,
@@ -42,12 +53,17 @@ class ExecutionRecord {
       source: source,
       status: status ?? this.status,
       toolsUsed: List<String>.unmodifiable(toolsUsed ?? this.toolsUsed),
+      toolResults: List<ToolResult>.unmodifiable(
+        toolResults ?? this.toolResults,
+      ),
       createdAt: createdAt,
       finishedAt: clearFinishedAt ? null : finishedAt ?? this.finishedAt,
       failureReason: clearFailureReason
           ? null
           : failureReason ?? this.failureReason,
-      errorSummary: clearErrorSummary ? null : errorSummary ?? this.errorSummary,
+      errorSummary: clearErrorSummary
+          ? null
+          : errorSummary ?? this.errorSummary,
     );
   }
 }
@@ -61,6 +77,7 @@ abstract class ExecutionLogStore {
     String id, {
     required ExecutionStatus status,
     required List<String> toolsUsed,
+    List<ToolResult> toolResults = const <ToolResult>[],
     required DateTime finishedAt,
     String? failureReason,
     String? errorSummary,
@@ -76,9 +93,10 @@ class InMemoryExecutionLogStore implements ExecutionLogStore {
 
   @override
   void start(ExecutionRecord record) {
-    _records.value = List<ExecutionRecord>.unmodifiable(
-      <ExecutionRecord>[..._records.value, record],
-    );
+    _records.value = List<ExecutionRecord>.unmodifiable(<ExecutionRecord>[
+      ..._records.value,
+      record,
+    ]);
   }
 
   @override
@@ -86,24 +104,28 @@ class InMemoryExecutionLogStore implements ExecutionLogStore {
     String id, {
     required ExecutionStatus status,
     required List<String> toolsUsed,
+    List<ToolResult> toolResults = const <ToolResult>[],
     required DateTime finishedAt,
     String? failureReason,
     String? errorSummary,
   }) {
-    final updated = _records.value.map((record) {
-      if (record.id != id) {
-        return record;
-      }
-      return record.copyWith(
-        status: status,
-        toolsUsed: List<String>.unmodifiable(toolsUsed),
-        finishedAt: finishedAt.toUtc(),
-        failureReason: failureReason,
-        clearFailureReason: failureReason == null,
-        errorSummary: errorSummary,
-        clearErrorSummary: errorSummary == null,
-      );
-    }).toList(growable: false);
+    final updated = _records.value
+        .map((record) {
+          if (record.id != id) {
+            return record;
+          }
+          return record.copyWith(
+            status: status,
+            toolsUsed: List<String>.unmodifiable(toolsUsed),
+            toolResults: List<ToolResult>.unmodifiable(toolResults),
+            finishedAt: finishedAt.toUtc(),
+            failureReason: failureReason,
+            clearFailureReason: failureReason == null,
+            errorSummary: errorSummary,
+            clearErrorSummary: errorSummary == null,
+          );
+        })
+        .toList(growable: false);
     _records.value = List<ExecutionRecord>.unmodifiable(updated);
   }
 }

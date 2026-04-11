@@ -5,13 +5,17 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_gemma/flutter_gemma.dart';
+import 'package:openreef/agent/tool_router.dart';
+import 'package:openreef/models/gemma_tool_mapper.dart';
 
 class LiteRtBridge {
   LiteRtBridge({
     Future<LiteRtDeviceStats?> Function()? deviceStatsProvider,
     Future<bool> Function()? memoryPressureRecovery,
+    GemmaToolMapper toolMapper = const GemmaToolMapper(),
   }) : _deviceStatsProvider = deviceStatsProvider,
-       _memoryPressureRecovery = memoryPressureRecovery;
+       _memoryPressureRecovery = memoryPressureRecovery,
+       _toolMapper = toolMapper;
 
   static const MethodChannel _deviceStatsChannel = MethodChannel(
     'openreef/device_stats',
@@ -33,6 +37,7 @@ class LiteRtBridge {
   DateTime? _memoryPressureBlockedUntil;
   final Future<LiteRtDeviceStats?> Function()? _deviceStatsProvider;
   final Future<bool> Function()? _memoryPressureRecovery;
+  final GemmaToolMapper _toolMapper;
   static const List<String> _functionGemmaIdHints = <String>[
     'function',
     'mobile-actions',
@@ -147,6 +152,7 @@ class LiteRtBridge {
   Stream<LiteRtGenerationEvent> generateStream({
     required String context,
     required int maxTokens,
+    List<ToolDefinition> selectedTools = const <ToolDefinition>[],
   }) {
     if (_activeModel == null) {
       throw StateError('Model is not initialized.');
@@ -175,11 +181,15 @@ class LiteRtBridge {
           );
         }
 
+        final toolConfig = buildToolCallConfig(selectedTools);
         await _disposeActiveChat();
-        debugPrint('LiteRtBridge.generateStream: createChat');
+        debugPrint(
+          'LiteRtBridge.generateStream: createChat tools=${toolConfig.tools.length} supportsFunctionCalls=${toolConfig.supportsFunctionCalls}',
+        );
         _activeChat = await _activeModel!.createChat(
-          supportsFunctionCalls: true,
-          toolChoice: ToolChoice.auto,
+          tools: toolConfig.tools,
+          supportsFunctionCalls: toolConfig.supportsFunctionCalls,
+          toolChoice: toolConfig.toolChoice,
         );
         debugPrint('LiteRtBridge.generateStream: addQueryChunk');
         await _activeChat!.addQueryChunk(
@@ -214,6 +224,31 @@ class LiteRtBridge {
                       'tool_id': response.name,
                       'arguments': response.args,
                     },
+                  }),
+                  isFinished: false,
+                ),
+              );
+              return;
+            }
+
+            if (response is ParallelFunctionCallResponse) {
+              emittedToolCall = true;
+              final calls = response.calls;
+              debugPrint(
+                'LiteRtBridge.generateStream: parallel function calls count=${calls.length}',
+              );
+              controller.add(
+                LiteRtGenerationEvent(
+                  chunk: jsonEncode(<String, Object?>{
+                    'tool_calls': <Map<String, Object?>>[
+                      for (var index = 0; index < calls.length; index += 1)
+                        <String, Object?>{
+                          'id':
+                              'fg_${DateTime.now().microsecondsSinceEpoch}_$index',
+                          'tool_id': calls[index].name,
+                          'arguments': calls[index].args,
+                        },
+                    ],
                   }),
                   isFinished: false,
                 ),
@@ -264,6 +299,15 @@ class LiteRtBridge {
     return controller.stream;
   }
 
+  LiteRtToolCallConfig buildToolCallConfig(List<ToolDefinition> selectedTools) {
+    final tools = _toolMapper.mapAll(selectedTools);
+    return LiteRtToolCallConfig(
+      tools: tools,
+      supportsFunctionCalls: tools.isNotEmpty,
+      toolChoice: tools.isEmpty ? ToolChoice.none : ToolChoice.auto,
+    );
+  }
+
   bool _isFunctionGemmaModel(String? modelId) {
     if (modelId == null) {
       return false;
@@ -288,9 +332,14 @@ class LiteRtBridge {
       preferredBackend: preferredBackend,
       modelId: modelId,
     );
-    final initBudget = math.min(modelCaps.initTokenBudget, deviceCaps.initTokenBudget);
-    final runtimeTarget =
-        math.min(modelCaps.runtimeTargetTokenBudget, deviceCaps.runtimeTargetTokenBudget);
+    final initBudget = math.min(
+      modelCaps.initTokenBudget,
+      deviceCaps.initTokenBudget,
+    );
+    final runtimeTarget = math.min(
+      modelCaps.runtimeTargetTokenBudget,
+      deviceCaps.runtimeTargetTokenBudget,
+    );
     return _TokenBudgets(
       initTokenBudget: math.min(initBudget, runtimeTarget),
       runtimeTargetTokenBudget: runtimeTarget,
@@ -472,8 +521,7 @@ class LiteRtBridge {
         result['npuReady'] as bool? ?? result['npu_ready'] as bool?;
     final gpuReady =
         result['gpuReady'] as bool? ?? result['gpu_ready'] as bool?;
-    final lowRam =
-        result['lowRam'] as bool? ?? result['low_ram'] as bool?;
+    final lowRam = result['lowRam'] as bool? ?? result['low_ram'] as bool?;
     if (freeRam == null || npuReady == null) {
       return null;
     }
@@ -650,6 +698,18 @@ class LiteRtGenerationEvent {
   final String chunk;
   final bool isFinished;
   final LiteRtGenerationMetrics? metrics;
+}
+
+class LiteRtToolCallConfig {
+  const LiteRtToolCallConfig({
+    required this.tools,
+    required this.supportsFunctionCalls,
+    required this.toolChoice,
+  });
+
+  final List<Tool> tools;
+  final bool supportsFunctionCalls;
+  final ToolChoice toolChoice;
 }
 
 class LiteRtGenerationMetrics {

@@ -11,6 +11,7 @@ import 'package:openreef/agent/agent_task_executor.dart';
 import 'package:openreef/agent/execution_log.dart';
 import 'package:openreef/agent/execution_request.dart';
 import 'package:openreef/agent/mailbox.dart';
+import 'package:openreef/agent/run_state.dart';
 import 'package:openreef/agent/tool_router.dart';
 import 'package:openreef/context/bootstrap_context_services.dart';
 import 'package:openreef/context/compactor.dart';
@@ -362,9 +363,7 @@ class OpenReefBootstrap {
       ),
     ];
     final toolCatalog = RuntimeToolCatalog(
-      sourceTools: <String, List<ToolDefinition>>{
-        'native': nativeTools,
-      },
+      sourceTools: <String, List<ToolDefinition>>{'native': nativeTools},
     );
 
     final liteRtBridge = LiteRtBridge();
@@ -445,6 +444,7 @@ class OpenReefBootstrap {
       executionLogStore: executionLogStore,
       chatSink: chatSink,
       backgroundSink: const _DebugBackgroundExecutionSink(),
+      runStateStore: SqliteRunStateStore(),
     );
     executionBridge.delegate = taskExecutor;
     final mcpRuntimeCoordinator = McpRuntimeCoordinator(
@@ -563,13 +563,23 @@ class _DelegatingAgentTaskExecutor implements AgentTaskExecutor {
   AgentTaskExecutor? delegate;
 
   @override
-  Future<AgentLoopResult> execute(ExecutionRequest request) async {
+  Future<ExecutionResult> execute(ExecutionRequest request) async {
     final activeDelegate = delegate;
     if (activeDelegate == null) {
-      return const AgentLoopResult(
-        sessionResult: SessionResult.failed,
-        text: '',
-        reason: 'executor_not_ready',
+      return ExecutionResult(
+        requestId: request.id,
+        sessionKey: request.sessionKey,
+        source: request.source,
+        mode: request.mode,
+        terminalStatus: ExecutionLifecycleStatus.failed,
+        admissionOutcome: ExecutionAdmissionOutcome.rejected,
+        policyReason: 'executor_not_ready',
+        visibility: request.visibility,
+        loopResult: const AgentLoopResult(
+          sessionResult: SessionResult.failed,
+          text: '',
+          reason: 'executor_not_ready',
+        ),
       );
     }
     return activeDelegate.execute(request);
@@ -596,7 +606,7 @@ class _DelegatingChatExecutionSink implements ChatExecutionSink {
   @override
   Future<void> appendExecutionResult(
     ExecutionRequest request,
-    AgentLoopResult result,
+    ExecutionResult result,
   ) async {
     await delegate?.appendExecutionResult(request, result);
   }
@@ -608,11 +618,11 @@ class _DebugBackgroundExecutionSink implements BackgroundExecutionSink {
   @override
   Future<void> recordExecution(
     ExecutionRequest request,
-    AgentLoopResult result,
+    ExecutionResult result,
   ) async {
     debugPrint(
       'Background execution ${request.id} (${request.source.name}) '
-      'finished with ${result.sessionResult.name}.',
+      'finished with ${result.terminalStatus.name}.',
     );
   }
 }

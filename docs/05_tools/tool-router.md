@@ -22,6 +22,9 @@ Out of scope:
 - no direct tool execution outside router.
 - structured normalization for every success/failure branch.
 - correlation ids must persist across request/run/call scopes.
+- model-visible callable tools are selected by `ContextAssembler` per turn and
+  passed structurally into the model runtime; prompt `[AVAILABLE TOOLS]` text is
+  secondary guidance only.
 
 ## Core Data Models
 ### ToolCall
@@ -29,6 +32,14 @@ Out of scope:
 
 ### ToolManifest (runtime subset)
 - `toolId`, `schema`, `requiredPermissions`, `requiresConfirmation`, `capabilityTags`, `availabilityState`
+
+### Runtime Tool Declaration
+- `ToolDefinition.id` is the canonical runtime function name returned by the
+  model and routed back through `ToolRouter`.
+- `ToolDefinition.argumentSchema` carries the schema used to build SDK tool
+  declarations for selected tools.
+- native, MCP, and skill-enabled normal router tools share the same declaration
+  mapping surface.
 
 ### DispatchTrace
 - `callId`, `adapterType`, `validationResult`, `policyBranch`, `durationMs`
@@ -47,6 +58,15 @@ Approval branch:
 5. Dispatch adapter invocation.
 6. Normalize outcome to `ToolResult`.
 7. Emit dispatch trace.
+
+## Model Tool Calling Flow
+1. `ContextAssembler` selects the turn-specific callable `ToolDefinition` set.
+2. `AgentModelAdapter` passes those selected tools structurally alongside the
+   rendered prompt.
+3. `LiteRtBridge` maps selected definitions to SDK tool declarations and calls
+   `createChat(tools: ...)`.
+4. SDK function-call responses are parsed into `ToolCall`s.
+5. `ToolRouter.dispatch()` remains the only execution boundary.
 
 ## Failure Modes
 - unknown tool id/unavailable capability → `unavailable`.
