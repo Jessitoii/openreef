@@ -40,7 +40,7 @@ Use `gap_review_tracker.md` to:
 
 ### Status
 
-Open
+CLOSED
 
 ### Severity
 
@@ -254,7 +254,7 @@ GAP-003: Workflow layer lacks explicit lifecycle-bound persistent execution mode
 
 ### Status
 
-Open
+CLOSED
 
 ### Severity
 
@@ -531,13 +531,17 @@ Correct approach:
     
 *   ✅ keep system state-driven, not prompt-driven
 
+### Closure Notes
+
+This gap is closed by the unified execution lifecycle implementation in `lib/agent/`. The runtime now classifies requests into explicit lifecycle modes, persists run state durably, resumes from stored continuation state, and keeps all execution on the shared `AgentLoop` rather than introducing a second workflow runtime.
+
 ---
 
 ## GAP-004: Trigger and standing-order execution still lacks a clean execution policy layer
 
 ### Status
 
-Open
+CLOSED
 
 ### Severity
 
@@ -586,6 +590,10 @@ Recommended MVP rules:
 * trigger workflows queue unless explicitly replace-running
 * duplicate standing-order style runs reject if already active
 * MCP event bursts coalesce by key when possible
+
+### Closure Notes
+
+Execution policy is now enforced in the executor instead of being implied in prompt text. Queue, reject, replace-running, duplicate suppression, coalescing, timeout, max-step, and max-tool-call semantics are implemented against durable run metadata, and standing orders are represented as structured runtime directives with persisted evaluation outcomes.
 
 ---
 

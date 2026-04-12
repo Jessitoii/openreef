@@ -9,9 +9,8 @@ abstract class CompactionSummarizer {
 }
 
 class ReefCompactor {
-  const ReefCompactor({
-    required CompactionSummarizer summarizer,
-  }) : _summarizer = summarizer;
+  const ReefCompactor({required CompactionSummarizer summarizer})
+    : _summarizer = summarizer;
 
   static const String _prunedToolResult = '[tool result pruned]';
   static const String _prunedToolError = '[tool error pruned]';
@@ -22,25 +21,28 @@ class ReefCompactor {
   AssembleResult microCompact(AssembleResult context) {
     final currentTurn = context.messages.fold<int>(
       0,
-      (current, message) => (message.turnNumber ?? 0) > current
-          ? message.turnNumber!
-          : current,
+      (current, message) =>
+          (message.turnNumber ?? 0) > current ? message.turnNumber! : current,
     );
-    final messages = context.messages.map((message) {
-      if (!message.isToolResult && !message.isToolError) {
-        return message;
-      }
+    final messages = context.messages
+        .map((message) {
+          if (!message.isToolResult && !message.isToolError) {
+            return message;
+          }
 
-      final turnNumber = message.turnNumber ?? currentTurn;
-      if (currentTurn - turnNumber > 5) {
-        return message.copyWith(
-          content: message.isToolError ? _prunedToolError : _prunedToolResult,
-        );
-      }
-      return message;
-    }).toList(growable: false);
+          final turnNumber = message.turnNumber ?? currentTurn;
+          if (currentTurn - turnNumber > 5) {
+            return message.copyWith(
+              content: message.isToolError
+                  ? _prunedToolError
+                  : _prunedToolResult,
+            );
+          }
+          return message;
+        })
+        .toList(growable: false);
 
-    return context.copyWith(messages: messages);
+    return context.copyWith(messages: messages, clearCompiledPackage: true);
   }
 
   Future<AssembleResult> autoCompact(
@@ -71,6 +73,7 @@ class ReefCompactor {
         ),
         ...split.recentMessages,
       ],
+      clearCompiledPackage: true,
     );
   }
 
@@ -80,21 +83,21 @@ class ReefCompactor {
     bool reInjectActiveSkills = false,
   }) async {
     final split = _splitHistory(context.messages, keepRecentTurns: 4);
-    final messagesToSummarize =
-        split.oldMessages.isEmpty ? context.messages : split.oldMessages;
+    final messagesToSummarize = split.oldMessages.isEmpty
+        ? context.messages
+        : split.oldMessages;
     final summary = await _safeSummarize(
       messagesToSummarize,
       maxTokens: context.tokenBudget.outputReserve,
     );
 
     final rebuiltMessages = <AgentMessage>[
+      ..._criticalContextMessages(context),
       AgentMessage(
         role: AgentMessageRole.summary,
         content: '[COMPACT SUMMARY]\n$summary\n[END COMPACT]',
         turnNumber: split.summaryTurnNumber,
-        metadata: const <String, Object?>{
-          'compaction_level': 'full',
-        },
+        metadata: const <String, Object?>{'compaction_level': 'full'},
       ),
       ...split.recentMessages,
     ];
@@ -126,7 +129,24 @@ class ReefCompactor {
     return context.copyWith(
       messages: rebuiltMessages,
       compactRequested: false,
+      clearCompiledPackage: true,
     );
+  }
+
+  List<AgentMessage> _criticalContextMessages(AssembleResult context) {
+    final package = context.compiledPackage;
+    if (package == null) {
+      return const <AgentMessage>[];
+    }
+    return package.prompt.sections
+        .where(
+          (section) =>
+              section.critical &&
+              section.id != 'user' &&
+              section.id != 'execution_mode',
+        )
+        .map((section) => section.toMessage())
+        .toList(growable: false);
   }
 
   Future<String> _safeSummarize(
@@ -186,12 +206,13 @@ class ReefCompactor {
     List<AgentMessage> messages, {
     required int keepRecentTurns,
   }) {
-    final turnNumbers = messages
-        .map((message) => message.turnNumber)
-        .whereType<int>()
-        .toSet()
-        .toList()
-      ..sort();
+    final turnNumbers =
+        messages
+            .map((message) => message.turnNumber)
+            .whereType<int>()
+            .toSet()
+            .toList()
+          ..sort();
     if (turnNumbers.length <= keepRecentTurns) {
       return _HistorySplit(
         oldMessages: const <AgentMessage>[],
@@ -200,8 +221,9 @@ class ReefCompactor {
       );
     }
 
-    final preservedTurns =
-        turnNumbers.sublist(turnNumbers.length - keepRecentTurns);
+    final preservedTurns = turnNumbers.sublist(
+      turnNumbers.length - keepRecentTurns,
+    );
     final preservedSet = preservedTurns.toSet();
     final oldMessages = <AgentMessage>[];
     final recentMessages = <AgentMessage>[];
@@ -209,7 +231,8 @@ class ReefCompactor {
       final turnNumber = message.turnNumber;
       if (turnNumber != null && preservedSet.contains(turnNumber)) {
         recentMessages.add(message);
-      } else if (turnNumber == null && message.role == AgentMessageRole.system) {
+      } else if (turnNumber == null &&
+          message.role == AgentMessageRole.system) {
         recentMessages.add(message);
       } else {
         oldMessages.add(message);

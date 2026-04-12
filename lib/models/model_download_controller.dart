@@ -32,7 +32,7 @@ class ModelDownloadController extends ChangeNotifier {
   bool _initialized = false;
 
   ModelDownloadState get state => _state;
-  List<ModelDescriptor> get models => _registry.models;
+  List<ModelDescriptor> get models => _registry.generationModels;
 
   Future<void> initialize() async {
     if (_initialized) {
@@ -225,12 +225,12 @@ class ModelDownloadController extends ChangeNotifier {
     if (stats == null) {
       return _registry.models.first;
     }
-    for (final descriptor in _registry.models) {
+    for (final descriptor in _registry.generationModels) {
       if (stats.freeRam >= descriptor.minRamGb) {
         return descriptor;
       }
     }
-    return _registry.models.last;
+    return _registry.generationModels.last;
   }
 
   void _updateProgress(int downloadedBytes, int totalBytes) {

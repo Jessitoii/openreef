@@ -165,7 +165,7 @@ If left as-is, the agent will remain “working but fragile”:
 ---
 
 GAP-015: Missing unified execution lifecycle model for ephemeral and persistent tasks
-Status: OPEN
+Status: CLOSED
 Severity: HIGH
 Area: Execution Runtime / Workflow / Automation
 
@@ -241,10 +241,14 @@ This gap is closed when:
 - suspend/resume behavior is modeled via state transitions
 - execution results are structured and inspectable (not just chat output)
 
+### Closure Notes
+
+The execution runtime now uses a single `AgentTaskExecutor` entry path with explicit lifecycle classification, durable run state, structured `ExecutionResult`, and state-driven resume inputs. Persistent runs store lifecycle status, transitions, continuation state, waiting metadata, and standing-order evaluations, so workflow-style behavior is no longer reconstructed from prompt text.
+
 ---
 
 GAP-016: No Execution Policy
-Status: OPEN
+Status: CLOSED
 Severity: CRITICAL
 Area: Execution System
 
@@ -263,6 +267,10 @@ Leads to race conditions and unpredictable agent behavior.
 ### Target Behavior
 
 Explicit execution policy (queueing, prioritization, cancellation).
+
+### Closure Notes
+
+Execution policy is now enforced at the executor and loop boundaries instead of being descriptive only. The runtime applies queue / reject / replace-running behavior, duplicate suppression, coalescing, cancellation-backed supersession, timeout limits, max-step limits, and max-tool-call limits through the shared execution path.
 
 ---
 

@@ -3,10 +3,7 @@ import 'package:openreef/skills/skill_manifest.dart';
 import 'package:yaml/yaml.dart';
 
 class ParsedSkillMarkdown {
-  const ParsedSkillMarkdown({
-    required this.manifest,
-    required this.body,
-  });
+  const ParsedSkillMarkdown({required this.manifest, required this.body});
 
   final SkillManifest manifest;
   final String body;
@@ -69,6 +66,23 @@ class SkillFrontmatterParser {
       errorMessage: 'invalid_trigger_patterns',
       normalize: true,
     );
+    final activationTerms = _parseStringList(
+      parsedYaml['activation_terms'],
+      errorMessage: 'invalid_activation_terms',
+      normalize: true,
+    );
+    final allowedModes = _parseStringList(
+      parsedYaml['allowed_modes'],
+      errorMessage: 'invalid_allowed_modes',
+      normalize: true,
+    );
+    final incompatibleSkillIds = _parseStringList(
+      parsedYaml['incompatible_skill_ids'],
+      errorMessage: 'invalid_incompatible_skill_ids',
+      normalize: true,
+    );
+    final priorityNode = parsedYaml['priority'];
+    final maxTokensNode = parsedYaml['max_tokens'];
 
     return ParsedSkillMarkdown(
       manifest: SkillManifest(
@@ -76,6 +90,13 @@ class SkillFrontmatterParser {
         name: name,
         description: description,
         triggerPatterns: triggerPatterns,
+        priority: priorityNode is int ? priorityNode : 0,
+        maxTokens: maxTokensNode is int && maxTokensNode > 0
+            ? maxTokensNode
+            : 150,
+        activationTerms: activationTerms,
+        allowedModes: allowedModes,
+        incompatibleSkillIds: incompatibleSkillIds,
       ),
       body: body,
     );

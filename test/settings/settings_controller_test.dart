@@ -10,7 +10,9 @@ void main() {
 
   setUp(() async {
     tempDir = await Directory.systemTemp.createTemp('openreef_settings_test');
-    settingsFile = File('${tempDir.path}${Platform.pathSeparator}settings.json');
+    settingsFile = File(
+      '${tempDir.path}${Platform.pathSeparator}settings.json',
+    );
   });
 
   tearDown(() async {
@@ -41,4 +43,24 @@ void main() {
       throwsArgumentError,
     );
   });
+
+  test(
+    'persists semantic embedding model selection outside LLM writes',
+    () async {
+      final controller = SettingsController(store: SettingsStore(settingsFile));
+      await controller.initialize();
+
+      controller.updateSemanticEmbeddingModelId('gecko-512');
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      final rehydrated = SettingsController(store: SettingsStore(settingsFile));
+      await rehydrated.initialize();
+
+      expect(rehydrated.settings.semanticEmbeddingModelId, 'gecko-512');
+      expect(
+        () => rehydrated.readToolValue('semantic.embeddingModelId'),
+        throwsArgumentError,
+      );
+    },
+  );
 }

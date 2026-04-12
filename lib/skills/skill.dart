@@ -1,5 +1,7 @@
 import 'package:openreef/skills/skill_manifest.dart';
 
+enum SkillSourceType { builtin, user }
+
 class Skill {
   const Skill({
     required this.id,
@@ -9,6 +11,7 @@ class Skill {
     required this.rawContent,
     required this.bodyContent,
     required this.manifest,
+    this.sourceType = SkillSourceType.user,
   });
 
   final String id;
@@ -18,4 +21,5 @@ class Skill {
   final String rawContent;
   final String bodyContent;
   final SkillManifest manifest;
+  final SkillSourceType sourceType;
 }

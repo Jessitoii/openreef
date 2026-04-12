@@ -3,6 +3,7 @@ import 'package:openreef/agent/agent_task_executor.dart';
 import 'package:openreef/agent/agent_models.dart';
 import 'package:openreef/agent/execution_request.dart';
 import 'package:openreef/agent/mailbox.dart';
+import 'package:openreef/agent/runtime_transcript_event.dart';
 import 'package:openreef/ui/agent_loop_chat_session.dart';
 import 'package:openreef/ui/chat_session_port.dart';
 
@@ -104,10 +105,7 @@ void main() {
         ChatMessageSender.assistant,
       );
       expect(completedSession.messages.last.text, 'done');
-      expect(
-        completedSession.activities.single.status,
-        SubAgentActivityStatus.completed,
-      );
+      expect(completedSession.activities, isEmpty);
 
       final frozenSession = await _runSessionWithResult(
         const AgentLoopResult(
@@ -121,10 +119,7 @@ void main() {
         frozenSession.messages.last.text,
         contains('same blocked tool request'),
       );
-      expect(
-        frozenSession.activities.single.status,
-        SubAgentActivityStatus.failed,
-      );
+      expect(frozenSession.activities, isEmpty);
 
       final failedSession = await _runSessionWithResult(
         const AgentLoopResult(
@@ -138,10 +133,128 @@ void main() {
         failedSession.messages.last.text,
         'The agent turn failed during model generation.',
       );
-      expect(
-        failedSession.activities.single.status,
-        SubAgentActivityStatus.failed,
+      expect(failedSession.activities, isEmpty);
+    },
+  );
+
+  test(
+    'sendMessage projects final result when executor has no chat sink',
+    () async {
+      final executor = _RecordingTaskExecutor(
+        result: const AgentLoopResult(
+          sessionResult: SessionResult.completed,
+          text: 'Visible without executor sink.',
+          reason: 'completed',
+        ),
       );
+      final session = AgentLoopChatSession(taskExecutor: executor);
+
+      await session.sendMessage('hello');
+
+      expect(session.messages.last.sender, ChatMessageSender.assistant);
+      expect(session.messages.last.text, 'Visible without executor sink.');
+      expect(
+        session.messages.where(
+          (message) => message.sender == ChatMessageSender.assistant,
+        ),
+        hasLength(1),
+      );
+    },
+  );
+
+  test('failed result surfaces concrete exception details in debug', () async {
+    final session = await _runSessionWithResult(
+      const AgentLoopResult(
+        sessionResult: SessionResult.failed,
+        text: '',
+        reason: 'context_assembly_failure',
+        exceptionType: 'SemanticEmbeddingUnavailableException',
+        errorMessage: 'No active embedding model set',
+      ),
+    );
+
+    expect(session.messages.last.sender, ChatMessageSender.assistant);
+    expect(session.messages.last.text, contains('context_assembly_failure'));
+    expect(
+      session.messages.last.text,
+      contains('SemanticEmbeddingUnavailableException'),
+    );
+    expect(
+      session.messages.last.text,
+      contains('No active embedding model set'),
+    );
+  });
+
+  test('missing semantic embedder maps to actionable setup message', () async {
+    final session = await _runSessionWithResult(
+      const AgentLoopResult(
+        sessionResult: SessionResult.failed,
+        text: '',
+        reason: 'semantic_embedding_model_not_ready',
+      ),
+    );
+
+    expect(
+      session.messages.last.text,
+      contains('Semantic retrieval needs an embedding model'),
+    );
+    expect(session.messages.last.text, contains('Settings'));
+  });
+
+  test(
+    'final fallback replaces empty runtime bubble for same request',
+    () async {
+      final executor = _RecordingTaskExecutor(
+        result: const AgentLoopResult(
+          sessionResult: SessionResult.completed,
+          text: 'done',
+          reason: 'completed',
+        ),
+      );
+      final session = AgentLoopChatSession(taskExecutor: executor);
+      final request = ExecutionRequest.fromUserMessage(
+        sessionKey: session.sessionKey,
+        prompt: 'hello',
+      );
+
+      await session.applyRuntimeTranscriptEvent(
+        RuntimeTranscriptEvent(
+          kind: RuntimeTranscriptEventKind.assistantMessageStarted,
+          requestId: request.id,
+          sessionKey: session.sessionKey,
+          sequence: 0,
+          occurredAt: DateTime(2026, 4, 12, 10),
+          messageId: '${request.id}-assistant-final',
+        ),
+      );
+      await session.appendExecutionResult(
+        request,
+        ExecutionResult(
+          requestId: request.id,
+          sessionKey: session.sessionKey,
+          source: request.source,
+          mode: request.mode,
+          terminalStatus: ExecutionLifecycleStatus.completed,
+          admissionOutcome: ExecutionAdmissionOutcome.admitted,
+          policyReason: 'completed',
+          visibility: request.visibility,
+          loopResult: const AgentLoopResult(
+            sessionResult: SessionResult.completed,
+            text: '',
+            reason: 'completed',
+          ),
+        ),
+      );
+
+      final assistantMessages = session.messages
+          .where((message) => message.sender == ChatMessageSender.assistant)
+          .toList();
+      expect(assistantMessages, hasLength(1));
+      expect(
+        assistantMessages.single.text,
+        'LiteRT completed the turn but returned no visible text.',
+      );
+      expect(assistantMessages.single.isStreaming, isFalse);
     },
   );
 
@@ -204,7 +317,7 @@ void main() {
       ),
     );
 
-    expect(session.messages.last.text, 'Background finished.');
+    expect(session.messages.last.text, isNot('Background finished.'));
     expect(
       session.messages.where(
         (message) => message.sender == ChatMessageSender.user,
@@ -233,9 +346,263 @@ void main() {
 
     expect(
       session.activities.single.details,
-      contains('Tool battery_info [call-1] success: Battery at 42%.'),
+      contains('Result: success: Battery at 42%.'),
     );
   });
+
+  test('runtime transcript events stream into one assistant bubble', () async {
+    final executor = _RecordingTaskExecutor(
+      result: const AgentLoopResult(
+        sessionResult: SessionResult.completed,
+        text: 'Hello reef.',
+        reason: 'completed',
+      ),
+    );
+    final session = AgentLoopChatSession(taskExecutor: executor);
+
+    await session.applyRuntimeTranscriptEvent(
+      RuntimeTranscriptEvent(
+        kind: RuntimeTranscriptEventKind.assistantMessageStarted,
+        requestId: 'request-1',
+        sessionKey: session.sessionKey,
+        sequence: 0,
+        occurredAt: DateTime(2026, 4, 12, 10),
+        messageId: 'assistant-1',
+      ),
+    );
+    await session.applyRuntimeTranscriptEvent(
+      RuntimeTranscriptEvent(
+        kind: RuntimeTranscriptEventKind.assistantMessageDelta,
+        requestId: 'request-1',
+        sessionKey: session.sessionKey,
+        sequence: 1,
+        occurredAt: DateTime(2026, 4, 12, 10),
+        messageId: 'assistant-1',
+        deltaText: 'Hello',
+      ),
+    );
+    await session.applyRuntimeTranscriptEvent(
+      RuntimeTranscriptEvent(
+        kind: RuntimeTranscriptEventKind.assistantMessageDelta,
+        requestId: 'request-1',
+        sessionKey: session.sessionKey,
+        sequence: 2,
+        occurredAt: DateTime(2026, 4, 12, 10),
+        messageId: 'assistant-1',
+        deltaText: ' reef.',
+      ),
+    );
+    await session.applyRuntimeTranscriptEvent(
+      RuntimeTranscriptEvent(
+        kind: RuntimeTranscriptEventKind.assistantMessageFinalized,
+        requestId: 'request-1',
+        sessionKey: session.sessionKey,
+        sequence: 3,
+        occurredAt: DateTime(2026, 4, 12, 10),
+        messageId: 'assistant-1',
+        finalText: 'Hello reef.',
+      ),
+    );
+
+    final assistantMessages = session.messages
+        .where((message) => message.id == 'assistant-1')
+        .toList();
+    expect(assistantMessages, hasLength(1));
+    expect(assistantMessages.single.text, 'Hello reef.');
+    expect(assistantMessages.single.isStreaming, isFalse);
+  });
+
+  test('runtime tool events drive structured activity state', () async {
+    final executor = _RecordingTaskExecutor(
+      result: const AgentLoopResult(
+        sessionResult: SessionResult.completed,
+        text: 'done',
+        reason: 'completed',
+      ),
+    );
+    final session = AgentLoopChatSession(taskExecutor: executor);
+
+    await session.applyRuntimeTranscriptEvent(
+      RuntimeTranscriptEvent(
+        kind: RuntimeTranscriptEventKind.toolStepStarted,
+        requestId: 'request-2',
+        sessionKey: session.sessionKey,
+        sequence: 0,
+        occurredAt: DateTime(2026, 4, 12, 10),
+        stepId: 'step-1',
+        toolCallId: 'call-1',
+        toolId: 'battery_info',
+        status: 'running',
+        summary: 'Battery lookup started.',
+      ),
+    );
+    await session.applyRuntimeTranscriptEvent(
+      RuntimeTranscriptEvent(
+        kind: RuntimeTranscriptEventKind.toolStepFinished,
+        requestId: 'request-2',
+        sessionKey: session.sessionKey,
+        sequence: 1,
+        occurredAt: DateTime(2026, 4, 12, 10),
+        stepId: 'step-1',
+        toolCallId: 'call-1',
+        toolId: 'battery_info',
+        status: 'success',
+        summary: 'Battery at 42%.',
+        toolResult: const ToolResult.success(
+          'Battery at 42%.',
+          toolId: 'battery_info',
+          callId: 'call-1',
+        ),
+      ),
+    );
+
+    expect(session.activities.single.id, 'step-1');
+    expect(session.activities.single.label, 'battery_info');
+    expect(session.activities.single.status, SubAgentActivityStatus.completed);
+    expect(
+      session.activities.single.details,
+      contains('Result: success: Battery at 42%.'),
+    );
+  });
+
+  test(
+    'visible trigger execution finalizes through unified transcript path',
+    () async {
+      final executor = _RecordingTaskExecutor(
+        result: const AgentLoopResult(
+          sessionResult: SessionResult.completed,
+          text: 'done',
+          reason: 'completed',
+        ),
+      );
+      final session = AgentLoopChatSession(taskExecutor: executor);
+
+      await session.appendExecutionResult(
+        ExecutionRequest.fromTrigger(
+          sessionKey: session.sessionKey,
+          prompt: 'Scheduled check',
+          source: ExecutionSource.schedule,
+          visibility: ExecutionVisibility.chatAndBackground,
+        ),
+        ExecutionResult(
+          requestId: 'schedule-1',
+          sessionKey: session.sessionKey,
+          source: ExecutionSource.schedule,
+          mode: ExecutionLifecycleMode.triggeredRequest,
+          terminalStatus: ExecutionLifecycleStatus.completed,
+          admissionOutcome: ExecutionAdmissionOutcome.admitted,
+          policyReason: 'completed',
+          visibility: ExecutionVisibility.chatAndBackground,
+          loopResult: const AgentLoopResult(
+            sessionResult: SessionResult.completed,
+            text: 'Scheduled check finished.',
+            reason: 'completed',
+          ),
+        ),
+      );
+
+      expect(session.messages.last.sender, ChatMessageSender.assistant);
+      expect(session.messages.last.text, 'Scheduled check finished.');
+      expect(
+        session.messages.where(
+          (message) => message.sender == ChatMessageSender.user,
+        ),
+        isEmpty,
+      );
+    },
+  );
+
+  test('terminal status emits after transcript persistence succeeds', () async {
+    final executor = _RecordingTaskExecutor(
+      result: const AgentLoopResult(
+        sessionResult: SessionResult.completed,
+        text: 'done',
+        reason: 'completed',
+      ),
+    );
+    final persistence = _RecordingPersistencePort();
+    final session = AgentLoopChatSession(taskExecutor: executor);
+    session.attachTranscriptPersistencePort(persistence);
+    var completedObservedAfterPersistence = false;
+    session.addListener(() {
+      if (session.status == ChatSessionStatus.completed) {
+        completedObservedAfterPersistence = persistence.persistedMessages.any(
+          (message) => message.text == 'Persisted final.',
+        );
+      }
+    });
+
+    await session.appendExecutionResult(
+      ExecutionRequest.fromTrigger(
+        sessionKey: session.sessionKey,
+        prompt: 'visible work',
+        source: ExecutionSource.trigger,
+        visibility: ExecutionVisibility.chat,
+      ),
+      ExecutionResult(
+        requestId: 'persist-1',
+        sessionKey: session.sessionKey,
+        source: ExecutionSource.trigger,
+        mode: ExecutionLifecycleMode.triggeredRequest,
+        terminalStatus: ExecutionLifecycleStatus.completed,
+        admissionOutcome: ExecutionAdmissionOutcome.admitted,
+        policyReason: 'completed',
+        visibility: ExecutionVisibility.chat,
+        loopResult: const AgentLoopResult(
+          sessionResult: SessionResult.completed,
+          text: 'Persisted final.',
+          reason: 'completed',
+        ),
+      ),
+    );
+
+    expect(completedObservedAfterPersistence, isTrue);
+  });
+
+  test(
+    'persistence failure emits save-failed status instead of completed',
+    () async {
+      final executor = _RecordingTaskExecutor(
+        result: const AgentLoopResult(
+          sessionResult: SessionResult.completed,
+          text: 'done',
+          reason: 'completed',
+        ),
+      );
+      final session = AgentLoopChatSession(taskExecutor: executor);
+      session.attachTranscriptPersistencePort(
+        _RecordingPersistencePort(fail: true),
+      );
+
+      await session.appendExecutionResult(
+        ExecutionRequest.fromTrigger(
+          sessionKey: session.sessionKey,
+          prompt: 'visible work',
+          source: ExecutionSource.trigger,
+          visibility: ExecutionVisibility.chat,
+        ),
+        ExecutionResult(
+          requestId: 'persist-fail-1',
+          sessionKey: session.sessionKey,
+          source: ExecutionSource.trigger,
+          mode: ExecutionLifecycleMode.triggeredRequest,
+          terminalStatus: ExecutionLifecycleStatus.completed,
+          admissionOutcome: ExecutionAdmissionOutcome.admitted,
+          policyReason: 'completed',
+          visibility: ExecutionVisibility.chat,
+          loopResult: const AgentLoopResult(
+            sessionResult: SessionResult.completed,
+            text: 'Unsaved final.',
+            reason: 'completed',
+          ),
+        ),
+      );
+
+      expect(session.status, ChatSessionStatus.persistenceFailed);
+      expect(session.messages.last.sender, ChatMessageSender.system);
+      expect(session.messages.last.text, contains('could not save'));
+    },
+  );
 }
 
 Future<AgentLoopChatSession> _runSessionWithResult(
@@ -278,6 +645,30 @@ class _RecordingTaskExecutor implements AgentTaskExecutor {
     final loopResult = await execute(request.toExecutionRequest());
     return AgentTaskExecutionResult.fromLoopResult(
       loopResult.toAgentLoopResult(),
+    );
+  }
+}
+
+class _RecordingPersistencePort implements ChatTranscriptPersistencePort {
+  _RecordingPersistencePort({this.fail = false});
+
+  final bool fail;
+  List<ChatTranscriptMessage> persistedMessages =
+      const <ChatTranscriptMessage>[];
+
+  @override
+  Future<ChatTranscriptPersistenceResult> persistTranscriptBeforeTerminal(
+    ChatTranscriptPersistenceRequest request,
+  ) async {
+    if (fail) {
+      return const ChatTranscriptPersistenceResult.failure(
+        errorCode: 'test_failure',
+        errorMessage: 'test failure',
+      );
+    }
+    persistedMessages = request.messages;
+    return ChatTranscriptPersistenceResult.success(
+      persistedAt: DateTime(2026, 4, 12, 10),
     );
   }
 }

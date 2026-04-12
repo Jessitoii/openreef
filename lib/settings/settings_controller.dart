@@ -43,11 +43,11 @@ class SettingsController extends ChangeNotifier {
   }
 
   void updateVoiceSensitivity(double sensitivity) {
-    _update(
-      _settings.copyWith(
-        voiceSensitivity: sensitivity.clamp(0.3, 0.9),
-      ),
-    );
+    _update(_settings.copyWith(voiceSensitivity: sensitivity.clamp(0.3, 0.9)));
+  }
+
+  void updateSemanticEmbeddingModelId(String modelId) {
+    _update(_settings.copyWith(semanticEmbeddingModelId: modelId));
   }
 
   void _update(AppSettings nextSettings) {

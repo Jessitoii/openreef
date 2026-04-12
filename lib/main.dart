@@ -14,6 +14,7 @@ import 'package:openreef/agent/mailbox.dart';
 import 'package:openreef/agent/run_state.dart';
 import 'package:openreef/agent/tool_router.dart';
 import 'package:openreef/context/bootstrap_context_services.dart';
+import 'package:openreef/context/capability_retrieval.dart';
 import 'package:openreef/context/compactor.dart';
 import 'package:openreef/context/context_assembler.dart';
 import 'package:openreef/memory/memory_former.dart';
@@ -28,12 +29,16 @@ import 'package:openreef/mcp/mcp_connections_controller.dart';
 import 'package:openreef/mcp/mcp_runtime_coordinator.dart';
 import 'package:openreef/mcp/mcp_secret_store.dart';
 import 'package:openreef/models/litert_bridge.dart';
+import 'package:openreef/models/embedding_model_manager.dart';
+import 'package:openreef/models/hugging_face_token_store.dart';
 import 'package:openreef/models/model_download_controller.dart';
 import 'package:openreef/models/model_downloader.dart';
 import 'package:openreef/models/model_registry.dart';
 import 'package:openreef/models/model_storage.dart';
 import 'package:openreef/settings/settings_store.dart';
 import 'package:openreef/settings/settings_controller.dart';
+import 'package:openreef/skills/builtin_skill_source.dart';
+import 'package:openreef/skills/skill.dart';
 import 'package:openreef/skills/skill_registry.dart';
 import 'package:openreef/skills/skill_registry_controller.dart';
 import 'package:openreef/skills/skill_runtime_catalog.dart';
@@ -114,6 +119,7 @@ class _MyAppState extends State<MyApp> {
       modelDownloadController: widget.bootstrap.modelDownloadController,
       skillRegistryController: widget.bootstrap.skillRegistryController,
       mcpConnectionsController: widget.bootstrap.mcpConnectionsController,
+      embeddingModelManager: widget.bootstrap.embeddingModelManager,
       modelReady: _modelReady,
       onModelReady: _handleModelReady,
     );
@@ -139,6 +145,7 @@ class OpenReefBootstrap {
     required this.wakeWordController,
     required this.skillRegistryController,
     required this.mcpConnectionsController,
+    required this.embeddingModelManager,
     required bool modelReady,
   }) : _modelReady = modelReady;
 
@@ -152,6 +159,7 @@ class OpenReefBootstrap {
   final WakeWordController wakeWordController;
   final SkillRegistryController skillRegistryController;
   final McpConnectionsController mcpConnectionsController;
+  final EmbeddingModelManager embeddingModelManager;
   bool _modelReady;
   bool _bootTriggersFired = false;
 
@@ -400,14 +408,41 @@ class OpenReefBootstrap {
     final skillsDir = Directory(
       '${documentsDir.path}${Platform.pathSeparator}skills',
     );
+    final builtInSkillsDir = await const BuiltInSkillSource().materialize(
+      parentDirectory: documentsDir,
+    );
     final skillRuntimeCatalog = SkillRuntimeCatalog(
-      registry: SkillRegistry(rootPaths: <String>[skillsDir.path]),
+      registry: SkillRegistry(
+        rootPaths: const <String>[],
+        roots: <SkillRegistryRoot>[
+          SkillRegistryRoot(
+            path: builtInSkillsDir.path,
+            sourceType: SkillSourceType.builtin,
+          ),
+          SkillRegistryRoot(
+            path: skillsDir.path,
+            sourceType: SkillSourceType.user,
+          ),
+        ],
+      ),
       toolCatalog: toolCatalog,
       stateFile: File(
         '${skillsDir.path}${Platform.pathSeparator}runtime_state.json',
       ),
     );
     await skillRuntimeCatalog.reload();
+
+    late final CapabilityEmbeddingIndex capabilityEmbeddingIndex;
+    final embeddingModelManager = EmbeddingModelManager(
+      registry: modelRegistry,
+      settingsController: settingsController,
+      tokenStore: const SecureHuggingFaceTokenStore(),
+      onModelChanged: () => capabilityEmbeddingIndex.invalidate(),
+    );
+    await embeddingModelManager.initialize();
+    capabilityEmbeddingIndex = CapabilityEmbeddingIndex(
+      embedder: ManagedSemanticTextEmbedder(embeddingModelManager),
+    );
 
     final contextAssembler = ContextAssembler(
       memoryIndex: memoryIndex,
@@ -417,6 +452,8 @@ class OpenReefBootstrap {
       memoryContextProvider: SemanticMemoryContextProvider(
         semanticMemoryRetriever,
       ),
+      capabilityIndex: capabilityEmbeddingIndex,
+      embeddingReadinessProvider: embeddingModelManager,
     );
     final mailbox = AgentMailbox();
     final approvalController = MainAgentApprovalController(mailbox: mailbox);
@@ -493,6 +530,7 @@ class OpenReefBootstrap {
       ),
       skillRegistryController: skillRegistryController,
       mcpConnectionsController: mcpConnectionsController,
+      embeddingModelManager: embeddingModelManager,
       modelReady: modelReady,
     );
     if (modelReady) {

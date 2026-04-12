@@ -8,13 +8,14 @@ enum ChatSessionStatus {
   toolRouting,
   streaming,
   completed,
+  failed,
+  frozen,
+  cancelled,
+  suspended,
+  persistenceFailed,
 }
 
-enum SubAgentActivityStatus {
-  running,
-  completed,
-  failed,
-}
+enum SubAgentActivityStatus { running, completed, failed }
 
 class PendingToolApproval {
   const PendingToolApproval({
@@ -103,8 +104,50 @@ abstract class ChatSessionPort extends Listenable {
 abstract class ChatSessionFactory {
   ChatSessionPort createSession({
     required String sessionId,
-    List<ChatTranscriptMessage> initialMessages = const <ChatTranscriptMessage>[],
+    List<ChatTranscriptMessage> initialMessages =
+        const <ChatTranscriptMessage>[],
   });
+}
+
+class ChatTranscriptPersistenceRequest {
+  const ChatTranscriptPersistenceRequest({
+    required this.sessionKey,
+    required this.requestId,
+    required this.terminalStatus,
+    required this.messages,
+  });
+
+  final String sessionKey;
+  final String requestId;
+  final ChatSessionStatus terminalStatus;
+  final List<ChatTranscriptMessage> messages;
+}
+
+class ChatTranscriptPersistenceResult {
+  const ChatTranscriptPersistenceResult.success({required this.persistedAt})
+    : errorCode = null,
+      errorMessage = null;
+
+  const ChatTranscriptPersistenceResult.failure({
+    required this.errorCode,
+    required this.errorMessage,
+  }) : persistedAt = null;
+
+  final DateTime? persistedAt;
+  final String? errorCode;
+  final String? errorMessage;
+
+  bool get isSuccess => persistedAt != null;
+}
+
+abstract class ChatTranscriptPersistencePort {
+  Future<ChatTranscriptPersistenceResult> persistTranscriptBeforeTerminal(
+    ChatTranscriptPersistenceRequest request,
+  );
+}
+
+abstract class PersistentChatSession {
+  void attachTranscriptPersistencePort(ChatTranscriptPersistencePort port);
 }
 
 abstract class ApprovalCapableChatSession {
@@ -120,8 +163,8 @@ abstract class SystemAssistantInjectableChatSession {
 extension ChatSessionApprovalState on ChatSessionPort {
   PendingToolApproval? get pendingApprovalOrNull =>
       this is ApprovalCapableChatSession
-          ? (this as ApprovalCapableChatSession).pendingApproval
-          : null;
+      ? (this as ApprovalCapableChatSession).pendingApproval
+      : null;
 
   void approvePendingApprovalIfSupported() {
     if (this is ApprovalCapableChatSession) {
@@ -137,8 +180,9 @@ extension ChatSessionApprovalState on ChatSessionPort {
 
   void injectSystemAssistantEntryIfSupported(String text) {
     if (this is SystemAssistantInjectableChatSession) {
-      (this as SystemAssistantInjectableChatSession)
-          .injectSystemAssistantEntry(text);
+      (this as SystemAssistantInjectableChatSession).injectSystemAssistantEntry(
+        text,
+      );
     }
   }
 }

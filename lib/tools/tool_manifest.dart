@@ -31,6 +31,9 @@ class ToolManifest {
     this.requiresConfirmation = false,
     this.enabled = true,
     this.tags = const <String>[],
+    this.capabilityPhrases = const <String>[],
+    this.usageExamples = const <String>[],
+    this.runtimeMetadata = const <String, Object?>{},
   });
 
   final String id;
@@ -40,6 +43,9 @@ class ToolManifest {
   final bool enabled;
   final List<ToolArgumentSpec> argumentSchema;
   final List<String> tags;
+  final List<String> capabilityPhrases;
+  final List<String> usageExamples;
+  final Map<String, Object?> runtimeMetadata;
 }
 
 class ToolValidationResult {
@@ -116,10 +122,7 @@ class NativeToolExecutionResult {
   bool get isFailure => status == NativeToolExecutionStatus.failure;
 }
 
-enum NativeToolExecutionStatus {
-  success,
-  failure,
-}
+enum NativeToolExecutionStatus { success, failure }
 
 abstract class NativeToolHandler {
   ToolManifest get manifest;

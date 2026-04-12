@@ -6,6 +6,7 @@ import 'package:openreef/agent/agent_task_executor.dart';
 import 'package:openreef/agent/mailbox.dart';
 import 'package:openreef/agent/agent_models.dart';
 import 'package:openreef/agent/execution_request.dart';
+import 'package:openreef/agent/runtime_transcript_event.dart';
 import 'package:openreef/ui/chat_session_port.dart';
 
 class MainAgentApprovalController extends ChangeNotifier {
@@ -136,12 +137,28 @@ class _PendingApprovalEntry {
   bool get isMailboxRequest => requestId != null;
 }
 
+class _RuntimeRequestProjection {
+  _RuntimeRequestProjection({
+    required this.requestId,
+    required this.sessionKey,
+  });
+
+  final String requestId;
+  final String sessionKey;
+  String? assistantMessageId;
+  bool isFinalized = false;
+  bool hasVisibleAssistantText = false;
+  int? lastSequence;
+}
+
 class AgentLoopChatSession extends ChangeNotifier
     implements
         ChatSessionPort,
         ChatSessionFactory,
         ApprovalCapableChatSession,
         ChatExecutionSink,
+        RuntimeTranscriptSink,
+        PersistentChatSession,
         SystemAssistantInjectableChatSession {
   AgentLoopChatSession({
     required AgentTaskExecutor taskExecutor,
@@ -178,6 +195,12 @@ class AgentLoopChatSession extends ChangeNotifier
   int _nextId = 0;
   bool _isRunning = false;
   bool _isDisposed = false;
+  final Set<String> _runtimeMessageIds = <String>{};
+  final Map<String, SubAgentActivity> _runtimeActivities =
+      <String, SubAgentActivity>{};
+  final Map<String, _RuntimeRequestProjection> _projectionsByRequestId =
+      <String, _RuntimeRequestProjection>{};
+  ChatTranscriptPersistencePort? _persistencePort;
 
   @override
   List<SubAgentActivity> get activities =>
@@ -212,6 +235,7 @@ class AgentLoopChatSession extends ChangeNotifier
     }
 
     _isRunning = true;
+    _runtimeActivities.clear();
     _appendMessage(ChatMessageSender.user, trimmed);
     _setStatus(ChatSessionStatus.planning);
     _setActivities(<SubAgentActivity>[
@@ -237,23 +261,23 @@ class AgentLoopChatSession extends ChangeNotifier
     );
 
     try {
-      final result = await _taskExecutor.execute(
-        ExecutionRequest.fromUserMessage(
-          sessionKey: sessionKey,
-          prompt: trimmed,
-          metadata: <String, dynamic>{
-            'conversationHistory': _conversationHistory
-                .map(
-                  (message) => <String, Object?>{
-                    'role': message.role.name,
-                    'content': message.content,
-                    'turnNumber': message.turnNumber,
-                  },
-                )
-                .toList(growable: false),
-          },
-        ),
+      final request = ExecutionRequest.fromUserMessage(
+        sessionKey: sessionKey,
+        prompt: trimmed,
+        metadata: <String, dynamic>{
+          'conversationHistory': _conversationHistory
+              .map(
+                (message) => <String, Object?>{
+                  'role': message.role.name,
+                  'content': message.content,
+                  'turnNumber': message.turnNumber,
+                },
+              )
+              .toList(growable: false),
+        },
       );
+      final result = await _taskExecutor.execute(request);
+      await appendExecutionResult(request, result);
 
       final loopResult = result.toAgentLoopResult();
       final responseText = _normalizeResponse(loopResult);
@@ -267,26 +291,22 @@ class AgentLoopChatSession extends ChangeNotifier
         );
       }
 
-      _setActivities(<SubAgentActivity>[
-        SubAgentActivity(
-          id: 'agent-loop',
-          label: 'agent.loop',
-          summary: _activitySummaryForResult(loopResult, responseText),
-          details: <String>[
-            'Result: ${result.terminalStatus.name}',
-            ...loopResult.toolResults.map(_formatToolResultDetail),
-            if (responseText.isNotEmpty)
-              'Response length: ${responseText.length} chars',
-          ],
-          status: _isProtectivePauseMessage(responseText)
-              ? SubAgentActivityStatus.completed
-              : loopResult.sessionResult == SessionResult.completed
-              ? SubAgentActivityStatus.completed
-              : SubAgentActivityStatus.failed,
-        ),
-      ]);
-      _setStatus(ChatSessionStatus.completed);
-    } catch (error) {
+      if (_runtimeActivities.isEmpty && loopResult.toolResults.isNotEmpty) {
+        _setActivities(
+          loopResult.toolResults.map(_activityFromToolResult).toList(),
+        );
+      } else if (_runtimeActivities.isEmpty) {
+        _setActivities(const <SubAgentActivity>[]);
+      }
+      await _emitTerminalStatus(
+        requestId: result.requestId,
+        status: _statusForResult(loopResult.sessionResult),
+      );
+    } catch (error, stackTrace) {
+      debugPrint(
+        'OpenReef.AgentLoopChatSession: sendMessage.failed ${error.runtimeType}: $error',
+      );
+      debugPrintStack(stackTrace: stackTrace, label: 'chat sendMessage');
       final failureText = 'AgentLoop failed: $error';
       _conversationHistory.add(
         AgentMessage(
@@ -305,7 +325,11 @@ class AgentLoopChatSession extends ChangeNotifier
           status: SubAgentActivityStatus.failed,
         ),
       ]);
-      _setStatus(ChatSessionStatus.completed);
+      await _persistBeforeTerminal(
+        requestId: 'local-exception-${DateTime.now().microsecondsSinceEpoch}',
+        terminalStatus: ChatSessionStatus.failed,
+      );
+      _setStatus(ChatSessionStatus.failed);
     } finally {
       _isRunning = false;
     }
@@ -325,11 +349,26 @@ class AgentLoopChatSession extends ChangeNotifier
       };
     }
     if (result.sessionResult == SessionResult.failed) {
+      if (kDebugMode &&
+          (result.exceptionType != null || result.errorMessage != null)) {
+        final details = <String>[
+          if (result.reason != null) 'reason=${result.reason}',
+          if (result.exceptionType != null) 'exception=${result.exceptionType}',
+          if (result.errorMessage != null) 'message=${result.errorMessage}',
+        ].join(' ');
+        if (details.isNotEmpty) {
+          return 'The agent turn failed. $details';
+        }
+      }
       return switch (result.reason) {
         'session_busy' =>
           'Another execution is already running for this session.',
         'compaction_failure' =>
           'The agent turn failed while compacting context.',
+        'context_assembly_failure' =>
+          'The agent turn failed while assembling context.',
+        'semantic_embedding_model_not_ready' =>
+          'Semantic retrieval needs an embedding model before the agent can choose tools and skills. Open Settings > Semantic Retrieval to install or activate one.',
         'generation_failure' =>
           'The agent turn failed during model generation.',
         'executor_failure' =>
@@ -347,27 +386,22 @@ class AgentLoopChatSession extends ChangeNotifier
     return ChatMessageSender.assistant;
   }
 
-  String _activitySummaryForResult(
-    AgentLoopResult result,
-    String responseText,
-  ) {
-    if (_isProtectivePauseMessage(responseText)) {
-      return 'Generation paused to protect the device from low-memory crashes.';
-    }
-    return switch (result.sessionResult) {
-      SessionResult.completed => 'Agent loop completed successfully.',
-      SessionResult.frozen => 'Agent loop entered a protected frozen state.',
-      SessionResult.failed => 'Agent loop ended with a runtime failure.',
-      SessionResult.cancelled =>
-        'Agent loop was cancelled by execution policy.',
-      SessionResult.suspended => 'Agent loop suspended with resumable state.',
-    };
-  }
-
-  String _formatToolResultDetail(ToolResult result) {
+  SubAgentActivity _activityFromToolResult(ToolResult result) {
     final toolId = result.toolId ?? 'unknown';
     final callId = result.callId ?? 'unknown';
-    return 'Tool $toolId [$callId] ${result.statusName}: ${result.userVisibleMessage ?? result.summary}';
+    return SubAgentActivity(
+      id: 'tool-$callId',
+      label: toolId,
+      summary: result.userVisibleMessage ?? result.summary,
+      details: <String>[
+        'Call: $callId',
+        'Status: ${result.statusName}',
+        'Result: ${result.statusName}: ${result.userVisibleMessage ?? result.summary}',
+      ],
+      status: result.isError
+          ? SubAgentActivityStatus.failed
+          : SubAgentActivityStatus.completed,
+    );
   }
 
   bool _shouldTrackAssistantTurn(AgentLoopResult result) {
@@ -408,6 +442,36 @@ class AgentLoopChatSession extends ChangeNotifier
     notifyListeners();
   }
 
+  void _upsertMessage(ChatTranscriptMessage message) {
+    if (_isDisposed) {
+      return;
+    }
+
+    final index = _messages.indexWhere((entry) => entry.id == message.id);
+    if (index == -1) {
+      _messages.add(message);
+    } else {
+      _messages[index] = message;
+    }
+    notifyListeners();
+  }
+
+  void _replaceMessage(
+    String id,
+    ChatTranscriptMessage Function(ChatTranscriptMessage current) transform,
+  ) {
+    if (_isDisposed) {
+      return;
+    }
+
+    final index = _messages.indexWhere((message) => message.id == id);
+    if (index == -1) {
+      return;
+    }
+    _messages[index] = transform(_messages[index]);
+    notifyListeners();
+  }
+
   void _setActivities(List<SubAgentActivity> nextActivities) {
     if (_isDisposed) {
       return;
@@ -424,6 +488,11 @@ class AgentLoopChatSession extends ChangeNotifier
 
     _status = nextStatus;
     notifyListeners();
+  }
+
+  @override
+  void attachTranscriptPersistencePort(ChatTranscriptPersistencePort port) {
+    _persistencePort = port;
   }
 
   @override
@@ -447,11 +516,300 @@ class AgentLoopChatSession extends ChangeNotifier
     ExecutionRequest request,
     ExecutionResult result,
   ) async {
+    if (request.sessionKey != sessionKey ||
+        result.sessionKey != sessionKey ||
+        request.sessionKey != result.sessionKey) {
+      return;
+    }
+    if (!_isVisibleInChat(result.visibility)) {
+      return;
+    }
     final responseText = _normalizeResponse(result.toAgentLoopResult());
     if (responseText.trim().isEmpty) {
       return;
     }
-    _appendMessage(_responseSenderForText(responseText), responseText);
+    final messageId = '${result.requestId}-assistant-final';
+    final projection = _projectionsByRequestId[result.requestId];
+    if (projection != null &&
+        projection.isFinalized &&
+        projection.hasVisibleAssistantText) {
+      return;
+    }
+    final sequence = (projection?.lastSequence ?? -1) + 1;
+    await applyRuntimeTranscriptEvent(
+      RuntimeTranscriptEvent(
+        kind: RuntimeTranscriptEventKind.assistantMessageFinalized,
+        requestId: result.requestId,
+        sessionKey: sessionKey,
+        sequence: sequence,
+        occurredAt: DateTime.now().toUtc(),
+        messageId: messageId,
+        finalText: responseText,
+        status: result.terminalStatus.name,
+      ),
+    );
+    await _emitTerminalStatus(
+      requestId: result.requestId,
+      status: _statusForLifecycle(result.terminalStatus),
+    );
+  }
+
+  @override
+  Future<void> applyRuntimeTranscriptEvent(RuntimeTranscriptEvent event) async {
+    if (event.sessionKey != sessionKey || _isDisposed) {
+      return;
+    }
+    final projection = _projectionFor(event);
+    if (!_acceptSequence(projection, event.sequence)) {
+      return;
+    }
+
+    switch (event.kind) {
+      case RuntimeTranscriptEventKind.assistantMessageStarted:
+        final messageId = event.messageId ?? '${event.requestId}-assistant';
+        _runtimeMessageIds.add(messageId);
+        projection.assistantMessageId = messageId;
+        _upsertMessage(
+          ChatTranscriptMessage(
+            id: messageId,
+            sender: ChatMessageSender.assistant,
+            text: '',
+            timestamp: event.occurredAt.toLocal(),
+            isStreaming: true,
+          ),
+        );
+        _setStatus(ChatSessionStatus.streaming);
+      case RuntimeTranscriptEventKind.assistantMessageDelta:
+        final messageId = event.messageId ?? '${event.requestId}-assistant';
+        _runtimeMessageIds.add(messageId);
+        projection.assistantMessageId = messageId;
+        if (!_messages.any((message) => message.id == messageId)) {
+          _upsertMessage(
+            ChatTranscriptMessage(
+              id: messageId,
+              sender: ChatMessageSender.assistant,
+              text: event.deltaText ?? '',
+              timestamp: event.occurredAt.toLocal(),
+              isStreaming: true,
+            ),
+          );
+        } else {
+          _replaceMessage(
+            messageId,
+            (message) => message.copyWith(
+              text: '${message.text}${event.deltaText ?? ''}',
+              isStreaming: true,
+            ),
+          );
+        }
+        _setStatus(ChatSessionStatus.streaming);
+      case RuntimeTranscriptEventKind.assistantMessageFinalized:
+        await _finalizeRuntimeMessage(event, failed: false);
+      case RuntimeTranscriptEventKind.assistantMessageFailed:
+        await _finalizeRuntimeMessage(event, failed: true);
+      case RuntimeTranscriptEventKind.toolStepStarted:
+      case RuntimeTranscriptEventKind.toolStepUpdated:
+      case RuntimeTranscriptEventKind.toolStepFinished:
+        _applyToolStepEvent(event);
+    }
+  }
+
+  Future<void> _finalizeRuntimeMessage(
+    RuntimeTranscriptEvent event, {
+    required bool failed,
+  }) async {
+    final projection = _projectionsByRequestId[event.requestId]!;
+    final messageId = event.messageId ?? '${event.requestId}-assistant';
+    final normalizedText = (event.finalText ?? '').trim();
+    final text = normalizedText.isEmpty
+        ? _fallbackTextForEvent(event, failed: failed)
+        : normalizedText;
+    _runtimeMessageIds.add(messageId);
+    projection.assistantMessageId = messageId;
+    projection.isFinalized = true;
+    projection.hasVisibleAssistantText = text.trim().isNotEmpty;
+    final sender = failed
+        ? ChatMessageSender.system
+        : _responseSenderForText(text);
+    if (!_messages.any((message) => message.id == messageId)) {
+      if (text.isEmpty) {
+        return;
+      }
+      _upsertMessage(
+        ChatTranscriptMessage(
+          id: messageId,
+          sender: sender,
+          text: text,
+          timestamp: event.occurredAt.toLocal(),
+        ),
+      );
+      await _persistBeforeTerminal(
+        requestId: event.requestId,
+        terminalStatus: failed
+            ? ChatSessionStatus.failed
+            : ChatSessionStatus.completed,
+      );
+      return;
+    }
+    _replaceMessage(
+      messageId,
+      (message) => message.copyWith(
+        sender: sender,
+        text: text.isEmpty ? message.text : text,
+        isStreaming: false,
+      ),
+    );
+    await _persistBeforeTerminal(
+      requestId: event.requestId,
+      terminalStatus: failed
+          ? ChatSessionStatus.failed
+          : ChatSessionStatus.completed,
+    );
+  }
+
+  void _applyToolStepEvent(RuntimeTranscriptEvent event) {
+    final stepId =
+        event.stepId ?? event.toolCallId ?? '${event.requestId}-tool';
+    final existing = _runtimeActivities[stepId];
+    final status = switch (event.kind) {
+      RuntimeTranscriptEventKind.toolStepStarted ||
+      RuntimeTranscriptEventKind.toolStepUpdated =>
+        SubAgentActivityStatus.running,
+      RuntimeTranscriptEventKind.toolStepFinished =>
+        event.toolResult?.isError ?? false
+            ? SubAgentActivityStatus.failed
+            : SubAgentActivityStatus.completed,
+      _ => SubAgentActivityStatus.running,
+    };
+    final details = <String>[
+      ...?existing?.details,
+      if (event.toolCallId != null) 'Call: ${event.toolCallId}',
+      if (event.status != null) 'Status: ${event.status}',
+      if (event.toolResult != null)
+        'Result: ${event.toolResult!.statusName}: ${event.toolResult!.userVisibleMessage ?? event.toolResult!.summary}',
+    ];
+    _runtimeActivities[stepId] = SubAgentActivity(
+      id: stepId,
+      label: event.toolId ?? 'tool',
+      summary: event.summary ?? existing?.summary ?? 'Tool step updated.',
+      details: List<String>.unmodifiable(details.toSet()),
+      status: status,
+    );
+    _setActivities(_runtimeActivities.values.toList(growable: false));
+    _setStatus(ChatSessionStatus.toolRouting);
+  }
+
+  _RuntimeRequestProjection _projectionFor(RuntimeTranscriptEvent event) {
+    return _projectionsByRequestId.putIfAbsent(
+      event.requestId,
+      () => _RuntimeRequestProjection(
+        requestId: event.requestId,
+        sessionKey: event.sessionKey,
+      ),
+    );
+  }
+
+  bool _acceptSequence(_RuntimeRequestProjection projection, int sequence) {
+    final last = projection.lastSequence;
+    if (last != null && sequence <= last) {
+      return false;
+    }
+    projection.lastSequence = sequence;
+    return true;
+  }
+
+  String _fallbackTextForEvent(
+    RuntimeTranscriptEvent event, {
+    required bool failed,
+  }) {
+    if (failed) {
+      return event.summary?.trim().isNotEmpty ?? false
+          ? event.summary!.trim()
+          : 'The agent turn failed before completion.';
+    }
+    return 'LiteRT completed the turn but returned no visible text.';
+  }
+
+  Future<void> _emitTerminalStatus({
+    required String requestId,
+    required ChatSessionStatus status,
+  }) async {
+    final persisted = await _persistBeforeTerminal(
+      requestId: requestId,
+      terminalStatus: status,
+    );
+    if (!persisted) {
+      _setStatus(ChatSessionStatus.persistenceFailed);
+      return;
+    }
+    _setStatus(status);
+  }
+
+  Future<bool> _persistBeforeTerminal({
+    required String requestId,
+    required ChatSessionStatus terminalStatus,
+  }) async {
+    final port = _persistencePort;
+    if (port == null) {
+      return true;
+    }
+    final result = await port.persistTranscriptBeforeTerminal(
+      ChatTranscriptPersistenceRequest(
+        sessionKey: sessionKey,
+        requestId: requestId,
+        terminalStatus: terminalStatus,
+        messages: List<ChatTranscriptMessage>.unmodifiable(_messages),
+      ),
+    );
+    if (result.isSuccess) {
+      return true;
+    }
+    _appendPersistenceFailureMessage(result);
+    return false;
+  }
+
+  void _appendPersistenceFailureMessage(
+    ChatTranscriptPersistenceResult result,
+  ) {
+    final text =
+        'The agent completed, but OpenReef could not save the final transcript. ${result.errorMessage ?? result.errorCode ?? ''}'
+            .trim();
+    final id = 'persist-failed-${DateTime.now().microsecondsSinceEpoch}';
+    _upsertMessage(
+      ChatTranscriptMessage(
+        id: id,
+        sender: ChatMessageSender.system,
+        text: text,
+        timestamp: DateTime.now(),
+      ),
+    );
+  }
+
+  ChatSessionStatus _statusForResult(SessionResult result) {
+    return switch (result) {
+      SessionResult.completed => ChatSessionStatus.completed,
+      SessionResult.failed => ChatSessionStatus.failed,
+      SessionResult.frozen => ChatSessionStatus.frozen,
+      SessionResult.cancelled => ChatSessionStatus.cancelled,
+      SessionResult.suspended => ChatSessionStatus.suspended,
+    };
+  }
+
+  ChatSessionStatus _statusForLifecycle(ExecutionLifecycleStatus status) {
+    return switch (status) {
+      ExecutionLifecycleStatus.completed => ChatSessionStatus.completed,
+      ExecutionLifecycleStatus.failed ||
+      ExecutionLifecycleStatus.rejected => ChatSessionStatus.failed,
+      ExecutionLifecycleStatus.cancelled => ChatSessionStatus.cancelled,
+      ExecutionLifecycleStatus.suspended => ChatSessionStatus.suspended,
+      ExecutionLifecycleStatus.queued ||
+      ExecutionLifecycleStatus.running => ChatSessionStatus.streaming,
+    };
+  }
+
+  bool _isVisibleInChat(ExecutionVisibility visibility) {
+    return visibility == ExecutionVisibility.chat ||
+        visibility == ExecutionVisibility.chatAndBackground;
   }
 
   @override

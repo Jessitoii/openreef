@@ -142,7 +142,8 @@ class _ChatScreenState extends State<ChatScreen> {
               if (widget.chatSession.pendingApprovalOrNull != null) ...[
                 _PendingApprovalCard(
                   approval: widget.chatSession.pendingApprovalOrNull!,
-                  onApprove: widget.chatSession.approvePendingApprovalIfSupported,
+                  onApprove:
+                      widget.chatSession.approvePendingApprovalIfSupported,
                   onReject: widget.chatSession.rejectPendingApprovalIfSupported,
                 ),
                 const SizedBox(height: 12),
@@ -502,6 +503,13 @@ class _SignalOrb extends StatelessWidget {
     final active = switch (status) {
       ChatSessionStatus.idle => ReefPalette.darkSuccess,
       ChatSessionStatus.completed => ReefPalette.darkSuccess,
+      ChatSessionStatus.failed => Theme.of(context).colorScheme.error,
+      ChatSessionStatus.frozen ||
+      ChatSessionStatus.cancelled ||
+      ChatSessionStatus.persistenceFailed => Theme.of(
+        context,
+      ).colorScheme.error,
+      ChatSessionStatus.suspended => ReefPalette.coral,
       ChatSessionStatus.planning ||
       ChatSessionStatus.toolRouting ||
       ChatSessionStatus.streaming => ReefPalette.coral,
@@ -702,6 +710,16 @@ String _statusLabel(ChatSessionStatus status) {
       return 'STREAMING';
     case ChatSessionStatus.completed:
       return 'COMPLETE';
+    case ChatSessionStatus.failed:
+      return 'FAILED';
+    case ChatSessionStatus.frozen:
+      return 'FROZEN';
+    case ChatSessionStatus.cancelled:
+      return 'CANCELLED';
+    case ChatSessionStatus.suspended:
+      return 'SUSPENDED';
+    case ChatSessionStatus.persistenceFailed:
+      return 'PERSISTENCE FAILED';
   }
 }
 

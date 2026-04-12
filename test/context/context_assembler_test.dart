@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:openreef/agent/agent_models.dart';
 import 'package:openreef/agent/tool_router.dart';
+import 'package:openreef/context/compiled_context_package.dart';
 import 'package:openreef/context/context_assembler.dart';
 import 'package:openreef/memory/memory_index.dart';
 import 'package:openreef/memory/memory_record.dart';
@@ -59,12 +60,14 @@ void main() {
     );
 
     expect(
-      result.messages.any((message) => message.content.contains('[MEMORY INDEX]')),
+      result.messages.any(
+        (message) => message.content.contains('[MEMORY INDEX]'),
+      ),
       isTrue,
     );
   });
 
-  test('tool selection includes required tools and caps the list at 8', () async {
+  test('legacy tool selection returns capped semantic exposure', () async {
     final assembler = ContextAssembler(
       memoryIndex: memoryIndex,
       embedder: const _FixedEmbedder(<double>[1, 0, 0, 0, 0, 0, 0]),
@@ -81,15 +84,11 @@ void main() {
       ),
     );
 
-    final ids = selected.map((tool) => tool.id).toList(growable: false);
-    expect(ids, contains('session_status'));
-    expect(ids, contains('memory_save'));
-    expect(ids, contains('memory_search'));
-    expect(ids, contains('notify'));
+    expect(selected, isNotEmpty);
     expect(selected.length, lessThanOrEqualTo(8));
   });
 
-  test('calendar intent pulls in trigger tools', () async {
+  test('request-based trigger mode is explicit in compiled context', () async {
     final assembler = ContextAssembler(
       memoryIndex: memoryIndex,
       embedder: const _FixedEmbedder(<double>[1, 0, 0, 0, 0, 0, 0]),
@@ -97,18 +96,20 @@ void main() {
       skillCatalog: InMemorySkillCatalog(const <SkillDefinition>[]),
     );
 
-    final selected = await assembler.selectTools(
-      userMessage: 'set a daily reminder for 8am',
-      intentSignal: const IntentSignal(
-        primary: 'calendar',
-        secondary: 'general',
-        confidence: 0.9,
+    final result = await assembler.assembleRequest(
+      const ContextAssemblyRequest(
+        sessionKey: 'trigger:test',
+        userMessage: 'set a daily reminder for 8am',
+        conversationHistory: <AgentMessage>[],
+        modelContextWindow: 4096,
+        executionMode: ExecutionMode.triggerExecution,
       ),
     );
 
-    final ids = selected.map((tool) => tool.id).toSet();
-    expect(ids, contains('trigger_create'));
-    expect(ids, contains('alarm_set'));
+    expect(
+      result.compiledPackage!.executionMode,
+      ExecutionMode.triggerExecution,
+    );
   });
 
   test('skill gating injects at most 2 matching skills', () async {
@@ -116,45 +117,44 @@ void main() {
       memoryIndex: memoryIndex,
       embedder: const _FixedEmbedder(<double>[0, 0, 1, 0, 0, 0, 0]),
       toolCatalog: InMemoryToolCatalog(_toolFixtures),
-      skillCatalog: InMemorySkillCatalog(
-        const <SkillDefinition>[
-          SkillDefinition(
-            id: 'sleep_tracker',
-            displayName: 'sleep_tracker',
-            content: 'Track sleep',
-            toolsRequired: <String>['notify'],
-            triggerPatterns: <String>['sleep'],
-          ),
-          SkillDefinition(
-            id: 'medication_reminder',
-            displayName: 'medication_reminder',
-            content: 'Track pills',
-            toolsRequired: <String>['notify'],
-            triggerPatterns: <String>['pill'],
-          ),
-          SkillDefinition(
-            id: 'wellness_journal',
-            displayName: 'wellness_journal',
-            content: 'Track health',
-            toolsRequired: <String>['notify'],
-            triggerPatterns: <String>['sleep', 'pill'],
-          ),
-        ],
-      ),
+      skillCatalog: InMemorySkillCatalog(const <SkillDefinition>[
+        SkillDefinition(
+          id: 'sleep_tracker',
+          displayName: 'sleep_tracker',
+          content: 'Track sleep',
+          toolsRequired: <String>['notify'],
+          triggerPatterns: <String>['sleep'],
+        ),
+        SkillDefinition(
+          id: 'medication_reminder',
+          displayName: 'medication_reminder',
+          content: 'Track pills',
+          toolsRequired: <String>['notify'],
+          triggerPatterns: <String>['pill'],
+        ),
+        SkillDefinition(
+          id: 'wellness_journal',
+          displayName: 'wellness_journal',
+          content: 'Track health',
+          toolsRequired: <String>['notify'],
+          triggerPatterns: <String>['sleep', 'pill'],
+        ),
+      ]),
     );
 
-    final gated = assembler.gateSkills('sleep pill reminder');
+    final gated = await assembler.gateSkills('sleep pill reminder');
 
     expect(gated.length, 2);
   });
 
-  test('skill gating ignores runtime-ineligible skills and injects eligible matches into context', () async {
-    final assembler = ContextAssembler(
-      memoryIndex: memoryIndex,
-      embedder: const _FixedEmbedder(<double>[0, 0, 1, 0, 0, 0, 0]),
-      toolCatalog: InMemoryToolCatalog(_toolFixtures),
-      skillCatalog: InMemorySkillCatalog(
-        const <SkillDefinition>[
+  test(
+    'skill gating ignores runtime-ineligible skills and injects eligible matches into context',
+    () async {
+      final assembler = ContextAssembler(
+        memoryIndex: memoryIndex,
+        embedder: const _FixedEmbedder(<double>[0, 0, 1, 0, 0, 0, 0]),
+        toolCatalog: InMemoryToolCatalog(_toolFixtures),
+        skillCatalog: InMemorySkillCatalog(const <SkillDefinition>[
           SkillDefinition(
             id: 'blocked_skill',
             displayName: 'blocked_skill',
@@ -170,62 +170,68 @@ void main() {
             toolsRequired: <String>['notify'],
             triggerPatterns: <String>['bedtime check'],
           ),
+        ]),
+      );
+
+      final result = await assembler.assemble(
+        sessionKey: 'agent:main',
+        userMessage: 'Please run a bedtime check for tonight.',
+        conversationHistory: const <AgentMessage>[],
+        modelContextWindow: 4096,
+      );
+
+      expect(result.activeSkills.map((skill) => skill.id), <String>[
+        'sleep_tracker',
+      ]);
+      expect(result.toPrompt(), contains('Sleep Tracker'));
+      expect(result.toPrompt(), contains('bedtime checklist'));
+      expect(result.toPrompt(), isNot(contains('Do not inject')));
+    },
+  );
+
+  test(
+    'budget allocation is section-based and reserves 1024 output tokens',
+    () async {
+      final assembler = ContextAssembler(
+        memoryIndex: memoryIndex,
+        embedder: const _FixedEmbedder(<double>[1, 0, 0, 0, 0, 0, 0]),
+        toolCatalog: InMemoryToolCatalog(_toolFixtures),
+        skillCatalog: InMemorySkillCatalog(const <SkillDefinition>[]),
+        memoryContextProvider: const _MemoryProvider(),
+        standingOrderProvider: const _StandingOrderSource(),
+      );
+
+      final result = await assembler.assemble(
+        sessionKey: 'agent:main',
+        userMessage: 'find my meeting notes',
+        conversationHistory: const <AgentMessage>[
+          AgentMessage(
+            role: AgentMessageRole.user,
+            content: 'old message one',
+            turnNumber: 1,
+          ),
+          AgentMessage(
+            role: AgentMessageRole.assistant,
+            content: 'old message two',
+            turnNumber: 2,
+          ),
         ],
-      ),
-    );
+        modelContextWindow: 4096,
+      );
 
-    final result = await assembler.assemble(
-      sessionKey: 'agent:main',
-      userMessage: 'Please run a bedtime check for tonight.',
-      conversationHistory: const <AgentMessage>[],
-      modelContextWindow: 4096,
-    );
+      final budget = result.tokenBudget;
 
-    expect(result.activeSkills.map((skill) => skill.id), <String>['sleep_tracker']);
-    expect(result.toPrompt(), contains('Sleep Tracker'));
-    expect(result.toPrompt(), contains('bedtime checklist'));
-    expect(result.toPrompt(), isNot(contains('Do not inject')));
-  });
-
-  test('budget allocation uses 60/30/10 split and reserves 1024 output tokens', () async {
-    final assembler = ContextAssembler(
-      memoryIndex: memoryIndex,
-      embedder: const _FixedEmbedder(<double>[1, 0, 0, 0, 0, 0, 0]),
-      toolCatalog: InMemoryToolCatalog(_toolFixtures),
-      skillCatalog: InMemorySkillCatalog(const <SkillDefinition>[]),
-      memoryContextProvider: const _MemoryProvider(),
-      standingOrderProvider: const _StandingOrderSource(),
-    );
-
-    final result = await assembler.assemble(
-      sessionKey: 'agent:main',
-      userMessage: 'find my meeting notes',
-      conversationHistory: const <AgentMessage>[
-        AgentMessage(
-          role: AgentMessageRole.user,
-          content: 'old message one',
-          turnNumber: 1,
-        ),
-        AgentMessage(
-          role: AgentMessageRole.assistant,
-          content: 'old message two',
-          turnNumber: 2,
-        ),
-      ],
-      modelContextWindow: 4096,
-    );
-
-    final budget = result.tokenBudget;
-    final allocatable = budget.historyBudget + budget.memoryBudget + budget.standingOrderBudget;
-
-    expect(budget.outputReserve, 1024);
-    expect(budget.historyBudget, (allocatable * 0.6).floor());
-    expect(budget.memoryBudget, (allocatable * 0.3).floor());
-    expect(
-      budget.standingOrderBudget,
-      allocatable - budget.historyBudget - budget.memoryBudget,
-    );
-  });
+      expect(budget.outputReserve, 1024);
+      expect(budget.historyBudget, greaterThan(0));
+      expect(budget.memoryBudget, greaterThan(0));
+      expect(budget.standingOrderBudget, greaterThan(0));
+      expect(result.compiledPackage, isNotNull);
+      expect(
+        result.compiledPackage!.auditTrace.sectionTokenUsage,
+        contains('memory_index'),
+      );
+    },
+  );
 }
 
 class _FixedEmbedder implements IntentEmbedder {

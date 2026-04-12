@@ -10,7 +10,14 @@ abstract class AgentModelAdapter {
   });
 }
 
-class LiteRtAgentModelAdapter implements AgentModelAdapter {
+abstract class StreamingAgentModelAdapter implements AgentModelAdapter {
+  Stream<String> generateTextStream(
+    AssembleResult context, {
+    required int maxTokens,
+  });
+}
+
+class LiteRtAgentModelAdapter implements StreamingAgentModelAdapter {
   LiteRtAgentModelAdapter({
     required LiteRtBridge bridge,
     AgentResponseParser parser = const AgentResponseParser(),
@@ -39,18 +46,33 @@ class LiteRtAgentModelAdapter implements AgentModelAdapter {
     required int maxTokens,
   }) async {
     final buffer = StringBuffer();
+    await for (final chunk in generateTextStream(
+      context,
+      maxTokens: maxTokens,
+    )) {
+      buffer.write(chunk);
+    }
+
+    return _parser.parse(buffer.toString());
+  }
+
+  @override
+  Stream<String> generateTextStream(
+    AssembleResult context, {
+    required int maxTokens,
+  }) async* {
     final stream = _generateStreamOverride ?? _bridge.generateStream;
     await for (final event in stream(
       context: context.toPrompt(),
       maxTokens: maxTokens,
       selectedTools: context.selectedTools,
     )) {
-      buffer.write(event.chunk);
+      if (event.chunk.isNotEmpty) {
+        yield event.chunk;
+      }
       if (event.isFinished) {
         break;
       }
     }
-
-    return _parser.parse(buffer.toString());
   }
 }

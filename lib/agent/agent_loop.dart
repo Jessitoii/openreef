@@ -1,12 +1,17 @@
+import 'package:flutter/foundation.dart';
 import 'package:openreef/agent/agent_model_adapter.dart';
 import 'package:openreef/agent/agent_models.dart';
+import 'package:openreef/agent/execution_request.dart';
 import 'package:openreef/agent/agent_notifier.dart';
+import 'package:openreef/agent/runtime_transcript_event.dart';
 import 'package:openreef/agent/tool_router.dart';
 import 'package:openreef/context/compactor.dart';
+import 'package:openreef/context/compiled_context_package.dart';
 import 'package:openreef/context/context_assembler.dart';
 import 'package:openreef/memory/memory_former.dart';
 import 'package:openreef/memory/memory_formation_service.dart';
 import 'package:openreef/memory/memory_turn.dart';
+import 'package:openreef/models/embedding_model_manager.dart';
 import 'package:openreef/models/litert_bridge.dart';
 
 class AgentLoop {
@@ -49,6 +54,11 @@ class AgentLoop {
     List<String> recentFiles = const <String>[],
     LoopControl control = const LoopControl(),
     LoopContinuation continuation = const LoopContinuation(),
+    RuntimeTranscriptSink? transcriptSink,
+    String? requestId,
+    ExecutionMode executionMode = ExecutionMode.chat,
+    ExecutionSource executionSource = ExecutionSource.user,
+    ExecutionPolicy? executionPolicy,
   }) async {
     final startedAt = DateTime.now().toUtc();
     final seededHistory =
@@ -65,14 +75,77 @@ class AgentLoop {
               metadata: continuation.toMetadata(),
             ),
           ];
-    var context = await _contextAssembler.assemble(
-      sessionKey: sessionKey,
-      userMessage: userMessage,
-      conversationHistory: seededHistory,
-      modelContextWindow: modelContextWindow,
-      compactRequested: compactRequested,
-      recentFiles: recentFiles,
+    _trace(
+      'run.start session=$sessionKey request=${requestId ?? 'none'} mode=${executionMode.name}',
     );
+    late AssembleResult context;
+    try {
+      _trace('assembleRequest.start session=$sessionKey');
+      context = await _contextAssembler.assembleRequest(
+        ContextAssemblyRequest(
+          sessionKey: sessionKey,
+          userMessage: userMessage,
+          conversationHistory: seededHistory,
+          modelContextWindow: modelContextWindow,
+          compactRequested: compactRequested,
+          recentFiles: recentFiles,
+          executionMode: executionMode,
+          executionSource: executionSource,
+          executionPolicy: executionPolicy,
+          workflowContext: WorkflowContext(
+            workflowId: continuation.resumeToken,
+            artifacts: <String, Object?>{
+              'currentStepIndex': continuation.currentStepIndex,
+              ...continuation.waitingMetadata,
+            },
+            resolvedEntities: continuation.variables,
+            currentHypothesis: continuation.waitingReason,
+          ),
+        ),
+      );
+      _trace(
+        'assembleRequest.end sections=${context.compiledPackage?.prompt.sections.length ?? 0} tools=${context.selectedTools.length}',
+      );
+    } on EmbeddingModelNotReadyException catch (error, stackTrace) {
+      _traceError('assembleRequest.embeddingModelNotReady', error, stackTrace);
+      return _completeWithFailure(
+        'semantic_embedding_model_not_ready',
+        error.userMessage,
+        sessionKey: sessionKey,
+        hasFailedToolCalls: false,
+        toolsUsed: const <String>[],
+        toolResults: const <ToolResult>[],
+        continuation: continuation,
+        exceptionType: error.runtimeType.toString(),
+        errorMessage: error.toString(),
+      );
+    } catch (error, stackTrace) {
+      _traceError('assembleRequest.failed', error, stackTrace);
+      return _completeWithFailure(
+        'context_assembly_failure',
+        _failureMessage('Context assembly failed', error),
+        sessionKey: sessionKey,
+        hasFailedToolCalls: false,
+        toolsUsed: const <String>[],
+        toolResults: const <ToolResult>[],
+        continuation: continuation,
+        exceptionType: error.runtimeType.toString(),
+        errorMessage: error.toString(),
+      );
+    }
+    if (_hasContinuationState(continuation)) {
+      context = context.copyWith(
+        messages: <AgentMessage>[
+          ...context.messages,
+          AgentMessage(
+            role: AgentMessageRole.system,
+            content:
+                'EXECUTION_CONTINUATION_STATE ${continuation.toMetadata()}',
+            metadata: continuation.toMetadata(),
+          ),
+        ],
+      );
+    }
 
     var consecutiveErrors = 0;
     var iterationCount = 0;
@@ -85,6 +158,11 @@ class AgentLoop {
     var currentStepIndex = continuation.currentStepIndex;
     var variables = Map<String, Object?>.from(continuation.variables);
     late AgentResponse response;
+    final transcriptEmitter = RuntimeTranscriptEmitter(
+      requestId: requestId ?? 'loop_${startedAt.microsecondsSinceEpoch}',
+      sessionKey: sessionKey,
+      sink: transcriptSink,
+    );
 
     final cancellation = _checkCancelled(control);
     if (cancellation != null) {
@@ -103,9 +181,14 @@ class AgentLoop {
     }
 
     try {
-      response = await _modelAdapter.generate(
+      response = await _generateAssistantResponse(
         context,
         maxTokens: context.tokenBudget.outputReserve,
+        emitter: transcriptEmitter,
+        messageId: _assistantMessageId(
+          transcriptEmitter.requestId,
+          currentStepIndex,
+        ),
       );
       final cancellationAfterGeneration = _checkCancelled(control);
       if (cancellationAfterGeneration != null) {
@@ -122,7 +205,8 @@ class AgentLoop {
           ),
         );
       }
-    } catch (error) {
+    } catch (error, stackTrace) {
+      _traceError('modelGeneration.failed', error, stackTrace);
       return _completeWithFailure(
         'generation_failure',
         _generationFailureMessage(error),
@@ -137,6 +221,8 @@ class AgentLoop {
           waitingMetadata: continuation.waitingMetadata,
           resumeToken: continuation.resumeToken,
         ),
+        exceptionType: error.runtimeType.toString(),
+        errorMessage: error.toString(),
       );
     }
 
@@ -232,7 +318,8 @@ class AgentLoop {
 
       try {
         context = await _applyCompaction(context);
-      } catch (error) {
+      } catch (error, stackTrace) {
+        _traceError('compaction.failed', error, stackTrace);
         return _completeWithFailure(
           'compaction_failure',
           'Compaction failed: $error',
@@ -247,6 +334,8 @@ class AgentLoop {
             waitingMetadata: continuation.waitingMetadata,
             resumeToken: continuation.resumeToken,
           ),
+          exceptionType: error.runtimeType.toString(),
+          errorMessage: error.toString(),
         );
       }
 
@@ -301,12 +390,48 @@ class AgentLoop {
         }
 
         toolsUsed.add(toolCall.toolId);
+        final stepId = _toolStepId(
+          transcriptEmitter.requestId,
+          currentStepIndex,
+          toolCall.id,
+        );
+        await transcriptEmitter.emit(
+          kind: RuntimeTranscriptEventKind.toolStepStarted,
+          stepId: stepId,
+          toolCallId: toolCall.id,
+          toolId: toolCall.toolId,
+          status: 'running',
+          summary: 'Tool ${toolCall.toolId} started.',
+        );
         try {
+          await transcriptEmitter.emit(
+            kind: RuntimeTranscriptEventKind.toolStepUpdated,
+            stepId: stepId,
+            toolCallId: toolCall.id,
+            toolId: toolCall.toolId,
+            status: 'running',
+            summary: 'Dispatching through ToolRouter.',
+          );
+          _trace(
+            'toolExecution.start tool=${toolCall.toolId} call=${toolCall.id}',
+          );
           final result = await _toolRouter.dispatch(
             toolCall,
             sessionKey: sessionKey,
           );
+          _trace(
+            'toolExecution.end tool=${toolCall.toolId} status=${result.statusName}',
+          );
           toolResults.add(result);
+          await transcriptEmitter.emit(
+            kind: RuntimeTranscriptEventKind.toolStepFinished,
+            stepId: stepId,
+            toolCallId: toolCall.id,
+            toolId: toolCall.toolId,
+            status: result.statusName,
+            summary: result.userVisibleMessage ?? result.summary,
+            toolResult: result,
+          );
           variables['lastToolId'] = toolCall.toolId;
           variables['lastToolStatus'] = result.statusName;
           variables['lastToolSummary'] = result.summary;
@@ -353,7 +478,8 @@ class AgentLoop {
             activeBlockedFingerprint = '';
             repeatedBlockedFingerprintCount = 0;
           }
-        } catch (error) {
+        } catch (error, stackTrace) {
+          _traceError('toolExecution.failed', error, stackTrace);
           failedToolCalls = true;
           consecutiveErrors += 1;
           final result = ToolResult.failure(
@@ -369,6 +495,15 @@ class AgentLoop {
             },
           );
           toolResults.add(result);
+          await transcriptEmitter.emit(
+            kind: RuntimeTranscriptEventKind.toolStepFinished,
+            stepId: stepId,
+            toolCallId: toolCall.id,
+            toolId: toolCall.toolId,
+            status: result.statusName,
+            summary: result.userVisibleMessage ?? result.summary,
+            toolResult: result,
+          );
           context = context.appendToolResult(toolCall.id, result);
 
           final nextFingerprint = _fingerprintToolException(toolCall, error);
@@ -401,9 +536,14 @@ class AgentLoop {
       }
 
       try {
-        response = await _modelAdapter.generate(
+        response = await _generateAssistantResponse(
           context,
           maxTokens: context.tokenBudget.outputReserve,
+          emitter: transcriptEmitter,
+          messageId: _assistantMessageId(
+            transcriptEmitter.requestId,
+            currentStepIndex,
+          ),
         );
         final cancellationAfterGeneration = _checkCancelled(control);
         if (cancellationAfterGeneration != null) {
@@ -420,7 +560,8 @@ class AgentLoop {
             ),
           );
         }
-      } catch (error) {
+      } catch (error, stackTrace) {
+        _traceError('modelGeneration.failed', error, stackTrace);
         return _completeWithFailure(
           'generation_failure',
           _generationFailureMessage(error),
@@ -435,6 +576,8 @@ class AgentLoop {
             waitingMetadata: continuation.waitingMetadata,
             resumeToken: continuation.resumeToken,
           ),
+          exceptionType: error.runtimeType.toString(),
+          errorMessage: error.toString(),
         );
       }
     }
@@ -477,6 +620,8 @@ class AgentLoop {
     required List<String> toolsUsed,
     required List<ToolResult> toolResults,
     required LoopContinuation continuation,
+    String? exceptionType,
+    String? errorMessage,
   }) async {
     await _memoryFormer.process(
       MemoryTurn(
@@ -496,7 +641,124 @@ class AgentLoop {
       stepCount: continuation.currentStepIndex,
       toolCallCount: toolsUsed.length,
       continuation: continuation,
+      exceptionType: exceptionType,
+      errorMessage: errorMessage,
     );
+  }
+
+  bool _hasContinuationState(LoopContinuation continuation) {
+    return continuation.currentStepIndex != 0 ||
+        continuation.variables.isNotEmpty ||
+        continuation.waitingReason != null ||
+        continuation.waitingMetadata.isNotEmpty ||
+        continuation.resumeToken != null;
+  }
+
+  Future<AgentResponse> _generateAssistantResponse(
+    AssembleResult context, {
+    required int maxTokens,
+    required RuntimeTranscriptEmitter emitter,
+    required String messageId,
+  }) async {
+    final buffer = StringBuffer();
+    try {
+      _trace('modelGeneration.start maxTokens=$maxTokens');
+      final streamingAdapter = _modelAdapter;
+      if (streamingAdapter is! StreamingAgentModelAdapter) {
+        final response = await _modelAdapter.generate(
+          context,
+          maxTokens: maxTokens,
+        );
+        await _emitVisibleAssistantResponse(
+          response,
+          emitter: emitter,
+          messageId: messageId,
+        );
+        _trace(
+          'modelGeneration.end hasToolCall=${response.hasToolCall} textLength=${response.text.length}',
+        );
+        return response;
+      }
+      await for (final chunk in streamingAdapter.generateTextStream(
+        context,
+        maxTokens: maxTokens,
+      )) {
+        buffer.write(chunk);
+      }
+      final rawOutput = buffer.toString();
+      final response = const AgentResponseParser().parse(rawOutput);
+      await _emitVisibleAssistantResponse(
+        response,
+        emitter: emitter,
+        messageId: messageId,
+      );
+      _trace(
+        'modelGeneration.end hasToolCall=${response.hasToolCall} textLength=${response.text.length}',
+      );
+      return response;
+    } catch (error, stackTrace) {
+      _traceError('modelGeneration.emitFailed', error, stackTrace);
+      await emitter.emit(
+        kind: RuntimeTranscriptEventKind.assistantMessageFailed,
+        messageId: messageId,
+        finalText: _generationFailureMessage(error),
+        status: 'failed',
+        summary: error.toString(),
+      );
+      rethrow;
+    }
+  }
+
+  String _failureMessage(String prefix, Object error) {
+    return '$prefix: ${error.runtimeType}: $error';
+  }
+
+  void _trace(String message) {
+    debugPrint('OpenReef.AgentLoop: $message');
+  }
+
+  void _traceError(String message, Object error, StackTrace stackTrace) {
+    debugPrint('OpenReef.AgentLoop: $message ${error.runtimeType}: $error');
+    debugPrintStack(stackTrace: stackTrace, label: message);
+  }
+
+  Future<void> _emitVisibleAssistantResponse(
+    AgentResponse response, {
+    required RuntimeTranscriptEmitter emitter,
+    required String messageId,
+  }) async {
+    if (response.hasToolCall) {
+      return;
+    }
+    final visibleText = response.text.trim();
+    if (visibleText.isEmpty) {
+      return;
+    }
+    await emitter.emit(
+      kind: RuntimeTranscriptEventKind.assistantMessageStarted,
+      messageId: messageId,
+      status: 'streaming',
+    );
+    await emitter.emit(
+      kind: RuntimeTranscriptEventKind.assistantMessageDelta,
+      messageId: messageId,
+      deltaText: visibleText,
+      status: 'streaming',
+    );
+    await emitter.emit(
+      kind: RuntimeTranscriptEventKind.assistantMessageFinalized,
+      messageId: messageId,
+      finalText: visibleText,
+      status: 'completed',
+    );
+  }
+
+  String _assistantMessageId(String requestId, int stepIndex) {
+    return '$requestId-assistant-$stepIndex';
+  }
+
+  String _toolStepId(String requestId, int stepIndex, String toolCallId) {
+    return '$requestId-tool-$stepIndex-$toolCallId';
   }
 
   Future<void> _persistCompletedTurnMemory({

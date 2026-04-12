@@ -1,8 +1,20 @@
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
+import 'package:openreef/agent/execution_request.dart';
 import 'package:openreef/agent/agent_models.dart';
 import 'package:openreef/agent/tool_router.dart';
+import 'package:openreef/context/capability_retrieval.dart';
+import 'package:openreef/context/compiled_context_package.dart';
+import 'package:openreef/context/context_audit.dart';
+import 'package:openreef/context/context_planner.dart';
+import 'package:openreef/context/context_reducer.dart';
+import 'package:openreef/context/context_renderer.dart';
+import 'package:openreef/context/context_retriever.dart';
 import 'package:openreef/memory/memory_index.dart';
+import 'package:openreef/memory/semantic_text_embedder.dart';
+import 'package:openreef/models/embedding_model_manager.dart';
+import 'package:openreef/skills/skill.dart';
 
 class IntentSignal {
   const IntentSignal({
@@ -46,16 +58,62 @@ class SkillDefinition {
     required this.displayName,
     required this.content,
     required this.toolsRequired,
+    this.description = '',
     this.triggerPatterns = const <String>[],
     this.runtimeEligible = true,
+    this.priority = 0,
+    this.maxTokens = 150,
+    this.allowedModes = const <ExecutionMode>{},
+    this.incompatibleSkillIds = const <String>[],
+    this.activationTerms = const <String>[],
+    this.sourceType = SkillSourceType.user,
   });
 
   final String id;
   final String displayName;
   final String content;
   final List<String> toolsRequired;
+  final String description;
   final List<String> triggerPatterns;
   final bool runtimeEligible;
+  final int priority;
+  final int maxTokens;
+  final Set<ExecutionMode> allowedModes;
+  final List<String> incompatibleSkillIds;
+  final List<String> activationTerms;
+  final SkillSourceType sourceType;
+
+  SkillDefinition copyWith({
+    String? id,
+    String? displayName,
+    String? content,
+    List<String>? toolsRequired,
+    String? description,
+    List<String>? triggerPatterns,
+    bool? runtimeEligible,
+    int? priority,
+    int? maxTokens,
+    Set<ExecutionMode>? allowedModes,
+    List<String>? incompatibleSkillIds,
+    List<String>? activationTerms,
+    SkillSourceType? sourceType,
+  }) {
+    return SkillDefinition(
+      id: id ?? this.id,
+      displayName: displayName ?? this.displayName,
+      content: content ?? this.content,
+      toolsRequired: toolsRequired ?? this.toolsRequired,
+      description: description ?? this.description,
+      triggerPatterns: triggerPatterns ?? this.triggerPatterns,
+      runtimeEligible: runtimeEligible ?? this.runtimeEligible,
+      priority: priority ?? this.priority,
+      maxTokens: maxTokens ?? this.maxTokens,
+      allowedModes: allowedModes ?? this.allowedModes,
+      incompatibleSkillIds: incompatibleSkillIds ?? this.incompatibleSkillIds,
+      activationTerms: activationTerms ?? this.activationTerms,
+      sourceType: sourceType ?? this.sourceType,
+    );
+  }
 }
 
 abstract class SkillCatalog {
@@ -83,8 +141,51 @@ class InMemorySkillCatalog implements SkillCatalog {
   }) {}
 }
 
+class ContextAssemblyRequest {
+  const ContextAssemblyRequest({
+    required this.sessionKey,
+    required this.userMessage,
+    required this.conversationHistory,
+    required this.modelContextWindow,
+    required this.executionMode,
+    this.executionSource = ExecutionSource.user,
+    this.executionPolicy,
+    this.compactRequested = false,
+    this.recentFiles = const <String>[],
+    this.workflowContext = const WorkflowContext(),
+    this.metadata = const <String, Object?>{},
+  });
+
+  final String sessionKey;
+  final String userMessage;
+  final List<AgentMessage> conversationHistory;
+  final int modelContextWindow;
+  final ExecutionMode executionMode;
+  final ExecutionSource executionSource;
+  final ExecutionPolicy? executionPolicy;
+  final bool compactRequested;
+  final List<String> recentFiles;
+  final WorkflowContext workflowContext;
+  final Map<String, Object?> metadata;
+}
+
 abstract class IntentEmbedder {
   Future<List<double>> embed(String text);
+}
+
+class _IntentSemanticTextEmbedder implements SemanticTextEmbedder {
+  const _IntentSemanticTextEmbedder(this._embedder);
+
+  final IntentEmbedder _embedder;
+
+  @override
+  String get modelId => 'legacy_intent_embedder_compatibility';
+
+  @override
+  Future<List<double>> embedDocument(String text) => _embedder.embed(text);
+
+  @override
+  Future<List<double>> embedQuery(String text) => _embedder.embed(text);
 }
 
 abstract class MemoryContextProvider {
@@ -134,6 +235,7 @@ class AssembleResult {
     required this.selectedTools,
     required this.activeSkills,
     required this.tokenBudget,
+    this.compiledPackage,
     this.compactRequested = false,
     this.recentFiles = const <String>[],
   });
@@ -143,6 +245,7 @@ class AssembleResult {
   final List<ToolDefinition> selectedTools;
   final List<SkillDefinition> activeSkills;
   final TokenBudget tokenBudget;
+  final CompiledContextPackage? compiledPackage;
   final bool compactRequested;
   final List<String> recentFiles;
 
@@ -152,6 +255,8 @@ class AssembleResult {
     List<ToolDefinition>? selectedTools,
     List<SkillDefinition>? activeSkills,
     TokenBudget? tokenBudget,
+    CompiledContextPackage? compiledPackage,
+    bool clearCompiledPackage = false,
     bool? compactRequested,
     List<String>? recentFiles,
   }) {
@@ -161,6 +266,9 @@ class AssembleResult {
       selectedTools: selectedTools ?? this.selectedTools,
       activeSkills: activeSkills ?? this.activeSkills,
       tokenBudget: tokenBudget ?? this.tokenBudget,
+      compiledPackage: clearCompiledPackage
+          ? null
+          : compiledPackage ?? this.compiledPackage,
       compactRequested: compactRequested ?? this.compactRequested,
       recentFiles: recentFiles ?? this.recentFiles,
     );
@@ -193,7 +301,8 @@ class AssembleResult {
     return copyWith(messages: nextMessages);
   }
 
-  String toPrompt() => messages.map((message) => message.toPromptSegment()).join('\n');
+  String toPrompt() =>
+      messages.map((message) => message.toPromptSegment()).join('\n');
 
   static int _nextTurnNumber(List<AgentMessage> messages) {
     final maxTurn = messages.fold<int>(
@@ -214,29 +323,38 @@ class ContextAssembler {
         const EmptyMemoryContextProvider(),
     StandingOrderProvider standingOrderProvider =
         const EmptyStandingOrderProvider(),
-  })  : _memoryIndex = memoryIndex,
-        _embedder = embedder,
-        _toolCatalog = toolCatalog,
-        _skillCatalog = skillCatalog,
-        _memoryContextProvider = memoryContextProvider,
-        _standingOrderProvider = standingOrderProvider;
+    CapabilityEmbeddingIndex? capabilityIndex,
+    CapabilitySelector? capabilitySelector,
+    EmbeddingModelReadinessProvider? embeddingReadinessProvider,
+  }) : _memoryIndex = memoryIndex,
+       _embedder = embedder,
+       _toolCatalog = toolCatalog,
+       _skillCatalog = skillCatalog,
+       _memoryContextProvider = memoryContextProvider,
+       _standingOrderProvider = standingOrderProvider,
+       _capabilityIndex =
+           capabilityIndex ??
+           CapabilityEmbeddingIndex(
+             embedder: _IntentSemanticTextEmbedder(embedder),
+           ),
+       _capabilitySelector = capabilitySelector,
+       _embeddingReadinessProvider = embeddingReadinessProvider;
 
   static const int outputReserve = 1024;
   static const int _toolLimit = 8;
   static const int _skillLimit = 2;
-  static const int _skillTokenLimit = 150;
 
   static const Map<String, List<double>> _intentCentroids =
       <String, List<double>>{
-    'calendar': <double>[1, 0, 0, 0, 0, 0, 0],
-    'email': <double>[0, 1, 0, 0, 0, 0, 0],
-    'health': <double>[0, 0, 1, 0, 0, 0, 0],
-    'research': <double>[0, 0, 0, 1, 0, 0, 0],
-    'system': <double>[0, 0, 0, 0, 1, 0, 0],
-    'memory': <double>[0, 0, 0, 0, 0, 1, 0],
-    'code': <double>[0, 0, 0, 0, 0, 0, 1],
-    'general': <double>[0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
-  };
+        'calendar': <double>[1, 0, 0, 0, 0, 0, 0],
+        'email': <double>[0, 1, 0, 0, 0, 0, 0],
+        'health': <double>[0, 0, 1, 0, 0, 0, 0],
+        'research': <double>[0, 0, 0, 1, 0, 0, 0],
+        'system': <double>[0, 0, 0, 0, 1, 0, 0],
+        'memory': <double>[0, 0, 0, 0, 0, 1, 0],
+        'code': <double>[0, 0, 0, 0, 0, 0, 1],
+        'general': <double>[0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+      };
 
   final MemoryIndex _memoryIndex;
   final IntentEmbedder _embedder;
@@ -244,6 +362,9 @@ class ContextAssembler {
   final SkillCatalog _skillCatalog;
   final MemoryContextProvider _memoryContextProvider;
   final StandingOrderProvider _standingOrderProvider;
+  final CapabilityEmbeddingIndex _capabilityIndex;
+  final CapabilitySelector? _capabilitySelector;
+  final EmbeddingModelReadinessProvider? _embeddingReadinessProvider;
 
   Future<AssembleResult> assemble({
     required String sessionKey,
@@ -253,83 +374,146 @@ class ContextAssembler {
     bool compactRequested = false,
     List<String> recentFiles = const <String>[],
   }) async {
-    final intentSignal = await detectIntent(userMessage);
-    final selectedTools = await selectTools(
+    final legacyClassification = TurnClassifier().classify(
       userMessage: userMessage,
-      intentSignal: intentSignal,
+      conversationHistory: conversationHistory,
+      compactRequested: compactRequested,
     );
-    final activeSkills = gateSkills(userMessage);
-    final memoryIndexBlock = await _memoryIndex.toContextBlock();
-
-    final systemMessages = <AgentMessage>[
-      const AgentMessage(
-        role: AgentMessageRole.system,
-        content: 'OpenReef agent core',
-        turnNumber: 0,
-      ),
-      AgentMessage(
-        role: AgentMessageRole.system,
-        content: memoryIndexBlock,
-        turnNumber: 0,
-      ),
-      AgentMessage(
-        role: AgentMessageRole.system,
-        content: _serializeTools(selectedTools),
-        turnNumber: 0,
-      ),
-      if (activeSkills.isNotEmpty)
-        AgentMessage(
-          role: AgentMessageRole.system,
-          content: _serializeSkills(activeSkills),
-          turnNumber: 0,
-        ),
-    ];
-
-    final systemUsed = _estimateMessagesTokens(systemMessages);
-    final remaining = math.max(0, modelContextWindow - systemUsed - outputReserve);
-    final historyBudget = (remaining * 0.6).floor();
-    final memoryBudget = (remaining * 0.3).floor();
-    final standingOrderBudget = remaining - historyBudget - memoryBudget;
-
-    final boundedHistory = _sliceNewestFirst(
-      conversationHistory,
-      maxTokens: historyBudget,
-    );
-    final memoryContext = _sliceNewestFirst(
-      await _memoryContextProvider.retrieveRelevantMemories(
-        userMessage: userMessage,
-        intentSignal: intentSignal,
-        maxTokens: memoryBudget,
-      ),
-      maxTokens: memoryBudget,
-    );
-    final standingOrders = _sliceNewestFirst(
-      await _standingOrderProvider.loadStandingOrders(
+    return assembleRequest(
+      ContextAssemblyRequest(
         sessionKey: sessionKey,
-        maxTokens: standingOrderBudget,
+        userMessage: userMessage,
+        conversationHistory: conversationHistory,
+        modelContextWindow: modelContextWindow,
+        executionMode: ExecutionModeResolver().resolve(
+          classification: legacyClassification,
+          conversationHistory: conversationHistory,
+          compactRequested: compactRequested,
+        ),
+        compactRequested: compactRequested,
+        recentFiles: recentFiles,
       ),
-      maxTokens: standingOrderBudget,
+    );
+  }
+
+  Future<AssembleResult> assembleRequest(ContextAssemblyRequest request) async {
+    debugPrint(
+      'OpenReef.ContextAssembler: assembleRequest.start session=${request.sessionKey} mode=${request.executionMode.name}',
+    );
+    final readiness = await _embeddingReadinessProvider?.checkReadiness();
+    if (readiness != null && !readiness.isReady) {
+      debugPrint(
+        'OpenReef.ContextAssembler: embeddingReadiness.blocked status=${readiness.status.name} model=${readiness.model?.id ?? 'none'}',
+      );
+      throw EmbeddingModelNotReadyException(readiness);
+    }
+    // ignore: deprecated_member_use_from_same_package
+    final intentSignal = await detectIntent(request.userMessage);
+    final planner = ContextPlanner(
+      toolLimit: _toolLimit,
+      skillLimit: _skillLimit,
+      outputReserve: outputReserve,
+      capabilityIndex: _capabilityIndex,
+      selector: _capabilitySelector,
+    );
+    final plan = await planner.plan(
+      userMessage: request.userMessage,
+      conversationHistory: request.conversationHistory,
+      modelContextWindow: request.modelContextWindow,
+      toolCatalog: _toolCatalog,
+      skillCatalog: _skillCatalog,
+      compactRequested: request.compactRequested,
+      executionMode: request.executionMode,
+      executionPolicy: request.executionPolicy,
+    );
+    debugPrint(
+      'OpenReef.ContextAssembler: plan.end retrieved=${plan.retrievedCandidates.length} tools=${plan.toolExposure.exposedTools.length} skills=${plan.skillPlan.activeSkills.length}',
+    );
+    final retrieved =
+        await ContextRetriever(
+          memoryIndex: _memoryIndex,
+          memoryContextProvider: _memoryContextProvider,
+          standingOrderProvider: _standingOrderProvider,
+        ).retrieve(
+          sessionKey: request.sessionKey,
+          userMessage: request.userMessage,
+          plan: plan,
+          intentSignal: intentSignal,
+        );
+    debugPrint('OpenReef.ContextAssembler: retrieve.end');
+    final reduced = const ContextReducer().reduce(
+      plan: plan,
+      sources: retrieved,
+      conversationHistory: request.conversationHistory,
+    );
+    debugPrint('OpenReef.ContextAssembler: reduce.end');
+    final renderer = const ContextRenderer();
+    final sections = renderer.renderSections(
+      plan: plan,
+      sources: reduced,
+      userMessage: request.userMessage,
+    );
+    debugPrint(
+      'OpenReef.ContextAssembler: renderSections.end sections=${sections.length}',
+    );
+    final rendered = renderer.renderWithinBudget(
+      sections: sections,
+      tokenAllocation: plan.tokenAllocation,
+    );
+    debugPrint(
+      'OpenReef.ContextAssembler: renderBudget.end tokens=${rendered.prompt.estimatedTokens} degraded=${rendered.degraded}',
+    );
+    final audit = const ContextAudit().build(
+      plan: plan,
+      sections: rendered.sections,
+      reductions: <ContextReduction>[
+        ...reduced.reductions,
+        ...rendered.reductions,
+      ],
+      droppedSectionIds: rendered.droppedSectionIds,
+      droppedItems: <ContextDroppedItem>[
+        ...reduced.droppedItems,
+        ...rendered.droppedItems,
+      ],
+      degraded: rendered.degraded,
+      degradationReason: rendered.degradationReason,
+    );
+    final compactRecommended =
+        reduced.compactRecommended || plan.tokenAllocation.compactRecommended;
+    final package = CompiledContextPackage(
+      prompt: rendered.prompt,
+      plan: plan,
+      toolExposure: plan.toolExposure,
+      memorySelection: MemorySelection(
+        memoryIndexBlock: reduced.memoryIndexBlock,
+        messages: reduced.memoryMessages,
+      ),
+      historySelection: reduced.historySelection,
+      workflowContext: reduced.workflowContext,
+      tokenAllocation: plan.tokenAllocation,
+      safetyEnvelope: plan.safetyEnvelope,
+      auditTrace: audit,
+      compactRequested:
+          request.compactRequested || plan.tokenAllocation.compactRequired,
+      compactRecommended: compactRecommended,
+      executionMode: plan.executionMode,
+      degraded: rendered.degraded,
+      degradationReason: rendered.degradationReason,
     );
 
-    final messages = <AgentMessage>[
-      ...systemMessages,
-      ...standingOrders,
-      ...memoryContext,
-      ...boundedHistory,
-      AgentMessage(
-        role: AgentMessageRole.user,
-        content: userMessage,
-        turnNumber: _inferNextTurnNumber(conversationHistory),
-      ),
-    ];
+    final messages = rendered.prompt.messages;
+    final selectedTools = plan.toolExposure.primaryTools;
+    final activeSkills = plan.skillPlan.activeSkills;
 
     final assembled = AssembleResult(
       messages: messages,
       intentSignal: intentSignal,
       selectedTools: selectedTools,
       activeSkills: activeSkills,
-      recentFiles: recentFiles,
-      compactRequested: compactRequested,
+      recentFiles: request.recentFiles,
+      compiledPackage: package,
+      compactRequested:
+          request.compactRequested || plan.tokenAllocation.compactRequired,
       tokenBudget: const TokenBudget(
         totalBudget: 0,
         estimatedTokens: 0,
@@ -343,28 +527,35 @@ class ContextAssembler {
       ),
     );
 
-    return assembled.copyWith(
+    final result = assembled.copyWith(
       tokenBudget: estimateTokens(
         assembled,
-        totalBudget: modelContextWindow,
-        historyBudget: historyBudget,
-        memoryBudget: memoryBudget,
-        standingOrderBudget: standingOrderBudget,
+        totalBudget: request.modelContextWindow,
+        historyBudget: plan.tokenAllocation.sectionBudgets['history'] ?? 0,
+        memoryBudget: plan.tokenAllocation.sectionBudgets['memory'] ?? 0,
+        standingOrderBudget:
+            plan.tokenAllocation.sectionBudgets['standing_orders'] ?? 0,
       ),
     );
+    debugPrint('OpenReef.ContextAssembler: assembleRequest.end');
+    return result;
   }
 
+  @Deprecated(
+    'Legacy memory compatibility only. Context routing uses ContextPlanner.',
+  )
   Future<IntentSignal> detectIntent(String userMessage) async {
     final embedding = await _embedder.embed(userMessage);
-    final scored = _intentCentroids.entries
-        .map(
-          (entry) => MapEntry<String, double>(
-            entry.key,
-            _cosineSimilarity(embedding, entry.value),
-          ),
-        )
-        .toList()
-      ..sort((left, right) => right.value.compareTo(left.value));
+    final scored =
+        _intentCentroids.entries
+            .map(
+              (entry) => MapEntry<String, double>(
+                entry.key,
+                _cosineSimilarity(embedding, entry.value),
+              ),
+            )
+            .toList()
+          ..sort((left, right) => right.value.compareTo(left.value));
 
     final primary = scored.first;
     final secondary = scored.length > 1 ? scored[1] : primary;
@@ -379,105 +570,43 @@ class ContextAssembler {
     required String userMessage,
     required IntentSignal intentSignal,
   }) async {
-    final embedding = await _embedder.embed(userMessage);
-    final enabledTools = _toolCatalog
-        .listTools()
-        .where((tool) => tool.enabled)
-        .toList(growable: false);
-
-    final scored = enabledTools
-        .map(
-          (tool) => MapEntry<ToolDefinition, double>(
-            tool,
-            _cosineSimilarity(embedding, tool.embedding),
-          ),
-        )
-        .toList()
-      ..sort((left, right) => right.value.compareTo(left.value));
-
-    final selected = <ToolDefinition>[];
-    final seen = <String>{};
-
-    void addToolById(String id) {
-      final tool = _toolCatalog.byId(id);
-      if (tool == null || !tool.enabled || seen.contains(tool.id)) {
-        return;
-      }
-      selected.add(tool);
-      seen.add(tool.id);
-    }
-
-    addToolById('session_status');
-    addToolById('memory_save');
-    addToolById('memory_search');
-    addToolById('notify');
-    addToolById('settings_read');
-
-    for (final entry in scored) {
-      if (selected.length >= _toolLimit) {
-        break;
-      }
-      if (seen.add(entry.key.id)) {
-        selected.add(entry.key);
-      }
-    }
-
-    if (intentSignal.primary == 'calendar') {
-      addToolById('trigger_create');
-      addToolById('trigger_list');
-      addToolById('alarm_set');
-      addToolById('cron_add');
-    }
-
-    if (intentSignal.primary == 'code') {
-      addToolById('file_read');
-      addToolById('file_write');
-    }
-
-    if (selected.any((tool) => tool.requiresConfirmation)) {
-      addToolById('user_confirm');
-    }
-
-    return selected.take(_toolLimit).toList(growable: false);
+    final plan =
+        await ContextPlanner(
+          toolLimit: _toolLimit,
+          skillLimit: _skillLimit,
+          outputReserve: outputReserve,
+          capabilityIndex: _capabilityIndex,
+          selector: _capabilitySelector,
+        ).plan(
+          userMessage: userMessage,
+          conversationHistory: const <AgentMessage>[],
+          modelContextWindow: 8192,
+          toolCatalog: _toolCatalog,
+          skillCatalog: _skillCatalog,
+          compactRequested: false,
+          executionMode: ExecutionMode.chat,
+        );
+    return plan.toolExposure.primaryTools;
   }
 
-  List<SkillDefinition> gateSkills(String userMessage) {
-    final normalizedTokens = _normalizeTokens(userMessage);
-    final matched = <SkillDefinition>[];
-    final active = <SkillDefinition>[];
-    for (final skill in _skillCatalog.listSkills()) {
-      if (!skill.runtimeEligible) {
-        continue;
-      }
-      final hasMatch = skill.triggerPatterns.any(
-        (pattern) => _matchesPattern(
-          normalizedTokens,
-          _normalizeTokens(pattern),
-        ),
-      );
-      if (!hasMatch) {
-        continue;
-      }
-      matched.add(skill);
-      if (active.length >= _skillLimit) {
-        continue;
-      }
-      active.add(
-        SkillDefinition(
-          id: skill.id,
-          displayName: skill.displayName,
-          content: _trimToTokens(skill.content, _skillTokenLimit),
-          toolsRequired: skill.toolsRequired,
-          triggerPatterns: skill.triggerPatterns,
-          runtimeEligible: skill.runtimeEligible,
-        ),
-      );
-    }
-    _skillCatalog.recordTurnState(
-      matchedSkillIds: matched.map((skill) => skill.id).toList(growable: false),
-      activeSkillIds: active.map((skill) => skill.id).toList(growable: false),
-    );
-    return active;
+  Future<List<SkillDefinition>> gateSkills(String userMessage) async {
+    final plan =
+        await ContextPlanner(
+          toolLimit: _toolLimit,
+          skillLimit: _skillLimit,
+          outputReserve: outputReserve,
+          capabilityIndex: _capabilityIndex,
+          selector: _capabilitySelector,
+        ).plan(
+          userMessage: userMessage,
+          conversationHistory: const <AgentMessage>[],
+          modelContextWindow: 8192,
+          toolCatalog: _toolCatalog,
+          skillCatalog: _skillCatalog,
+          compactRequested: false,
+          executionMode: ExecutionMode.chat,
+        );
+    return plan.skillPlan.activeSkills;
   }
 
   TokenBudget estimateTokens(
@@ -488,7 +617,10 @@ class ContextAssembler {
     int? standingOrderBudget,
   }) {
     final estimatedTokens = _estimateMessagesTokens(context.messages);
-    final remaining = math.max(0, totalBudget - estimatedTokens - outputReserve);
+    final remaining = math.max(
+      0,
+      totalBudget - estimatedTokens - outputReserve,
+    );
     final ratio = totalBudget == 0 ? 0.0 : estimatedTokens / totalBudget;
     final currentTurn = _inferNextTurnNumber(context.messages) - 1;
     final oldToolResults = context.messages
@@ -506,52 +638,14 @@ class ContextAssembler {
       oldToolResults: oldToolResults,
       historyBudget: historyBudget ?? (remaining * 0.6).floor(),
       memoryBudget: memoryBudget ?? (remaining * 0.3).floor(),
-      standingOrderBudget: standingOrderBudget ??
+      standingOrderBudget:
+          standingOrderBudget ??
           (remaining - (remaining * 0.6).floor() - (remaining * 0.3).floor()),
       outputReserve: outputReserve,
     );
   }
 
-  List<AgentMessage> _sliceNewestFirst(
-    List<AgentMessage> source, {
-    required int maxTokens,
-  }) {
-    final selected = <AgentMessage>[];
-    var used = 0;
-    for (final message in source.reversed) {
-      final messageTokens = _estimateTextTokens(message.content);
-      if (used + messageTokens > maxTokens) {
-        continue;
-      }
-      used += messageTokens;
-      selected.add(message);
-    }
-    return selected.reversed.toList(growable: false);
-  }
-
-  String _serializeTools(List<ToolDefinition> tools) {
-    final buffer = StringBuffer('[AVAILABLE TOOLS]\n');
-    for (final tool in tools) {
-      final suffix = tool.description.trim().isEmpty ? '' : ': ${tool.description.trim()}';
-      buffer.writeln(
-        '- ${tool.id}${tool.requiresConfirmation ? ' (confirm)' : ''}$suffix',
-      );
-    }
-    buffer.write('[END TOOLS]');
-    return buffer.toString();
-  }
-
-  String _serializeSkills(List<SkillDefinition> skills) {
-    final buffer = StringBuffer('[ACTIVE SKILLS]\n');
-    for (final skill in skills) {
-      buffer.writeln('## ${skill.displayName}');
-      buffer.writeln(skill.content);
-    }
-    buffer.write('[END SKILLS]');
-    return buffer.toString();
-  }
-
-  static List<String> _normalizeTokens(String text) {
+  static List<String> normalizeTokens(String text) {
     return text
         .toLowerCase()
         .split(RegExp(r'[^a-z0-9]+'))
@@ -559,7 +653,7 @@ class ContextAssembler {
         .toList(growable: false);
   }
 
-  static bool _matchesPattern(
+  static bool matchesPattern(
     List<String> userTokens,
     List<String> patternTokens,
   ) {
@@ -570,7 +664,11 @@ class ContextAssembler {
       return false;
     }
 
-    for (var start = 0; start <= userTokens.length - patternTokens.length; start++) {
+    for (
+      var start = 0;
+      start <= userTokens.length - patternTokens.length;
+      start++
+    ) {
       var matched = true;
       for (var offset = 0; offset < patternTokens.length; offset++) {
         if (userTokens[start + offset] != patternTokens[offset]) {
@@ -585,14 +683,14 @@ class ContextAssembler {
     return false;
   }
 
-  static int _estimateMessagesTokens(List<AgentMessage> messages) {
+  static int estimateMessagesTokens(List<AgentMessage> messages) {
     return messages.fold<int>(
       0,
       (sum, message) => sum + _estimateTextTokens(message.content),
     );
   }
 
-  static int _estimateTextTokens(String text) {
+  static int estimateTextTokens(String text) {
     final normalized = text.trim();
     if (normalized.isEmpty) {
       return 0;
@@ -600,7 +698,7 @@ class ContextAssembler {
     return normalized.split(RegExp(r'\s+')).length;
   }
 
-  static String _trimToTokens(String content, int maxTokens) {
+  static String trimToTokens(String content, int maxTokens) {
     final normalized = content.trim();
     if (normalized.isEmpty) {
       return '';
@@ -619,6 +717,11 @@ class ContextAssembler {
     );
     return maxTurn + 1;
   }
+
+  static int _estimateMessagesTokens(List<AgentMessage> messages) =>
+      estimateMessagesTokens(messages);
+
+  static int _estimateTextTokens(String text) => estimateTextTokens(text);
 
   static double _cosineSimilarity(List<double> left, List<double> right) {
     final length = math.min(left.length, right.length).toInt();

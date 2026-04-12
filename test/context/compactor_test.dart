@@ -2,13 +2,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:openreef/agent/agent_models.dart';
 import 'package:openreef/agent/tool_router.dart';
 import 'package:openreef/context/compactor.dart';
+import 'package:openreef/context/compiled_context_package.dart';
 import 'package:openreef/context/context_assembler.dart';
 
 void main() {
   test('micro compaction prunes old tool results and tool errors only', () {
-    final compactor = ReefCompactor(
-      summarizer: _StaticSummarizer('summary'),
-    );
+    final compactor = ReefCompactor(summarizer: _StaticSummarizer('summary'));
     final context = _contextWithMessages(<AgentMessage>[
       const AgentMessage(
         role: AgentMessageRole.tool,
@@ -39,54 +38,77 @@ void main() {
     expect(compacted.messages[2].content, 'assistant text');
   });
 
-  test('auto compaction falls back to deterministic summary on summarizer failure', () async {
-    final compactor = ReefCompactor(
-      summarizer: _ThrowingSummarizer(),
-    );
-    final compacted = await compactor.autoCompact(
-      _contextWithMessages(_buildTurns(10)),
-      reserveTokens: 2000,
-      maxSummaryTokens: 8,
-    );
+  test(
+    'auto compaction falls back to deterministic summary on summarizer failure',
+    () async {
+      final compactor = ReefCompactor(summarizer: _ThrowingSummarizer());
+      final compacted = await compactor.autoCompact(
+        _contextWithMessages(_buildTurns(10)),
+        reserveTokens: 2000,
+        maxSummaryTokens: 8,
+      );
 
-    final summaryMessage = compacted.messages.first;
-    expect(summaryMessage.role, AgentMessageRole.summary);
-    expect(summaryMessage.metadata['compaction_level'], 'auto');
-    expect(summaryMessage.content, contains('[COMPACT SUMMARY]'));
-    expect(summaryMessage.content, contains('[assistant]'));
-  });
+      final summaryMessage = compacted.messages.first;
+      expect(summaryMessage.role, AgentMessageRole.summary);
+      expect(summaryMessage.metadata['compaction_level'], 'auto');
+      expect(summaryMessage.content, contains('[COMPACT SUMMARY]'));
+      expect(summaryMessage.content, contains('[assistant]'));
+    },
+  );
 
-  test('full compaction falls back to deterministic summary and preserves reinjected context', () async {
-    final compactor = ReefCompactor(
-      summarizer: _EmptySummarizer(),
-    );
-    final context = _contextWithMessages(
-      _buildTurns(6),
-      recentFiles: const <String>['lib/agent/agent_loop.dart'],
-      activeSkills: const <SkillDefinition>[
-        SkillDefinition(
-          id: 'skill-1',
-          displayName: 'skill-1',
-          content: 'skill content',
-          toolsRequired: <String>[],
+  test(
+    'full compaction falls back to deterministic summary and preserves reinjected context',
+    () async {
+      final compactor = ReefCompactor(summarizer: _EmptySummarizer());
+      final context = _contextWithMessages(
+        _buildTurns(6),
+        recentFiles: const <String>['lib/agent/agent_loop.dart'],
+        activeSkills: const <SkillDefinition>[
+          SkillDefinition(
+            id: 'skill-1',
+            displayName: 'skill-1',
+            content: 'skill content',
+            toolsRequired: <String>[],
+          ),
+        ],
+        compactRequested: true,
+      );
+
+      final compacted = await compactor.fullCompact(
+        context,
+        reInjectRecentFiles: true,
+        reInjectActiveSkills: true,
+      );
+
+      expect(compacted.compactRequested, isFalse);
+      expect(compacted.messages.first.content, contains('[ACTIVE SKILLS]'));
+      expect(compacted.messages[1].content, contains('[RECENT FILES]'));
+      expect(compacted.messages[2].role, AgentMessageRole.summary);
+      expect(compacted.messages[2].metadata['compaction_level'], 'full');
+      expect(compacted.messages[2].content, contains('[assistant]'));
+    },
+  );
+
+  test(
+    'compaction clears stale compiled package after rebuilding messages',
+    () async {
+      final compactor = ReefCompactor(summarizer: _StaticSummarizer('summary'));
+      final context = _contextWithMessages(
+        _buildTurns(8),
+        compiledPackage: _compiledPackageFor(_buildTurns(8)),
+      );
+
+      final compacted = await compactor.fullCompact(context);
+
+      expect(compacted.compiledPackage, isNull);
+      expect(
+        compacted.messages.any(
+          (message) => message.role == AgentMessageRole.summary,
         ),
-      ],
-      compactRequested: true,
-    );
-
-    final compacted = await compactor.fullCompact(
-      context,
-      reInjectRecentFiles: true,
-      reInjectActiveSkills: true,
-    );
-
-    expect(compacted.compactRequested, isFalse);
-    expect(compacted.messages.first.content, contains('[ACTIVE SKILLS]'));
-    expect(compacted.messages[1].content, contains('[RECENT FILES]'));
-    expect(compacted.messages[2].role, AgentMessageRole.summary);
-    expect(compacted.messages[2].metadata['compaction_level'], 'full');
-    expect(compacted.messages[2].content, contains('[assistant]'));
-  });
+        isTrue,
+      );
+    },
+  );
 }
 
 AssembleResult _contextWithMessages(
@@ -94,6 +116,7 @@ AssembleResult _contextWithMessages(
   List<String> recentFiles = const <String>[],
   List<SkillDefinition> activeSkills = const <SkillDefinition>[],
   bool compactRequested = false,
+  CompiledContextPackage? compiledPackage,
 }) {
   return AssembleResult(
     messages: messages,
@@ -117,6 +140,64 @@ AssembleResult _contextWithMessages(
     ),
     compactRequested: compactRequested,
     recentFiles: recentFiles,
+    compiledPackage: compiledPackage,
+  );
+}
+
+CompiledContextPackage _compiledPackageFor(List<AgentMessage> messages) {
+  const classification = TurnClassification(
+    domain: 'general',
+    taskType: 'chat',
+    likelyNeedsTools: false,
+    likelyNeedsMemory: false,
+    likelyNeedsWorkflowState: false,
+    likelyNeedsUserConfirmation: false,
+    likelyMultiStep: false,
+    confidence: 1,
+  );
+  const tokenAllocation = TokenAllocation(
+    totalBudget: 8192,
+    outputReserve: 32,
+    sectionBudgets: <String, int>{'history': 1000},
+  );
+  const plan = ContextPlan(
+    executionMode: ExecutionMode.chat,
+    turnClassification: classification,
+    toolExposure: ToolExposure(),
+    memoryRetrievalPlan: MemoryRetrievalPlan(
+      fetchSemantic: false,
+      fetchEpisodic: false,
+      fetchProcedural: false,
+      fetchWorking: true,
+      semanticBudget: 0,
+      episodicBudget: 0,
+      proceduralBudget: 0,
+      workingBudget: 0,
+    ),
+    historyBudget: 1000,
+    skillPlan: SkillPlan(),
+    workflowContext: WorkflowContext(),
+    tokenAllocation: tokenAllocation,
+    safetyEnvelope: SafetyEnvelope(),
+  );
+  final prompt = CompiledPrompt(
+    sections: const <CompiledContextSection>[],
+    messages: messages,
+    estimatedTokens: messages.length,
+  );
+  return CompiledContextPackage(
+    prompt: prompt,
+    plan: plan,
+    toolExposure: const ToolExposure(),
+    memorySelection: const MemorySelection(),
+    historySelection: const HistorySelection(),
+    workflowContext: const WorkflowContext(),
+    tokenAllocation: tokenAllocation,
+    safetyEnvelope: const SafetyEnvelope(),
+    auditTrace: const ContextAuditTrace(traceId: 'test'),
+    compactRequested: false,
+    compactRecommended: false,
+    executionMode: ExecutionMode.chat,
   );
 }
 

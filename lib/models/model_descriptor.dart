@@ -1,5 +1,7 @@
 import 'package:flutter_gemma/flutter_gemma.dart';
 
+enum ReefModelTask { generation, embedding }
+
 class ModelDescriptor {
   const ModelDescriptor({
     required this.id,
@@ -13,6 +15,13 @@ class ModelDescriptor {
     required this.minRamGb,
     required this.bestFor,
     this.hardwareNotes,
+    this.task = ReefModelTask.generation,
+    this.multilingual = false,
+    this.requiresHfToken = false,
+    this.recommended = false,
+    this.defaultEnabled = true,
+    this.tokenizerUrl,
+    this.iosTokenizerUrl,
   });
 
   final String id;
@@ -26,6 +35,13 @@ class ModelDescriptor {
   final double minRamGb;
   final String bestFor;
   final String? hardwareNotes;
+  final ReefModelTask task;
+  final bool multilingual;
+  final bool requiresHfToken;
+  final bool recommended;
+  final bool defaultEnabled;
+  final String? tokenizerUrl;
+  final String? iosTokenizerUrl;
 }
 
 class InstalledModelRecord {

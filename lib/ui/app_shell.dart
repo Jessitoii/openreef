@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:openreef/memory/chat_session_record.dart';
 import 'package:openreef/memory/chat_session_repository.dart';
+import 'package:openreef/models/embedding_model_manager.dart';
 import 'package:openreef/models/model_download_controller.dart';
 import 'package:openreef/settings/settings_controller.dart';
 import 'package:openreef/skills/skill_registry_controller.dart';
@@ -23,6 +24,7 @@ class AppShell extends StatefulWidget {
     required this.skillRegistryController,
     required this.mcpConnectionsController,
     required this.onModelReady,
+    this.embeddingModelManager,
     this.chatSessionRepository,
     super.key,
   });
@@ -34,6 +36,7 @@ class AppShell extends StatefulWidget {
   final SkillRegistryController skillRegistryController;
   final McpConnectionsController mcpConnectionsController;
   final Future<void> Function() onModelReady;
+  final EmbeddingModelManager? embeddingModelManager;
   final ChatSessionRepository? chatSessionRepository;
 
   @override
@@ -211,6 +214,7 @@ class _AppShellState extends State<AppShell> {
         return SettingsScreen(
           settingsController: widget.settingsController,
           wakeWordController: widget.wakeWordController,
+          embeddingModelManager: widget.embeddingModelManager,
         );
       case AppShellDestination.skills:
         return SkillsScreen(controller: widget.skillRegistryController);

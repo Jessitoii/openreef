@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:openreef/memory/chat_session_record.dart';
 import 'package:openreef/memory/chat_session_repository.dart';
@@ -6,16 +8,14 @@ import 'package:openreef/ui/chat_session_port.dart';
 enum AppShellDestination { chat, settings, skills, mcp }
 
 class ChatWorkspaceSession {
-  ChatWorkspaceSession({
-    required this.record,
-    required this.chatSession,
-  });
+  ChatWorkspaceSession({required this.record, required this.chatSession});
 
   ChatSessionRecord record;
   final ChatSessionPort chatSession;
 }
 
-class ChatWorkspaceController extends ChangeNotifier {
+class ChatWorkspaceController extends ChangeNotifier
+    implements ChatTranscriptPersistencePort {
   ChatWorkspaceController({
     required ChatSessionPort prototypeSession,
     required ChatSessionRepository repository,
@@ -31,6 +31,8 @@ class ChatWorkspaceController extends ChangeNotifier {
   ChatWorkspaceSession? _activeSession;
   AppShellDestination _destination = AppShellDestination.chat;
   bool _initialized = false;
+  bool _isDisposed = false;
+  Future<void> _activePersistQueue = Future<void>.value();
 
   List<ChatSessionRecord> get recentSessions => _recentSessions;
   ChatWorkspaceSession? get activeSession => _activeSession;
@@ -92,6 +94,7 @@ class ChatWorkspaceController extends ChangeNotifier {
     }
 
     await session.chatSession.sendMessage(message);
+    await _activePersistQueue;
     await _persistSession(session);
     _refreshRecentSessions();
     notifyListeners();
@@ -124,25 +127,27 @@ class ChatWorkspaceController extends ChangeNotifier {
 
   ChatSessionPort _createSession({
     required String sessionId,
-    List<ChatTranscriptMessage> initialMessages = const <ChatTranscriptMessage>[],
+    List<ChatTranscriptMessage> initialMessages =
+        const <ChatTranscriptMessage>[],
   }) {
     if (_prototypeSession case final ChatSessionFactory factory) {
-      return factory.createSession(
+      final session = factory.createSession(
         sessionId: sessionId,
         initialMessages: initialMessages,
       );
+      if (session case final PersistentChatSession persistentSession) {
+        persistentSession.attachTranscriptPersistencePort(this);
+      }
+      return session;
+    }
+    if (_prototypeSession case final PersistentChatSession persistentSession) {
+      persistentSession.attachTranscriptPersistencePort(this);
     }
     return _prototypeSession;
   }
 
   Future<void> _persistSession(ChatWorkspaceSession session) async {
-    final messages = session.chatSession.messages
-        .map(
-          (message) => message.isStreaming
-              ? message.copyWith(isStreaming: false)
-              : message,
-        )
-        .toList();
+    final messages = session.chatSession.messages.toList();
     final now = DateTime.now();
     session.record = ChatSessionRecord(
       id: session.record.id,
@@ -150,6 +155,38 @@ class ChatWorkspaceController extends ChangeNotifier {
       lastModified: now,
     );
     await _repository.saveSession(session: session.record, messages: messages);
+  }
+
+  @override
+  Future<ChatTranscriptPersistenceResult> persistTranscriptBeforeTerminal(
+    ChatTranscriptPersistenceRequest request,
+  ) async {
+    final session = _sessionsById[request.sessionKey];
+    if (session == null) {
+      return const ChatTranscriptPersistenceResult.failure(
+        errorCode: 'missing_session',
+        errorMessage: 'No active workspace session matched the transcript.',
+      );
+    }
+    try {
+      final now = DateTime.now();
+      session.record = ChatSessionRecord(
+        id: session.record.id,
+        title: _deriveSessionTitle(request.messages),
+        lastModified: now,
+      );
+      await _repository.saveSession(
+        session: session.record,
+        messages: request.messages,
+      );
+      _refreshRecentSessions();
+      return ChatTranscriptPersistenceResult.success(persistedAt: now);
+    } catch (error) {
+      return ChatTranscriptPersistenceResult.failure(
+        errorCode: 'transcript_persist_failed',
+        errorMessage: error.toString(),
+      );
+    }
   }
 
   String _deriveSessionTitle(List<ChatTranscriptMessage> messages) {
@@ -170,21 +207,34 @@ class ChatWorkspaceController extends ChangeNotifier {
   }
 
   void _refreshRecentSessions() {
-    final records = _sessionsById.values.map((session) => session.record).toList()
-      ..sort((left, right) => right.lastModified.compareTo(left.lastModified));
+    final records =
+        _sessionsById.values.map((session) => session.record).toList()..sort(
+          (left, right) => right.lastModified.compareTo(left.lastModified),
+        );
     _recentSessions = List<ChatSessionRecord>.unmodifiable(records);
   }
 
   void _handleActiveSessionChanged() {
     final session = _activeSession;
-    if (session == null) {
+    if (session == null || _isDisposed) {
       return;
     }
-    notifyListeners();
+    _activePersistQueue = _activePersistQueue.then((_) async {
+      if (_isDisposed) {
+        return;
+      }
+      await _persistSession(session);
+      _refreshRecentSessions();
+      if (!_isDisposed) {
+        notifyListeners();
+      }
+    });
+    unawaited(_activePersistQueue);
   }
 
   @override
   void dispose() {
+    _isDisposed = true;
     _activeSession?.chatSession.removeListener(_handleActiveSessionChanged);
     for (final session in _sessionsById.values) {
       session.chatSession.disposeIfSupported();

@@ -1,11 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:openreef/agent/agent_loop.dart';
 import 'package:openreef/agent/agent_models.dart';
 import 'package:openreef/agent/execution_log.dart';
 import 'package:openreef/agent/execution_request.dart';
 import 'package:openreef/agent/run_state.dart';
+import 'package:openreef/agent/runtime_transcript_event.dart';
+import 'package:openreef/context/compiled_context_package.dart';
 
 enum AgentTaskExecutionStatus { completed, frozen, failed, rejected }
 
@@ -57,6 +60,12 @@ class ExecutionResult {
   String get text => loopResult.text;
 
   String? get reason => loopResult.reason;
+
+  String? get failureReason => loopResult.failureReason;
+
+  String? get exceptionType => loopResult.exceptionType;
+
+  String? get errorMessage => loopResult.errorMessage;
 
   List<String> get toolsUsed => loopResult.toolsUsed;
 
@@ -215,12 +224,16 @@ class AgentTaskExecutionResult {
     required this.text,
     required this.reason,
     required this.toolsUsed,
+    this.exceptionType,
+    this.errorMessage,
   });
 
   final AgentTaskExecutionStatus status;
   final String text;
   final String reason;
   final List<String> toolsUsed;
+  final String? exceptionType;
+  final String? errorMessage;
 
   factory AgentTaskExecutionResult.fromLoopResult(AgentLoopResult result) {
     return AgentTaskExecutionResult(
@@ -234,7 +247,16 @@ class AgentTaskExecutionResult {
       text: result.text,
       reason: result.reason ?? '',
       toolsUsed: result.toolsUsed,
+      exceptionType: result.exceptionType,
+      errorMessage: result.errorMessage,
     );
+  }
+
+  String? get failureReason {
+    if (status == AgentTaskExecutionStatus.completed) {
+      return null;
+    }
+    return reason;
   }
 }
 
@@ -297,6 +319,9 @@ class AgentLoopTaskExecutor implements AgentTaskExecutor {
 
   @override
   Future<ExecutionResult> execute(ExecutionRequest request) async {
+    _trace(
+      'execute.start request=${request.id} source=${request.source.name} mode=${request.mode.name}',
+    );
     await _runStateStore.initialize();
     final admission = await _admit(request);
     if (admission.rejectedReason != null) {
@@ -360,6 +385,7 @@ class AgentLoopTaskExecutor implements AgentTaskExecutor {
         requestId: request.id,
       );
       final continuation = _continuationFor(request, runState);
+      _trace('agentLoop.start request=${request.id}');
       final result = await _agentLoop.run(
         _buildPrompt(request),
         sessionKey: request.sessionKey,
@@ -380,6 +406,14 @@ class AgentLoopTaskExecutor implements AgentTaskExecutor {
           cancellationSignal: cancellationSignal,
         ),
         continuation: continuation,
+        transcriptSink: _visibleTranscriptSinkFor(request),
+        requestId: request.id,
+        executionMode: _contextExecutionModeFor(request),
+        executionSource: request.source,
+        executionPolicy: request.policy,
+      );
+      _trace(
+        'agentLoop.end request=${request.id} result=${result.sessionResult.name} reason=${result.reason ?? 'none'}',
       );
       if ((request.metadata?['suspendAfterRun'] as bool?) ?? false) {
         runState = await _transitionRunState(
@@ -424,14 +458,17 @@ class AgentLoopTaskExecutor implements AgentTaskExecutor {
         admissionOutcome: admissionOutcome,
         policyReason: result.reason ?? 'completed',
       );
-    } catch (error) {
+    } catch (error, stackTrace) {
+      _traceError('execute.failed request=${request.id}', error, stackTrace);
       final result = AgentLoopResult(
         sessionResult: SessionResult.failed,
-        text: '',
+        text: _failureMessage('Executor failed', error),
         reason: request.policy.failurePolicy == FailureExecutionPolicy.freezeRun
             ? 'executor_frozen'
             : 'executor_failure',
         toolsUsed: const <String>[],
+        exceptionType: error.runtimeType.toString(),
+        errorMessage: error.toString(),
       );
       return _completeExecution(
         request,
@@ -448,6 +485,21 @@ class AgentLoopTaskExecutor implements AgentTaskExecutor {
         _activeCancellations.remove(runState.runId);
       }
     }
+  }
+
+  String _failureMessage(String prefix, Object error) {
+    return '$prefix: ${error.runtimeType}: $error';
+  }
+
+  void _trace(String message) {
+    debugPrint('OpenReef.AgentTaskExecutor: $message');
+  }
+
+  void _traceError(String message, Object error, StackTrace stackTrace) {
+    debugPrint(
+      'OpenReef.AgentTaskExecutor: $message ${error.runtimeType}: $error',
+    );
+    debugPrintStack(stackTrace: stackTrace, label: message);
   }
 
   Future<ExecutionResult> _completeExecution(
@@ -1004,6 +1056,16 @@ class AgentLoopTaskExecutor implements AgentTaskExecutor {
     }
   }
 
+  RuntimeTranscriptSink? _visibleTranscriptSinkFor(ExecutionRequest request) {
+    return switch (request.visibility) {
+      ExecutionVisibility.chat || ExecutionVisibility.chatAndBackground =>
+        _chatSink is RuntimeTranscriptSink
+            ? _chatSink as RuntimeTranscriptSink
+            : null,
+      ExecutionVisibility.background => null,
+    };
+  }
+
   ExecutionStatus _mapStatus(SessionResult result) {
     return switch (result) {
       SessionResult.completed => ExecutionStatus.completed,
@@ -1050,6 +1112,25 @@ class AgentLoopTaskExecutor implements AgentTaskExecutor {
       return trimmedPrompt;
     }
     return '$sourceLabel EXECUTION\nmetadata: ${_canonicalJson(metadata)}\n\n$trimmedPrompt';
+  }
+
+  ExecutionMode _contextExecutionModeFor(ExecutionRequest request) {
+    if ((request.metadata?['compactRequested'] as bool?) ?? false) {
+      return ExecutionMode.compactionRecovery;
+    }
+    return switch (request.mode) {
+      ExecutionLifecycleMode.resumeRequest =>
+        ExecutionMode.workflowContinuation,
+      ExecutionLifecycleMode.triggeredRequest =>
+        request.source == ExecutionSource.mcpEvent
+            ? ExecutionMode.reactiveToolUse
+            : ExecutionMode.triggerExecution,
+      ExecutionLifecycleMode.persistentRequest =>
+        request.source == ExecutionSource.system
+            ? ExecutionMode.standingOrderExecution
+            : ExecutionMode.reactiveToolUse,
+      ExecutionLifecycleMode.ephemeralRequest => ExecutionMode.reactiveToolUse,
+    };
   }
 
   ExecutionLifecycleStatus _lifecycleStatusFor(AgentLoopResult result) {

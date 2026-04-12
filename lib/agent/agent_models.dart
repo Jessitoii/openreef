@@ -407,6 +407,8 @@ class AgentLoopResult {
     this.stepCount = 0,
     this.toolCallCount = 0,
     this.continuation = const LoopContinuation(),
+    this.exceptionType,
+    this.errorMessage,
   });
 
   final SessionResult sessionResult;
@@ -417,6 +419,15 @@ class AgentLoopResult {
   final int stepCount;
   final int toolCallCount;
   final LoopContinuation continuation;
+  final String? exceptionType;
+  final String? errorMessage;
+
+  String? get failureReason {
+    if (sessionResult == SessionResult.completed) {
+      return null;
+    }
+    return reason;
+  }
 }
 
 class AgentResponseParser {

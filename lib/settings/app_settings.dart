@@ -8,6 +8,7 @@ class AppSettings {
     this.voiceTtsEngine = VoiceTtsEngine.android,
     this.wakeWordEnabled = false,
     this.voiceSensitivity = 0.7,
+    this.semanticEmbeddingModelId,
   });
 
   static const Set<String> llmWritableKeys = <String>{
@@ -21,18 +22,24 @@ class AppSettings {
   final VoiceTtsEngine voiceTtsEngine;
   final bool wakeWordEnabled;
   final double voiceSensitivity;
+  final String? semanticEmbeddingModelId;
 
   AppSettings copyWith({
     ReefThemeMode? themeMode,
     VoiceTtsEngine? voiceTtsEngine,
     bool? wakeWordEnabled,
     double? voiceSensitivity,
+    String? semanticEmbeddingModelId,
+    bool clearSemanticEmbeddingModelId = false,
   }) {
     return AppSettings(
       themeMode: themeMode ?? this.themeMode,
       voiceTtsEngine: voiceTtsEngine ?? this.voiceTtsEngine,
       wakeWordEnabled: wakeWordEnabled ?? this.wakeWordEnabled,
       voiceSensitivity: voiceSensitivity ?? this.voiceSensitivity,
+      semanticEmbeddingModelId: clearSemanticEmbeddingModelId
+          ? null
+          : (semanticEmbeddingModelId ?? this.semanticEmbeddingModelId),
     );
   }
 
@@ -42,6 +49,8 @@ class AppSettings {
       'voice.ttsEngine': voiceTtsEngine.name,
       'voice.wakeWordEnabled': wakeWordEnabled,
       'voice.sensitivity': voiceSensitivity,
+      if (semanticEmbeddingModelId != null)
+        'semantic.embeddingModelId': semanticEmbeddingModelId,
     };
   }
 
@@ -55,6 +64,7 @@ class AppSettings {
       voiceSensitivity: _clampSensitivity(
         (json['voice.sensitivity'] as num?)?.toDouble() ?? 0.7,
       ),
+      semanticEmbeddingModelId: json['semantic.embeddingModelId'] as String?,
     );
   }
 
@@ -72,20 +82,22 @@ class AppSettings {
     return switch (key) {
       'theme.mode' => copyWith(themeMode: _parseThemeModeValue(value)),
       'voice.ttsEngine' => copyWith(
-          voiceTtsEngine: _parseTtsEngineValue(value),
-        ),
+        voiceTtsEngine: _parseTtsEngineValue(value),
+      ),
       'voice.wakeWordEnabled' => copyWith(
-          wakeWordEnabled: _parseBoolValue(value, key),
-        ),
+        wakeWordEnabled: _parseBoolValue(value, key),
+      ),
       'voice.sensitivity' => copyWith(
-          voiceSensitivity: _clampSensitivity(_parseDoubleValue(value, key)),
-        ),
+        voiceSensitivity: _clampSensitivity(_parseDoubleValue(value, key)),
+      ),
       _ => throw ArgumentError.value(key, 'key', 'unsupported_setting_key'),
     };
   }
 
   static ReefThemeMode _parseThemeMode(String? value) {
-    return ReefThemeMode.values.where((mode) => mode.name == value).firstOrNull ??
+    return ReefThemeMode.values
+            .where((mode) => mode.name == value)
+            .firstOrNull ??
         ReefThemeMode.dark;
   }
 
@@ -100,7 +112,9 @@ class AppSettings {
     if (value is! String) {
       throw ArgumentError.value(value, 'value', 'invalid_theme_mode');
     }
-    final mode = ReefThemeMode.values.where((item) => item.name == value).firstOrNull;
+    final mode = ReefThemeMode.values
+        .where((item) => item.name == value)
+        .firstOrNull;
     if (mode == null) {
       throw ArgumentError.value(value, 'value', 'invalid_theme_mode');
     }

@@ -82,6 +82,7 @@ class McpRuntimeCoordinator {
 
       final runtimeToolId = '${binding.sourceId}/${tool.name}';
       final embedding = await _embedText('${tool.name} ${tool.description}');
+      final hasSecret = await binding.hasRequiredSecretMaterial();
       importedTools.add(
         ToolDefinition(
           id: runtimeToolId,
@@ -97,6 +98,12 @@ class McpRuntimeCoordinator {
             'sourceId': binding.sourceId,
             'mcpToolName': tool.name,
             'manifestId': manifest.id,
+            'namespace': binding.sourceId,
+            'mcpActive': binding.isActive(),
+            'mcpTrusted': !binding.requiresTrust || binding.trusted,
+            'mcpHasSecret': !binding.requiresManualSecretEntry && hasSecret,
+            'mcpRequiresTrust': binding.requiresTrust,
+            'mcpRequiresManualSecretEntry': binding.requiresManualSecretEntry,
           },
           execute: (call) => executeTool(
             sourceId: binding.sourceId,

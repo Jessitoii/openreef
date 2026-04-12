@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:openreef/memory/chat_session_repository.dart';
+import 'package:openreef/models/embedding_model_manager.dart';
 import 'package:openreef/models/model_download_controller.dart';
 import 'package:openreef/settings/settings_controller.dart';
 import 'package:openreef/skills/skill_registry_controller.dart';
@@ -20,6 +21,7 @@ class OpenReefApp extends StatelessWidget {
     required this.mcpConnectionsController,
     required this.modelReady,
     required this.onModelReady,
+    this.embeddingModelManager,
     this.chatSessionRepository,
     super.key,
   });
@@ -32,6 +34,7 @@ class OpenReefApp extends StatelessWidget {
   final McpConnectionsController mcpConnectionsController;
   final bool modelReady;
   final Future<void> Function() onModelReady;
+  final EmbeddingModelManager? embeddingModelManager;
   final ChatSessionRepository? chatSessionRepository;
 
   @override
@@ -54,6 +57,7 @@ class OpenReefApp extends StatelessWidget {
                   skillRegistryController: skillRegistryController,
                   mcpConnectionsController: mcpConnectionsController,
                   onModelReady: onModelReady,
+                  embeddingModelManager: embeddingModelManager,
                   chatSessionRepository: chatSessionRepository,
                 )
               : ModelDownloadScreen(

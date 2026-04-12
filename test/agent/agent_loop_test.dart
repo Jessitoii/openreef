@@ -4,6 +4,7 @@ import 'package:openreef/agent/agent_model_adapter.dart';
 import 'package:openreef/agent/agent_models.dart';
 import 'package:openreef/agent/agent_notifier.dart';
 import 'package:openreef/agent/mailbox.dart';
+import 'package:openreef/agent/runtime_transcript_event.dart';
 import 'package:openreef/agent/tool_router.dart';
 import 'package:openreef/context/compactor.dart';
 import 'package:openreef/context/context_assembler.dart';
@@ -335,6 +336,58 @@ void main() {
     },
   );
 
+  test(
+    'tool-call protocol output is not emitted as assistant transcript',
+    () async {
+      final sink = _RecordingTranscriptSink();
+      final loop = _buildLoop(
+        memoryIndex: memoryIndex,
+        memoryFormer: memoryFormer,
+        modelAdapter: _QueueModelAdapter(<AgentResponse>[
+          const AgentResponse(
+            text: '',
+            rawOutput:
+                '{"tool_call":{"id":"call-1","tool_id":"battery_info","arguments":{}}}',
+            toolCall: ToolCall(id: 'call-1', toolId: 'battery_info'),
+          ),
+          const AgentResponse(text: 'Battery is available.'),
+        ]),
+        toolCatalog: InMemoryToolCatalog(<ToolDefinition>[
+          ToolDefinition(
+            id: 'battery_info',
+            embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
+            execute: _okExecute,
+          ),
+        ]),
+        notifier: _RecordingNotifier(),
+      );
+
+      final result = await loop.run(
+        'check battery',
+        sessionKey: 'agent:main',
+        transcriptSink: sink,
+        requestId: 'request-json',
+      );
+
+      expect(result.text, 'Battery is available.');
+      expect(
+        sink.events
+            .where(
+              (event) =>
+                  event.kind ==
+                  RuntimeTranscriptEventKind.assistantMessageDelta,
+            )
+            .map((event) => event.deltaText)
+            .join(),
+        isNot(contains('tool_call')),
+      );
+      expect(
+        sink.events.map((event) => event.kind),
+        contains(RuntimeTranscriptEventKind.toolStepStarted),
+      );
+    },
+  );
+
   test('generation failure returns failed result', () async {
     final notifier = _RecordingNotifier();
     final loop = _buildLoop(
@@ -529,6 +582,15 @@ class _QueueModelAdapter implements AgentModelAdapter {
     final response = _responses[_index];
     _index += 1;
     return response;
+  }
+}
+
+class _RecordingTranscriptSink implements RuntimeTranscriptSink {
+  final List<RuntimeTranscriptEvent> events = <RuntimeTranscriptEvent>[];
+
+  @override
+  Future<void> applyRuntimeTranscriptEvent(RuntimeTranscriptEvent event) async {
+    events.add(event);
   }
 }
 

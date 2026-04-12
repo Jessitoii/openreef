@@ -35,6 +35,11 @@ class ToolManifestBridge {
       runtimeMetadata: <String, Object?>{
         'manifestId': manifest.id,
         'category': manifest.category,
+        if (manifest.capabilityPhrases.isNotEmpty)
+          'capabilityPhrases': manifest.capabilityPhrases,
+        if (manifest.usageExamples.isNotEmpty)
+          'usageExamples': manifest.usageExamples,
+        ...manifest.runtimeMetadata,
       },
       execute: (ToolCall call) async {
         final result = await _registry.execute(

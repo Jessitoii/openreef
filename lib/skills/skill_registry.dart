@@ -4,21 +4,37 @@ import 'package:openreef/skills/skill.dart';
 import 'package:openreef/skills/skill_exceptions.dart';
 import 'package:openreef/skills/skill_frontmatter_parser.dart';
 
+class SkillRegistryRoot {
+  const SkillRegistryRoot({required this.path, required this.sourceType});
+
+  final String path;
+  final SkillSourceType sourceType;
+}
+
 class SkillRegistry {
   SkillRegistry({
     required List<String> rootPaths,
     SkillFrontmatterParser parser = const SkillFrontmatterParser(),
-  }) : _rootPaths = List<String>.unmodifiable(rootPaths),
+    List<SkillRegistryRoot>? roots,
+  }) : _roots = List<SkillRegistryRoot>.unmodifiable(
+         roots ??
+             rootPaths.map(
+               (path) => SkillRegistryRoot(
+                 path: path,
+                 sourceType: SkillSourceType.user,
+               ),
+             ),
+       ),
        _parser = parser;
 
-  final List<String> _rootPaths;
+  final List<SkillRegistryRoot> _roots;
   final SkillFrontmatterParser _parser;
 
   Future<List<Skill>> discoverSkills() async {
     final discovered = <Skill>[];
 
-    for (final rootPath in _rootPaths) {
-      final rootDirectory = Directory(rootPath);
+    for (final root in _roots) {
+      final rootDirectory = Directory(root.path);
       if (!await rootDirectory.exists()) {
         continue;
       }
@@ -48,6 +64,7 @@ class SkillRegistry {
             rawContent: rawContent,
             bodyContent: parsed.body,
             manifest: parsed.manifest,
+            sourceType: root.sourceType,
           ),
         );
       }
