@@ -44,6 +44,19 @@ void main() {
     );
   });
 
+  test('persists trigger mail polling minutes', () async {
+    final controller = SettingsController(store: SettingsStore(settingsFile));
+    await controller.initialize();
+
+    await controller.writeToolValue('trigger.mailPollMinutes', 18);
+
+    final rehydrated = SettingsController(store: SettingsStore(settingsFile));
+    await rehydrated.initialize();
+
+    expect(rehydrated.settings.triggerMailPollMinutes, 18);
+    expect(rehydrated.readToolValue('trigger.mailPollMinutes'), 18);
+  });
+
   test(
     'persists semantic embedding model selection outside LLM writes',
     () async {

@@ -10,6 +10,8 @@ import 'package:openreef/settings/settings_controller.dart';
 import 'package:openreef/tools/native_tool_adapters.dart';
 import 'package:openreef/tools/native_tool_errors.dart';
 import 'package:openreef/tools/tool_manifest.dart';
+import 'package:openreef/triggers/trigger_native_sync.dart';
+import 'package:openreef/triggers/trigger_polling_policy.dart';
 import 'package:openreef/triggers/trigger_models.dart';
 import 'package:openreef/triggers/trigger_repository.dart';
 import 'package:openreef/triggers/trigger_system.dart';
@@ -33,6 +35,7 @@ List<NativeToolHandler> createMvpNativeToolHandlers({
   required MemoryFormer memoryFormer,
   required MemoryIndex memoryIndex,
   required SettingsController settingsController,
+  required TriggerNativeSync triggerNativeSync,
   required TriggerSystem triggerSystem,
   required TriggerRepository triggerRepository,
 }) {
@@ -60,14 +63,26 @@ List<NativeToolHandler> createMvpNativeToolHandlers({
     FileReadToolHandler(),
     FileWriteToolHandler(),
     SettingsReadToolHandler(settingsController),
-    SettingsWriteToolHandler(settingsController),
-    TriggerCreateToolHandler(triggerSystem, triggerRepository),
-    TriggerListToolHandler(triggerSystem),
-    TriggerRemoveToolHandler(triggerSystem, triggerRepository),
-    AlarmSetToolHandler(triggerSystem, triggerRepository),
-    CronAddToolHandler(triggerSystem, triggerRepository),
+    SettingsWriteToolHandler(settingsController, triggerNativeSync),
+    TriggerCreateToolHandler(
+      triggerSystem,
+      triggerRepository,
+      triggerNativeSync,
+    ),
+    TriggerListToolHandler(triggerSystem, settingsController),
+    TriggerRemoveToolHandler(
+      triggerSystem,
+      triggerRepository,
+      triggerNativeSync,
+    ),
+    AlarmSetToolHandler(triggerSystem, triggerRepository, triggerNativeSync),
+    CronAddToolHandler(triggerSystem, triggerRepository, triggerNativeSync),
     CronListToolHandler(triggerSystem),
-    CronRemoveToolHandler(triggerSystem, triggerRepository),
+    CronRemoveToolHandler(
+      triggerSystem,
+      triggerRepository,
+      triggerNativeSync,
+    ),
   ];
 }
 
@@ -683,7 +698,7 @@ class SettingsReadToolHandler implements NativeToolHandler {
 }
 
 class SettingsWriteToolHandler implements NativeToolHandler {
-  SettingsWriteToolHandler(this._controller);
+  SettingsWriteToolHandler(this._controller, this._triggerNativeSync);
 
   static const ToolManifest _manifest = ToolManifest(
     id: 'settings_write',
@@ -706,11 +721,17 @@ class SettingsWriteToolHandler implements NativeToolHandler {
         type: ToolArgumentType.doubleValue,
         isRequired: false,
       ),
+      ToolArgumentSpec(
+        name: 'int_value',
+        type: ToolArgumentType.integer,
+        isRequired: false,
+      ),
     ],
     tags: <String>['settings'],
   );
 
   final SettingsController _controller;
+  final TriggerNativeSync _triggerNativeSync;
 
   @override
   ToolManifest get manifest => _manifest;
@@ -722,7 +743,20 @@ class SettingsWriteToolHandler implements NativeToolHandler {
   ) async {
     final key = (invocation.arguments['key'] as String).trim();
     final value = _extractSettingValue(invocation.arguments, key);
+    if (key == 'trigger.mailPollMinutes') {
+      final validation = const TriggerPollingPolicy().validateResolvedMinutes(
+        value as int,
+      );
+      if (!validation.isValid) {
+        throw ArgumentError(validation.error ?? 'invalid_poll_interval');
+      }
+    }
     await _controller.writeToolValue(key, value);
+    if (key == 'trigger.mailPollMinutes') {
+      await _triggerNativeSync.syncGlobalPollMinutes(
+        _controller.readToolValue(key) as int,
+      );
+    }
     final persistedValue = _controller.readToolValue(key);
     return NativeToolExecutionResult(
       content: 'Setting updated: $key=$persistedValue',
@@ -745,13 +779,20 @@ class SettingsWriteToolHandler implements NativeToolHandler {
       'voice.sensitivity' =>
         arguments['double_value'] ??
             (throw ArgumentError('missing_double_value:$key')),
+      'trigger.mailPollMinutes' =>
+        arguments['int_value'] ??
+            (throw ArgumentError('missing_int_value:$key')),
       _ => throw ArgumentError.value(key, 'key', 'unsupported_setting_key'),
     };
   }
 }
 
 class TriggerCreateToolHandler extends _BaseTriggerMutationToolHandler {
-  TriggerCreateToolHandler(super.triggerSystem, super.triggerRepository);
+  TriggerCreateToolHandler(
+    super.triggerSystem,
+    super.triggerRepository,
+    super.triggerNativeSync,
+  );
 
   static const ToolManifest _manifest = ToolManifest(
     id: 'trigger_create',
@@ -834,7 +875,7 @@ class TriggerCreateToolHandler extends _BaseTriggerMutationToolHandler {
 }
 
 class TriggerListToolHandler implements NativeToolHandler {
-  TriggerListToolHandler(this._triggerSystem);
+  TriggerListToolHandler(this._triggerSystem, this._settingsController);
 
   static const ToolManifest _manifest = ToolManifest(
     id: 'trigger_list',
@@ -845,6 +886,7 @@ class TriggerListToolHandler implements NativeToolHandler {
   );
 
   final TriggerSystem _triggerSystem;
+  final SettingsController _settingsController;
 
   @override
   ToolManifest get manifest => _manifest;
@@ -861,6 +903,7 @@ class TriggerListToolHandler implements NativeToolHandler {
           (trigger) => _serializeTriggerRow(
             trigger,
             _triggerSystem.stateById(trigger.id),
+            settingsController: _settingsController,
           ),
         )
         .toList(growable: false);
@@ -883,7 +926,11 @@ class TriggerListToolHandler implements NativeToolHandler {
 }
 
 class TriggerRemoveToolHandler extends _BaseTriggerMutationToolHandler {
-  TriggerRemoveToolHandler(super.triggerSystem, super.triggerRepository);
+  TriggerRemoveToolHandler(
+    super.triggerSystem,
+    super.triggerRepository,
+    super.triggerNativeSync,
+  );
 
   static const ToolManifest _manifest = ToolManifest(
     id: 'trigger_remove',
@@ -920,7 +967,11 @@ class TriggerRemoveToolHandler extends _BaseTriggerMutationToolHandler {
 }
 
 class AlarmSetToolHandler extends _BaseTriggerMutationToolHandler {
-  AlarmSetToolHandler(super.triggerSystem, super.triggerRepository);
+  AlarmSetToolHandler(
+    super.triggerSystem,
+    super.triggerRepository,
+    super.triggerNativeSync,
+  );
 
   static const ToolManifest _manifest = ToolManifest(
     id: 'alarm_set',
@@ -966,7 +1017,11 @@ class AlarmSetToolHandler extends _BaseTriggerMutationToolHandler {
 }
 
 class CronAddToolHandler extends _BaseTriggerMutationToolHandler {
-  CronAddToolHandler(super.triggerSystem, super.triggerRepository);
+  CronAddToolHandler(
+    super.triggerSystem,
+    super.triggerRepository,
+    super.triggerNativeSync,
+  );
 
   static const ToolManifest _manifest = ToolManifest(
     id: 'cron_add',
@@ -1055,7 +1110,11 @@ class CronListToolHandler implements NativeToolHandler {
 }
 
 class CronRemoveToolHandler extends _BaseTriggerMutationToolHandler {
-  CronRemoveToolHandler(super.triggerSystem, super.triggerRepository);
+  CronRemoveToolHandler(
+    super.triggerSystem,
+    super.triggerRepository,
+    super.triggerNativeSync,
+  );
 
   static const ToolManifest _manifest = ToolManifest(
     id: 'cron_remove',
@@ -1082,6 +1141,7 @@ class CronRemoveToolHandler extends _BaseTriggerMutationToolHandler {
     }
     await triggerSystem.cancel(triggerId);
     await triggerRepository.remove(triggerId);
+    await triggerNativeSync.syncTriggers(triggerSystem.listTriggers());
     return NativeToolExecutionResult(
       content: 'Removed cron trigger $triggerId.',
       metadata: <String, Object?>{
@@ -1093,10 +1153,15 @@ class CronRemoveToolHandler extends _BaseTriggerMutationToolHandler {
 }
 
 abstract class _BaseTriggerMutationToolHandler implements NativeToolHandler {
-  _BaseTriggerMutationToolHandler(this.triggerSystem, this.triggerRepository);
+  _BaseTriggerMutationToolHandler(
+    this.triggerSystem,
+    this.triggerRepository,
+    this.triggerNativeSync,
+  );
 
   final TriggerSystem triggerSystem;
   final TriggerRepository triggerRepository;
+  final TriggerNativeSync triggerNativeSync;
 
   Future<NativeToolExecutionResult> registerAndPersist(
     TriggerConfig trigger,
@@ -1107,6 +1172,7 @@ abstract class _BaseTriggerMutationToolHandler implements NativeToolHandler {
       throw StateError(registration.error ?? 'trigger_registration_failed');
     }
     await triggerRepository.upsert(trigger);
+    await triggerNativeSync.syncTriggers(triggerSystem.listTriggers());
     return NativeToolExecutionResult(
       content: 'Trigger ${trigger.id} created.',
       metadata: <String, Object?>{
@@ -1144,6 +1210,7 @@ abstract class _BaseTriggerMutationToolHandler implements NativeToolHandler {
       requiresUserAttention:
           arguments['requires_user_attention'] as bool? ?? false,
       isExpensive: arguments['is_expensive'] as bool? ?? false,
+      pollIntervalMinutes: arguments['poll_interval_minutes'] as int?,
       scheduleSpec: kind == TriggerType.schedule
           ? ScheduleTriggerSpec(
               hour: arguments['hour'] as int? ??
@@ -1155,8 +1222,7 @@ abstract class _BaseTriggerMutationToolHandler implements NativeToolHandler {
       intervalSpec: kind == TriggerType.interval
           ? IntervalTriggerSpec(
               every: Duration(
-                minutes: arguments['every_minutes'] as int? ??
-                    (throw ArgumentError('missing_every_minutes')),
+                minutes: _resolveEveryMinutes(arguments),
               ),
             )
           : null,
@@ -1165,6 +1231,20 @@ abstract class _BaseTriggerMutationToolHandler implements NativeToolHandler {
         'created_at': now.toIso8601String(),
       },
     );
+  }
+
+  int _resolveEveryMinutes(Map<String, Object?> arguments) {
+    final everyMinutes = arguments['every_minutes'] as int?;
+    if (everyMinutes == null) {
+      throw ArgumentError('missing_every_minutes');
+    }
+    final validation = const TriggerPollingPolicy().validateResolvedMinutes(
+      everyMinutes,
+    );
+    if (!validation.isValid) {
+      throw ArgumentError(validation.error ?? 'invalid_poll_interval');
+    }
+    return everyMinutes;
   }
 
   String _generateTriggerId({
@@ -1941,7 +2021,13 @@ String _normalizeAbsolutePath(String rawPath) {
 Map<String, Object?> _serializeTriggerRow(
   TriggerConfig trigger,
   TriggerState? state,
-) {
+  {SettingsController? settingsController}) {
+  final resolvedPollMinutes = settingsController == null
+      ? (trigger.pollIntervalMinutes ?? trigger.intervalSpec?.every.inMinutes)
+      : const TriggerPollingPolicy().resolvePollMinutes(
+          trigger,
+          settingsController,
+        );
   return <String, Object?>{
     'id': trigger.id,
     'name': trigger.name,
@@ -1951,6 +2037,8 @@ Map<String, Object?> _serializeTriggerRow(
     'hour': trigger.scheduleSpec?.hour,
     'minute': trigger.scheduleSpec?.minute,
     'everyMinutes': trigger.intervalSpec?.every.inMinutes,
+    'pollIntervalMinutes': trigger.pollIntervalMinutes,
+    'resolvedPollMinutes': resolvedPollMinutes,
     'lastDecision': state?.lastDecision?.name,
     'lastDecisionReason': state?.lastDecisionReason,
     'lastRunAt': state?.lastRunAt?.toIso8601String(),

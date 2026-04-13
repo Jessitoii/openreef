@@ -109,6 +109,7 @@ class TriggerConfig {
     this.isExpensive = false,
     this.visibility,
     this.payload = const <String, Object?>{},
+    this.pollIntervalMinutes,
   });
 
   final String id;
@@ -127,6 +128,7 @@ class TriggerConfig {
   final bool isExpensive;
   final ExecutionVisibility? visibility;
   final Map<String, Object?> payload;
+  final int? pollIntervalMinutes;
 
   TriggerConfig copyWith({
     String? id,
@@ -150,6 +152,7 @@ class TriggerConfig {
     bool? requiresUserAttention,
     bool? isExpensive,
     Map<String, Object?>? payload,
+    int? pollIntervalMinutes,
   }) {
     return TriggerConfig(
       id: id ?? this.id,
@@ -170,6 +173,7 @@ class TriggerConfig {
           requiresUserAttention ?? this.requiresUserAttention,
       isExpensive: isExpensive ?? this.isExpensive,
       payload: payload ?? this.payload,
+      pollIntervalMinutes: pollIntervalMinutes ?? this.pollIntervalMinutes,
     );
   }
 }
@@ -339,6 +343,37 @@ class TriggerDelivery {
   final DateTime deliveredAt;
   final DateTime? scheduledAt;
   final Map<String, Object?> payload;
+}
+
+class TriggerPollState {
+  const TriggerPollState({
+    this.lastCheckedAt,
+    this.lastDeliveredAt,
+    this.cursor,
+  });
+
+  final DateTime? lastCheckedAt;
+  final DateTime? lastDeliveredAt;
+  final String? cursor;
+
+  TriggerPollState copyWith({
+    DateTime? lastCheckedAt,
+    bool clearLastCheckedAt = false,
+    DateTime? lastDeliveredAt,
+    bool clearLastDeliveredAt = false,
+    String? cursor,
+    bool clearCursor = false,
+  }) {
+    return TriggerPollState(
+      lastCheckedAt: clearLastCheckedAt
+          ? null
+          : lastCheckedAt ?? this.lastCheckedAt,
+      lastDeliveredAt: clearLastDeliveredAt
+          ? null
+          : lastDeliveredAt ?? this.lastDeliveredAt,
+      cursor: clearCursor ? null : cursor ?? this.cursor,
+    );
+  }
 }
 
 class TriggerFireResult {

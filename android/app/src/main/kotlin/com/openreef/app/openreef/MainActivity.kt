@@ -18,6 +18,7 @@ import android.net.Uri
 import android.os.BatteryManager
 import android.os.Build
 import android.os.CancellationSignal
+import android.os.Bundle
 import android.provider.ContactsContract
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
@@ -44,6 +45,11 @@ class MainActivity : FlutterActivity() {
     private var mcpSecretStoreChannel: MethodChannel? = null
     private val permissionCallbacks = mutableMapOf<Int, (Boolean) -> Unit>()
     private var nextPermissionRequestCode = 2000
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        TriggerChannelBridge.registerGlobalPollingWork(applicationContext)
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)

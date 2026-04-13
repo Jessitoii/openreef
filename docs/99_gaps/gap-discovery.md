@@ -1180,6 +1180,239 @@ Implement a "Stop" or "Cancel" button in the UI that:
 
 ---
 
+## GAP-017: Missing Background Periodic Execution (App-Closed Automation)
+
+### Status
+
+Open
+
+### Severity
+
+Critical
+
+### Area
+
+Automation / Trigger System / Android Runtime
+
+### Current State
+
+The OpenReef trigger system theoretically supports the following trigger types:
+
+*   INTERVAL → “Every X minutes check…”
+*   MAIL → polling-based email triggers
+*   MCP_EVENT → push-based events
+*   SCHEDULE / CRON → AlarmManager
+
+However, the current implementation:
+
+*   Interval scheduling only works at the **in-process (Timer.periodic)** level → while the app is active.
+*   There is no **WorkManager PeriodicWorkRequest-based worker** on the Android side.
+*   Existing background mechanisms:
+    *   AlarmManager → exact time delivery (not polling)
+    *   Event bridge → push-style event wake-up
+*   These **do not satisfy the periodic polling use-case**.
+
+Result:
+
+> The "check every X minutes" behavior **does not work** while the app is closed.
+
+This specifically breaks the following scenarios:
+
+*   “Check mail every 15 min”
+*   “Check if price has changed every 30 min”
+*   “Evaluate condition every X minutes”
+
+### Why This Matters
+
+This gap is not minor; it directly breaks system behavior:
+
+#### 1) Automation is not real
+
+Agent:
+*   Not a continuously running system
+*   Only runs when an event arrives
+
+→ This is an **assistant**, not an automation agent.
+
+#### 2) Trigger model is inconsistent
+
+Documentation:
+*   INTERVAL → says polling
+*   MAIL → defines a polling flow
+
+But runtime:
+*   No polling
+*   Only push and alarm exist
+
+→ **Spec ≠ Implementation**
+
+#### 3) Skill-Creator produces incorrect behavior
+
+Skill-Creator produces things like:
+> “Every 15 minutes check inbox”
+
+But the runtime cannot execute this.
+→ The system **cannot execute the skills it creates**
+
+#### 4) “Always-on agent” claim is broken
+
+In documentation:
+*   “Phone is the server”
+*   “Always-on”
+*   “Foreground Service”
+
+But:
+→ Without periodic execution → The system is **not stateful, it is reactive**
+
+#### 5) MiniKAIROS is misunderstood
+
+MiniKAIROS:
+*   Decides after the trigger fires
+
+But:
+*   If the trigger doesn't fire → It never runs
+→ There is **no tick** for KAIROS to sit on
+
+### Target State
+
+The **only correct model** in the system:
+
+> **Periodic Tick → Trigger Evaluation → Execution**
+
+#### 1) Android Background Worker (Mandatory)
+
+WorkManager PeriodicWorkRequest is added:
+*   Minimum interval: 15 min (Android constraint)
+*   Unique work: "trigger_poll_worker"
+*   Survive:
+    *   App kill
+    *   Reboot
+    *   Doze (best effort)
+
+#### 2) Unified Poll Loop
+
+Inside the worker:
+```kotlin
+   doWork():
+  triggers = TriggerStore.getActive()
+  for trigger in triggers:
+    if trigger.type == INTERVAL:
+        evaluateInterval(trigger)
+    if trigger.type == MAIL:
+        checkMail(trigger)
+    if trigger.type == CUSTOM_POLL:
+        evaluateCondition(trigger)
+    if fired:
+        TriggerChannelBridge.enqueueEvent(...)
+```
+
+#### 3) Trigger Evaluation Layer
+
+Polling worker:
+*   Only checks "has an event occurred?"
+*   **Does not perform execution**
+
+Execution:
+→ Enters the existing pipeline: enqueueEvent → Flutter → TriggerSystem → AgentLoop
+
+#### 4) Mail Trigger Fix
+
+Mail trigger:
+Current:
+*   Theoretical polling
+
+Should be:
+*   Worker:
+    *   lastCheckTimestamp
+    *   MCP / API call
+    *   Diff detection
+*   Then:
+    *   enqueueEvent
+
+#### 5) MiniKAIROS Integration
+
+Flow:
+```text
+   Periodic Worker  → event detected
+    → enqueueEvent
+      → TriggerSystem.fire()
+        → MiniKAIROS.evaluate()
+          → proceed / delay / skip
+```
+
+#### 6) Power & Policy Layer
+
+Worker constraints:
+*   requiresBatteryNotLow
+*   networkType (for mail)
+*   User setting:
+    *   trigger.pollInterval
+    *   trigger.enabled
+
+### Non-Goals
+
+The following will not be done within the scope of this GAP:
+
+*   Full KAIROS daemon (v2.0)
+*   Webhook server (v2.0)
+*   Always-on foreground heavy loop
+
+### Acceptance Criteria
+
+The system must ensure the following behavior:
+
+#### Case 1 — Interval Trigger
+*   App closed
+*   “Every 15 min check mail”
+→ 15 min later:
+*   Worker runs
+*   Mail check is performed
+*   If event exists → Agent run
+
+#### Case 2 — No Event
+*   Worker runs
+*   Nothing happens
+→ No wake, no agent spawn
+
+#### Case 3 — App Kill / Reboot
+*   Worker is re-scheduled after reboot
+*   Trigger state is preserved
+
+#### Case 4 — Battery Low
+*   Trigger is skipped (MiniKAIROS or constraint)
+
+### Minimal Implementation Plan
+
+1.  Create TriggerPollWorker.kt
+2.  WorkManager.registerPeriodicTask(...)
+3.  Read TriggerStore (SQLite)
+4.  Interval evaluation logic
+5.  Mail polling logic (basic)
+6.  enqueueEvent integration
+7.  Boot receiver → re-register worker
+
+### Final Judgment
+
+This gap:
+*   Is not a UX bug
+*   Is not an infra bug
+*   **Is a core architecture violation**
+
+Current system:
+> “Event-driven assistant”
+
+Should be:
+> “Stateful autonomous agent”
+
+Until this is closed:
+*   Automation features work partially
+*   Skill system remains unreliable
+*   Agent concept collapses
+
+
+---
+
+
 ## Merge Guidance for `gap_review_tracker.md`
 
 When merging discovery into the tracker:
@@ -1199,6 +1432,9 @@ When merging discovery into the tracker:
 
 4. Keep `GAP-007`, `GAP-008`, `GAP-009`, `GAP-010`, `GAP-012`, `GAP-013`, `GAP-014`, `GAP-015`, and `GAP-016` as product-surface gaps unless code review proves a common shared root cause.
 
+5. Keep `GAP-017` separate as it represents a core runtime infrastructure gap for background automation.
+
+
 ---
 
 ## Priority Order
@@ -1208,15 +1444,17 @@ Recommended implementation priority:
 1. `GAP-001` — final assistant response not visible
 2. `GAP-005` — tool execution fails at runtime
 3. `GAP-011` — streaming and multi-step visibility missing
-4. `GAP-003` — workflow layer missing
-5. `GAP-004` — execution policy and standing-order correctness
-6. `GAP-002` — ContextAssembler redesign
-7. `GAP-006` — built-in skills not injected
-8. `GAP-010` — model marketplace/install state broken
-9. `GAP-009` — multimodal composer + capability gating
-10. `GAP-007` / `GAP-008` / `GAP-013` — MCP, Skills, Trigger/Schedule product surfaces
-11. `GAP-012` — workspace polish and layout cleanup
-12. `GAP-014` / `GAP-015` / `GAP-016` — User memory control, modern aesthetics, and interruptible generation
+4. `GAP-017` — background periodic execution (polling)
+5. `GAP-003` — workflow layer missing
+6. `GAP-004` — execution policy and standing-order correctness
+7. `GAP-002` — ContextAssembler redesign
+8. `GAP-006` — built-in skills not injected
+9. `GAP-010` — model marketplace/install state broken
+10. `GAP-009` — multimodal composer + capability gating
+11. `GAP-007` / `GAP-008` / `GAP-013` — MCP, Skills, Trigger/Schedule product surfaces
+12. `GAP-012` — workspace polish and layout cleanup
+13. `GAP-014` / `GAP-015` / `GAP-016` — User memory control, modern aesthetics, and interruptible generation
+
 
 ---
 
@@ -1233,8 +1471,10 @@ The dangerous ones are:
 *   broken tool execution
 *   fake-looking multi-step execution
 *   lack of deterministic workflow runtime
+*   lack of background periodic execution (polling)
 *   lack of interruptibility in generation
 *   heuristic context assembly that will crack under scale
+
 
 Fix those first.
 Then make it beautiful.

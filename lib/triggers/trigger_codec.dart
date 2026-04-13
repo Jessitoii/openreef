@@ -16,6 +16,7 @@ class TriggerCodec {
       'requiresUserAttention': trigger.requiresUserAttention,
       'isExpensive': trigger.isExpensive,
       'payload': trigger.payload,
+      'pollIntervalMinutes': trigger.pollIntervalMinutes,
       'scheduleSpec': trigger.scheduleSpec == null
           ? null
           : <String, Object?>{
@@ -93,6 +94,7 @@ class TriggerCodec {
       requiresUserAttention: json['requiresUserAttention'] as bool? ?? false,
       isExpensive: json['isExpensive'] as bool? ?? false,
       payload: _payloadFromJson(json['payload']),
+      pollIntervalMinutes: (json['pollIntervalMinutes'] as num?)?.toInt(),
       scheduleSpec: scheduleMap == null
           ? null
           : ScheduleTriggerSpec(

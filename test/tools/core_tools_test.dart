@@ -16,6 +16,7 @@ import 'package:openreef/tools/mvp_native_tools.dart';
 import 'package:openreef/tools/native_tool_adapters.dart';
 import 'package:openreef/tools/tool_manifest.dart';
 import 'package:openreef/tools/tool_manifest_registry.dart';
+import 'package:openreef/triggers/trigger_native_sync.dart';
 import 'package:openreef/triggers/mini_kairos.dart';
 import 'package:openreef/triggers/trigger_models.dart';
 import 'package:openreef/triggers/trigger_repository.dart';
@@ -102,6 +103,7 @@ void main() {
         memoryFormer: memoryFormer,
         memoryIndex: memoryIndex,
         settingsController: settingsController,
+        triggerNativeSync: _NoopTriggerNativeSync(),
         triggerSystem: triggerSystem,
         triggerRepository: triggerRepository,
       ),
@@ -441,4 +443,17 @@ class _RecordingAppLauncherAdapter implements AppLauncherAdapter {
 class _NoopShareAdapter implements ShareAdapter {
   @override
   Future<void> shareText({required String text, String? subject}) async {}
+}
+
+class _NoopTriggerNativeSync extends TriggerNativeSync {
+  _NoopTriggerNativeSync() : super(methodChannel: null);
+
+  @override
+  Future<void> syncTriggers(List<TriggerConfig> triggers) async {}
+
+  @override
+  Future<void> registerGlobalPollingWork() async {}
+
+  @override
+  Future<void> syncGlobalPollMinutes(int minutes) async {}
 }

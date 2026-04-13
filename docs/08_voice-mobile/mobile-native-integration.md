@@ -48,6 +48,10 @@ Out of scope:
 - no native call path that bypasses router/policy.
 - sensitive native operations require explicit confirmation per policy class.
 - bridge requests/results must remain schema-versioned.
+- background trigger delivery must persist to a native queue first, then hand off to Flutter through the active event sink.
+- Android app-closed periodic polling is supported only for WorkManager-backed cadences at 15 minutes or above.
+- 5-14 minute app-closed polling remains unsupported unless a real AlarmManager-based repeating path is added.
+- native poll state is owned by Android for the periodic worker path; Flutter may observe delivery events but does not own worker state.
 
 ## Invariants
 - every native invocation has one correlation id chain.

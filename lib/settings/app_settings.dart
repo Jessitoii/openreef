@@ -8,6 +8,7 @@ class AppSettings {
     this.voiceTtsEngine = VoiceTtsEngine.android,
     this.wakeWordEnabled = false,
     this.voiceSensitivity = 0.7,
+    this.triggerMailPollMinutes = 15,
     this.semanticEmbeddingModelId,
   });
 
@@ -16,12 +17,14 @@ class AppSettings {
     'voice.ttsEngine',
     'voice.wakeWordEnabled',
     'voice.sensitivity',
+    'trigger.mailPollMinutes',
   };
 
   final ReefThemeMode themeMode;
   final VoiceTtsEngine voiceTtsEngine;
   final bool wakeWordEnabled;
   final double voiceSensitivity;
+  final int triggerMailPollMinutes;
   final String? semanticEmbeddingModelId;
 
   AppSettings copyWith({
@@ -29,6 +32,7 @@ class AppSettings {
     VoiceTtsEngine? voiceTtsEngine,
     bool? wakeWordEnabled,
     double? voiceSensitivity,
+    int? triggerMailPollMinutes,
     String? semanticEmbeddingModelId,
     bool clearSemanticEmbeddingModelId = false,
   }) {
@@ -37,6 +41,8 @@ class AppSettings {
       voiceTtsEngine: voiceTtsEngine ?? this.voiceTtsEngine,
       wakeWordEnabled: wakeWordEnabled ?? this.wakeWordEnabled,
       voiceSensitivity: voiceSensitivity ?? this.voiceSensitivity,
+      triggerMailPollMinutes:
+          triggerMailPollMinutes ?? this.triggerMailPollMinutes,
       semanticEmbeddingModelId: clearSemanticEmbeddingModelId
           ? null
           : (semanticEmbeddingModelId ?? this.semanticEmbeddingModelId),
@@ -49,6 +55,7 @@ class AppSettings {
       'voice.ttsEngine': voiceTtsEngine.name,
       'voice.wakeWordEnabled': wakeWordEnabled,
       'voice.sensitivity': voiceSensitivity,
+      'trigger.mailPollMinutes': triggerMailPollMinutes,
       if (semanticEmbeddingModelId != null)
         'semantic.embeddingModelId': semanticEmbeddingModelId,
     };
@@ -64,6 +71,8 @@ class AppSettings {
       voiceSensitivity: _clampSensitivity(
         (json['voice.sensitivity'] as num?)?.toDouble() ?? 0.7,
       ),
+      triggerMailPollMinutes:
+          (json['trigger.mailPollMinutes'] as num?)?.toInt() ?? 15,
       semanticEmbeddingModelId: json['semantic.embeddingModelId'] as String?,
     );
   }
@@ -74,6 +83,7 @@ class AppSettings {
       'voice.ttsEngine' => voiceTtsEngine.name,
       'voice.wakeWordEnabled' => wakeWordEnabled,
       'voice.sensitivity' => voiceSensitivity,
+      'trigger.mailPollMinutes' => triggerMailPollMinutes,
       _ => throw ArgumentError.value(key, 'key', 'unsupported_setting_key'),
     };
   }
@@ -89,6 +99,9 @@ class AppSettings {
       ),
       'voice.sensitivity' => copyWith(
         voiceSensitivity: _clampSensitivity(_parseDoubleValue(value, key)),
+      ),
+      'trigger.mailPollMinutes' => copyWith(
+        triggerMailPollMinutes: _parseIntValue(value, key),
       ),
       _ => throw ArgumentError.value(key, 'key', 'unsupported_setting_key'),
     };
@@ -146,6 +159,13 @@ class AppSettings {
       return value.toDouble();
     }
     throw ArgumentError.value(value, key, 'invalid_double_value');
+  }
+
+  static int _parseIntValue(Object? value, String key) {
+    if (value is num) {
+      return value.toInt();
+    }
+    throw ArgumentError.value(value, key, 'invalid_int_value');
   }
 
   static double _clampSensitivity(double value) => value.clamp(0.3, 0.9);

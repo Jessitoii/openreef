@@ -28,14 +28,18 @@ internal data class TriggerDeliveryEvent(
     val scheduledAtEpochMs: Long,
     val deliveredAtEpochMs: Long,
     val payloadJson: String,
+    val deliveryId: String = "${triggerId}_${scheduledAtEpochMs}_$deliveredAtEpochMs",
+    val deliveryStage: String = "enqueued",
     val enqueuedAtEpochMs: Long = System.currentTimeMillis(),
 ) {
     fun toMap(): Map<String, Any?> =
         mapOf(
             "triggerId" to triggerId,
+            "deliveryId" to deliveryId,
             "type" to type,
             "scheduledAtEpochMs" to scheduledAtEpochMs,
             "deliveredAtEpochMs" to deliveredAtEpochMs,
+            "deliveryStage" to deliveryStage,
             "enqueuedAtEpochMs" to enqueuedAtEpochMs,
             "payload" to payloadJson.toFlutterPayloadMap(),
         )
@@ -43,9 +47,11 @@ internal data class TriggerDeliveryEvent(
     fun toJson(): JSONObject =
         JSONObject()
             .put("triggerId", triggerId)
+            .put("deliveryId", deliveryId)
             .put("type", type)
             .put("scheduledAtEpochMs", scheduledAtEpochMs)
             .put("deliveredAtEpochMs", deliveredAtEpochMs)
+            .put("deliveryStage", deliveryStage)
             .put("enqueuedAtEpochMs", enqueuedAtEpochMs)
             .put("payloadJson", payloadJson)
 
@@ -53,13 +59,23 @@ internal data class TriggerDeliveryEvent(
         fun fromJson(json: JSONObject): TriggerDeliveryEvent =
             TriggerDeliveryEvent(
                 triggerId = json.getString("triggerId"),
+                deliveryId = json.optString("deliveryId", ""),
                 type = json.getString("type"),
                 scheduledAtEpochMs = json.getLong("scheduledAtEpochMs"),
                 deliveredAtEpochMs = json.getLong("deliveredAtEpochMs"),
+                deliveryStage = json.optString("deliveryStage", "enqueued"),
                 enqueuedAtEpochMs =
                     json.optLong("enqueuedAtEpochMs", System.currentTimeMillis()),
                 payloadJson = json.optString("payloadJson", "{}"),
-            )
+            ).let {
+                if (it.deliveryId.isNotBlank()) {
+                    it
+                } else {
+                    it.copy(
+                        deliveryId = "${it.triggerId}_${it.scheduledAtEpochMs}_${it.deliveredAtEpochMs}",
+                    )
+                }
+            }
     }
 }
 

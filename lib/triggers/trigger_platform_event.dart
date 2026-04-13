@@ -1,10 +1,12 @@
 class TriggerPlatformEvent {
   const TriggerPlatformEvent({
     required this.triggerId,
+    this.deliveryId,
     required this.type,
     required this.scheduledAtEpochMs,
     required this.deliveredAtEpochMs,
     this.enqueuedAtEpochMs,
+    this.deliveryStage,
     this.payload = const <String, Object?>{},
   });
 
@@ -20,19 +22,23 @@ class TriggerPlatformEvent {
 
     return TriggerPlatformEvent(
       triggerId: _readRequiredString(map, 'triggerId'),
+      deliveryId: _readOptionalString(map, 'deliveryId'),
       type: _readRequiredString(map, 'type'),
       scheduledAtEpochMs: _readRequiredInt(map, 'scheduledAtEpochMs'),
       deliveredAtEpochMs: _readRequiredInt(map, 'deliveredAtEpochMs'),
       enqueuedAtEpochMs: _readOptionalInt(map, 'enqueuedAtEpochMs'),
+      deliveryStage: _readOptionalString(map, 'deliveryStage'),
       payload: _coercePayloadMap(map['payload']),
     );
   }
 
   final String triggerId;
+  final String? deliveryId;
   final String type;
   final int scheduledAtEpochMs;
   final int deliveredAtEpochMs;
   final int? enqueuedAtEpochMs;
+  final String? deliveryStage;
   final Map<String, Object?> payload;
 
   DateTime get scheduledAt =>
@@ -51,6 +57,17 @@ class TriggerPlatformEvent {
       return value;
     }
     throw ArgumentError.value(value, key, 'Expected non-empty string');
+  }
+
+  static String? _readOptionalString(Map<dynamic, dynamic> map, String key) {
+    final value = map[key];
+    if (value == null) {
+      return null;
+    }
+    if (value is String && value.isNotEmpty) {
+      return value;
+    }
+    return value.toString();
   }
 
   static int _readRequiredInt(Map<dynamic, dynamic> map, String key) {

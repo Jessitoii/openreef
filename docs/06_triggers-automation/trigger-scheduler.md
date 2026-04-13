@@ -34,6 +34,9 @@ Out of scope:
 - schedule triggers fire at configured slot boundaries.
 - interval triggers measure from last successful emission.
 - each emission includes `scheduledAt` and `firedAt` timestamps.
+- app-closed periodic polling on Android is only supported by the unique WorkManager-backed worker at 15 minutes or above.
+- trigger-specific overrides take precedence over the global poll setting, then the default 15 minutes.
+- intervals below 15 minutes are rejected for app-closed periodic polling unless a real AlarmManager repeating path exists.
 
 ## Missed-Fire Handling
 | Condition | Action |

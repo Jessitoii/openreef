@@ -49,6 +49,7 @@ import 'package:openreef/tools/tool_manifest_registry.dart';
 import 'package:openreef/triggers/android_schedule_scheduler_backend.dart';
 import 'package:openreef/triggers/in_process_interval_scheduler_backend.dart';
 import 'package:openreef/triggers/mini_kairos.dart';
+import 'package:openreef/triggers/trigger_native_sync.dart';
 import 'package:openreef/triggers/trigger_repository.dart';
 import 'package:openreef/triggers/trigger_event_bridge.dart';
 import 'package:openreef/triggers/trigger_system.dart';
@@ -175,6 +176,10 @@ class OpenReefBootstrap {
       ),
     );
     await settingsController.initialize();
+    final triggerNativeSync = TriggerNativeSync();
+    await triggerNativeSync.syncGlobalPollMinutes(
+      settingsController.settings.triggerMailPollMinutes,
+    );
     final databaseFactory = _resolveDatabaseFactory();
     final memoryStorage = MemoryStorage(
       SqliteMemoryStorageBackend(
@@ -296,6 +301,7 @@ class OpenReefBootstrap {
         ),
         memoryIndex: memoryIndex,
         settingsController: settingsController,
+        triggerNativeSync: triggerNativeSync,
         triggerSystem: triggerSystem,
         triggerRepository: triggerRepository,
       ),
@@ -512,6 +518,8 @@ class OpenReefBootstrap {
         );
       }
     }
+    await triggerNativeSync.syncTriggers(triggerSystem.listTriggers());
+    await triggerNativeSync.registerGlobalPollingWork();
     final skillRegistryController = SkillRegistryController(
       catalog: skillRuntimeCatalog,
     );
