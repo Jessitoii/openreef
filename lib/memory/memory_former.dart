@@ -7,6 +7,7 @@ import 'package:openreef/memory/memory_storage.dart';
 import 'package:openreef/memory/memory_store_kind.dart';
 import 'package:openreef/memory/memory_turn.dart';
 import 'package:openreef/memory/semantic_memory_retriever.dart';
+import 'package:openreef/models/embedding_model_manager.dart';
 import 'package:openreef/memory/semantic_text_embedder.dart';
 
 /// Shapes new memory entries before they are persisted.
@@ -14,29 +15,53 @@ class MemoryFormer {
   MemoryFormer({
     required MemoryStorage storage,
     required MemoryIndex memoryIndex,
-    required SemanticTextEmbedder embedder,
+    SemanticEmbeddingModelAccess? embeddingModelManager,
+    SemanticTextEmbedder? embedder,
     MemoryDeduplicator? deduplicator,
     SemanticMemoryRetriever? retriever,
-  })  : _storage = storage,
+  })  : assert(
+          embeddingModelManager != null || embedder != null,
+          'Provide a manager-backed embedder or an explicit legacy embedder.',
+        ),
+        _storage = storage,
         _memoryIndex = memoryIndex,
-        _embedder = embedder,
+        _embeddingModelManager =
+            embeddingModelManager ??
+            _StaticSemanticAccess(
+              embedder: embedder!,
+              modelId: embedder.modelId,
+            ),
         _retriever =
             retriever ??
-            SemanticMemoryRetriever(storage: storage, embedder: embedder),
+            SemanticMemoryRetriever(
+              storage: storage,
+              embeddingModelManager: embeddingModelManager ??
+                  _StaticSemanticAccess(
+                    embedder: embedder!,
+                    modelId: embedder.modelId,
+                  ),
+            ),
         _deduplicator =
             deduplicator ??
             MemoryDeduplicator(
               storage: storage,
               retriever:
                   retriever ??
-                  SemanticMemoryRetriever(storage: storage, embedder: embedder),
+                  SemanticMemoryRetriever(
+                    storage: storage,
+                    embeddingModelManager: embeddingModelManager ??
+                        _StaticSemanticAccess(
+                          embedder: embedder!,
+                          modelId: embedder.modelId,
+                        ),
+                  ),
             );
 
   static const Duration _shortTermTtl = Duration(hours: 24);
 
   final MemoryStorage _storage;
   final MemoryIndex _memoryIndex;
-  final SemanticTextEmbedder _embedder;
+  final SemanticEmbeddingModelAccess _embeddingModelManager;
   final SemanticMemoryRetriever _retriever;
   final MemoryDeduplicator _deduplicator;
 
@@ -86,7 +111,8 @@ class MemoryFormer {
       return;
     }
 
-    final embedding = await _embedder.embedDocument(fact.fact);
+    final embedder = await _embeddingModelManager.requireReadyEmbedder();
+    final embedding = await embedder.embedDocument(fact.fact);
 
     await _storage.saveRecord(
       MemoryRecord(
@@ -103,7 +129,7 @@ class MemoryFormer {
     await _storage.saveEmbedding(
       MemoryEmbeddingRecord(
         memoryKey: fact.key,
-        modelId: _embedder.modelId,
+        modelId: embedder.modelId,
         embedding: embedding,
         normalizedContent: normalizedContent,
         updatedAt: occurredAt,
@@ -125,4 +151,26 @@ class MemoryFormer {
 
     return '${turn.sessionKey}_last_turn_status';
   }
+}
+
+class _StaticSemanticAccess implements SemanticEmbeddingModelAccess {
+  _StaticSemanticAccess({required this.embedder, required this.modelId});
+
+  final SemanticTextEmbedder embedder;
+  final String modelId;
+
+  @override
+  String get selectedModelId => modelId;
+
+  @override
+  Future<EmbeddingModelReadiness> checkReadiness() async {
+    return EmbeddingModelReadiness(
+      status: EmbeddingModelReadinessStatus.ready,
+      model: null,
+      message: 'Legacy explicit embedder is ready.',
+    );
+  }
+
+  @override
+  Future<SemanticTextEmbedder> requireReadyEmbedder() async => embedder;
 }

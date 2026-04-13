@@ -116,7 +116,7 @@ Likely hot files:
 
 ### Status
 
-Open
+Closed
 
 ### Severity
 
@@ -601,7 +601,7 @@ Execution policy is now enforced in the executor instead of being implied in pro
 
 ### Status
 
-Open
+Closed
 
 ### Severity
 
@@ -673,7 +673,7 @@ Do not debug this abstractly. Prove each boundary per tool category.
 
 ### Status
 
-Open
+Closed
 
 ### Severity
 
@@ -757,7 +757,7 @@ MCP is one of the core OpenReef capability layers. If the connector experience i
 
 The MCP page must support:
 
-* preset connector cards for major servers
+* preset connector cards for major servers (Gmail, Calendar, GitHub, Slack, Notion, etc. - as examples, find minimum 50 connectors)
 * add/connect flow from UI
 * connection health/state
 * auth state visibility
@@ -1079,6 +1079,107 @@ Expose dedicated Trigger and Schedule screens in navigation with:
 
 ---
 
+## GAP-014: Memory management UI is missing for user-driven CRUD operations
+
+### Status
+
+Open
+
+### Severity
+
+Medium
+
+### Area
+
+UI / Memory / User Control
+
+### Current State
+
+Memory is managed automatically by the agent system, but there is no interface for the user to view, edit, delete, or manually create memory entries.
+
+### Why This Matters
+
+Users need transparency and control over what the agent remembers. Without a management UI, "forgetting" sensitive information or correcting false memories requires technical intervention or complex prompting.
+
+### Target State
+
+A dedicated Memory Management page accessible via the navigation drawer where users can:
+
+*   View all stored memory fragments
+*   Edit existing memories
+*   Delete specific or all memories
+*   Manually add new memory context
+*   Search and filter memories by content or metadata
+
+---
+
+## GAP-015: Visual identity is stuck in "terminal aesthetic" instead of modern consumer premium
+
+### Status
+
+Open
+
+### Severity
+
+Medium
+
+### Area
+
+UI / UX / Brand Identity
+
+### Current State
+
+The application heavily uses a CLI/terminal-inspired aesthetic (Claude-Code style). While functional, it feels like a developer tool rather than a polished consumer product.
+
+### Why This Matters
+
+To compete as a premium AI agent platform, the UI needs to feel alive, professional, and sophisticated. A terminal look can feel intimidating or unpolished to non-technical users.
+
+### Target State
+
+Transition to a modern, animated, and professional aesthetic while keeping the core color palette. This includes:
+
+*   Fluid micro-animations and transitions
+*   Glassmorphism and subtle gradients
+*   Modern typography (e.g., Inter, Outfit)
+*   Consistent elevation and depth
+*   Polished component designs (buttons, cards, inputs) that feel "premium"
+
+---
+
+## GAP-016: Agent message generation is not interruptible
+
+### Status
+
+Open
+
+### Severity
+
+Medium
+
+### Area
+
+Runtime / UI / Interaction
+
+### Current State
+
+Once an agent starts generating a response (or a multi-step execution), the user cannot stop or cancel the process. They must wait for it to complete or fail.
+
+### Why This Matters
+
+Long-running generations or runaway tool loops waste tokens, time, and battery. Interruptibility is a fundamental expectation for AI chat interfaces.
+
+### Target State
+
+Implement a "Stop" or "Cancel" button in the UI that:
+
+*   Immediately halts model inference
+*   Cancels any pending tool calls or steps
+*   Gracefully updates the UI to show the interrupted state
+*   Frees up the executor for the next request
+
+---
+
 ## Merge Guidance for `gap_review_tracker.md`
 
 When merging discovery into the tracker:
@@ -1096,7 +1197,7 @@ When merging discovery into the tracker:
 
    * Tool execution failure is a core runtime integrity gap.
 
-4. Keep `GAP-007`, `GAP-008`, `GAP-009`, `GAP-010`, `GAP-012`, and `GAP-013` as product-surface gaps unless code review proves a common shared root cause.
+4. Keep `GAP-007`, `GAP-008`, `GAP-009`, `GAP-010`, `GAP-012`, `GAP-013`, `GAP-014`, `GAP-015`, and `GAP-016` as product-surface gaps unless code review proves a common shared root cause.
 
 ---
 
@@ -1115,6 +1216,7 @@ Recommended implementation priority:
 9. `GAP-009` — multimodal composer + capability gating
 10. `GAP-007` / `GAP-008` / `GAP-013` — MCP, Skills, Trigger/Schedule product surfaces
 11. `GAP-012` — workspace polish and layout cleanup
+12. `GAP-014` / `GAP-015` / `GAP-016` — User memory control, modern aesthetics, and interruptible generation
 
 ---
 
@@ -1127,11 +1229,12 @@ Some are outright credibility gaps.
 The dangerous ones are not the pretty UI items.
 The dangerous ones are:
 
-* invisible final responses
-* broken tool execution
-* fake-looking multi-step execution
-* lack of deterministic workflow runtime
-* heuristic context assembly that will crack under scale
+*   invisible final responses
+*   broken tool execution
+*   fake-looking multi-step execution
+*   lack of deterministic workflow runtime
+*   lack of interruptibility in generation
+*   heuristic context assembly that will crack under scale
 
 Fix those first.
 Then make it beautiful.

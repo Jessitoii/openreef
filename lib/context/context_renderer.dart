@@ -1,6 +1,7 @@
 import 'package:openreef/agent/agent_models.dart';
 import 'package:openreef/context/compiled_context_package.dart';
 import 'package:openreef/context/context_assembler.dart';
+import 'package:openreef/memory/semantic_memory_retriever.dart';
 
 class ContextRenderer {
   const ContextRenderer();
@@ -85,9 +86,8 @@ class ContextRenderer {
       _section(
         id: 'memory_index',
         title: 'RELEVANT MEMORY',
-        content:
-            '[RELEVANT MEMORY]\n${sources.memoryIndexBlock}\n[END RELEVANT MEMORY]',
-        reason: 'MEMORY.md pointer/index block is always present.',
+        content: _renderMemoryIndex(sources),
+        reason: _memoryIndexReason(sources),
         critical: true,
         priority: 85,
         role: AgentMessageRole.memory,
@@ -394,6 +394,59 @@ class ContextRenderer {
     }
     buffer.write('[END WORKFLOW STATE]');
     return buffer.toString();
+  }
+
+  String _renderMemoryIndex(ReducedContextSources sources) {
+    final buffer = StringBuffer('[RELEVANT MEMORY]\n');
+    if (sources.memoryRetrievalStatus ==
+        SemanticMemoryRetrievalStatus.unavailable) {
+      buffer
+        ..writeln('[MEMORY RETRIEVAL UNAVAILABLE]')
+        ..writeln('status: unavailable')
+        ..writeln('reason: ${sources.memoryRetrievalReason}')
+        ..writeln('embeddingModelId: ${sources.embeddingModelIdUsed}')
+        ..write('[END MEMORY RETRIEVAL UNAVAILABLE]');
+      return buffer.toString();
+    }
+    if (sources.memoryRetrievalStatus ==
+        SemanticMemoryRetrievalStatus.degraded) {
+      buffer
+        ..writeln('[MEMORY RETRIEVAL DEGRADED]')
+        ..writeln('status: degraded')
+        ..writeln('reason: ${sources.memoryRetrievalReason}')
+        ..writeln('embeddingModelId: ${sources.embeddingModelIdUsed}')
+        ..writeln(
+          'excludedCrossModelMatches: ${sources.skippedCrossModelCount}',
+        )
+        ..write('[END MEMORY RETRIEVAL DEGRADED]');
+      return buffer.toString();
+    }
+    if (sources.memoryIndexBlock.trim().isEmpty) {
+      buffer
+        ..writeln('[MEMORY INDEX EMPTY]')
+        ..writeln('status: no pointers')
+        ..write('[END MEMORY INDEX EMPTY]');
+      return buffer.toString();
+    }
+    buffer
+      ..writeln(sources.memoryIndexBlock)
+      ..write('[END RELEVANT MEMORY]');
+    return buffer.toString();
+  }
+
+  String _memoryIndexReason(ReducedContextSources sources) {
+    return switch (sources.memoryRetrievalStatus) {
+      SemanticMemoryRetrievalStatus.unavailable =>
+        'Semantic memory retrieval unavailable for this turn.',
+      SemanticMemoryRetrievalStatus.degraded =>
+        'Semantic memory retrieval degraded because of model mismatch or partial results.',
+      SemanticMemoryRetrievalStatus.success =>
+        'Semantic memory retrieval returned real matches.',
+      SemanticMemoryRetrievalStatus.noMatches =>
+        sources.memoryIndexBlock.trim().isEmpty
+            ? 'No memory pointers available.'
+            : 'Memory pointers available without semantic matches.',
+    };
   }
 
   String _renderMessages(String title, List<AgentMessage> messages) {

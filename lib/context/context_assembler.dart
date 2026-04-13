@@ -12,6 +12,7 @@ import 'package:openreef/context/context_reducer.dart';
 import 'package:openreef/context/context_renderer.dart';
 import 'package:openreef/context/context_retriever.dart';
 import 'package:openreef/memory/memory_index.dart';
+import 'package:openreef/memory/semantic_memory_retriever.dart';
 import 'package:openreef/memory/semantic_text_embedder.dart';
 import 'package:openreef/models/embedding_model_manager.dart';
 import 'package:openreef/skills/skill.dart';
@@ -228,6 +229,123 @@ class EmptyStandingOrderProvider implements StandingOrderProvider {
   }
 }
 
+class ManagedSemanticMemoryContextProvider implements MemoryContextProvider {
+  ManagedSemanticMemoryContextProvider({
+    required SemanticMemoryRetriever retriever,
+    required SemanticEmbeddingModelAccess readinessProvider,
+  })  : _retriever = retriever,
+        _readinessProvider = readinessProvider;
+
+  final SemanticMemoryRetriever _retriever;
+  final SemanticEmbeddingModelAccess _readinessProvider;
+
+  @override
+  Future<List<AgentMessage>> retrieveRelevantMemories({
+    required String userMessage,
+    required IntentSignal intentSignal,
+    required int maxTokens,
+  }) async {
+    final readiness = await _readinessProvider.checkReadiness();
+    final result = await _retriever.search(
+      query: userMessage,
+      limit: maxTokens <= 0 ? 0 : 6,
+    );
+
+    if (!readiness.isReady) {
+      return <AgentMessage>[
+        AgentMessage(
+          role: AgentMessageRole.memory,
+          content:
+              '[MEMORY RETRIEVAL UNAVAILABLE]\n'
+              'status: unavailable\n'
+              'reason: semantic_embedding_model_not_ready\n'
+              'embeddingModelId: ${readiness.model?.id ?? 'none'}\n'
+              '[END MEMORY RETRIEVAL UNAVAILABLE]',
+          turnNumber: 0,
+          metadata: <String, Object?>{
+            'memory_retrieval_status': 'unavailable',
+            'memory_retrieval_reason': 'semantic_embedding_model_not_ready',
+            'embedding_model_id_used': readiness.model?.id ?? 'none',
+            'memory_retrieval_skipped_no_embedder': true,
+            'memory_retrieval_degraded': true,
+          },
+        ),
+      ];
+    }
+
+    if (result.status == SemanticMemoryRetrievalStatus.unavailable) {
+      return <AgentMessage>[
+        AgentMessage(
+          role: AgentMessageRole.memory,
+          content:
+              '[MEMORY RETRIEVAL UNAVAILABLE]\n'
+              'status: unavailable\n'
+              'reason: ${result.message}\n'
+              'embeddingModelId: ${result.modelIdUsed}\n'
+              '[END MEMORY RETRIEVAL UNAVAILABLE]',
+          turnNumber: 0,
+          metadata: <String, Object?>{
+            'memory_retrieval_status': result.status.name,
+            'memory_retrieval_reason': result.message,
+            'embedding_model_id_used': result.modelIdUsed,
+            'memory_retrieval_skipped_no_embedder': true,
+            'memory_retrieval_degraded': true,
+          },
+        ),
+      ];
+    }
+
+    final selected = <AgentMessage>[];
+    var usedTokens = 0;
+    if (result.skippedCrossModelCount > 0) {
+      final degradedMessage = AgentMessage(
+        role: AgentMessageRole.memory,
+        content:
+            '[MEMORY RETRIEVAL DEGRADED]\n'
+            'status: degraded\n'
+            'reason: ${result.message}\n'
+            'embeddingModelId: ${result.modelIdUsed}\n'
+            'excludedCrossModelMatches: ${result.skippedCrossModelCount}\n'
+            '[END MEMORY RETRIEVAL DEGRADED]',
+        turnNumber: 0,
+        metadata: <String, Object?>{
+          'memory_retrieval_status': result.status.name,
+          'memory_retrieval_reason': result.message,
+          'embedding_model_id_used': result.modelIdUsed,
+          'memory_retrieval_degraded': true,
+          'excluded_cross_model_matches': result.skippedCrossModelCount,
+        },
+      );
+      selected.add(degradedMessage);
+      usedTokens += ContextAssembler.estimateTextTokens(degradedMessage.content);
+    }
+
+    for (final match in result.matches) {
+      final message = AgentMessage(
+        role: AgentMessageRole.memory,
+        content: '[${match.record.category}] ${match.record.content}',
+        turnNumber: 0,
+        metadata: <String, Object?>{
+          'memory_key': match.record.key,
+          'category': match.record.category,
+          'semantic_score': match.score,
+          'embedding_model_id_used': result.modelIdUsed,
+          'memory_retrieval_status': result.status.name,
+          'memory_retrieval_reason': result.message,
+        },
+      );
+      final estimatedTokens = ContextAssembler.estimateTextTokens(message.content);
+      if (usedTokens + estimatedTokens > maxTokens) {
+        continue;
+      }
+      usedTokens += estimatedTokens;
+      selected.add(message);
+    }
+
+    return selected;
+  }
+}
+
 class AssembleResult {
   const AssembleResult({
     required this.messages,
@@ -403,9 +521,8 @@ class ContextAssembler {
     final readiness = await _embeddingReadinessProvider?.checkReadiness();
     if (readiness != null && !readiness.isReady) {
       debugPrint(
-        'OpenReef.ContextAssembler: embeddingReadiness.blocked status=${readiness.status.name} model=${readiness.model?.id ?? 'none'}',
+        'OpenReef.ContextAssembler: embeddingReadiness.degraded status=${readiness.status.name} model=${readiness.model?.id ?? 'none'}',
       );
-      throw EmbeddingModelNotReadyException(readiness);
     }
     // ignore: deprecated_member_use_from_same_package
     final intentSignal = await detectIntent(request.userMessage);
@@ -470,6 +587,10 @@ class ContextAssembler {
         ...reduced.reductions,
         ...rendered.reductions,
       ],
+      memoryRetrievalStatus: reduced.memoryRetrievalStatus,
+      memoryRetrievalReason: reduced.memoryRetrievalReason,
+      memoryEmbeddingModelId: reduced.embeddingModelIdUsed,
+      memorySkippedCrossModelCount: reduced.skippedCrossModelCount,
       droppedSectionIds: rendered.droppedSectionIds,
       droppedItems: <ContextDroppedItem>[
         ...reduced.droppedItems,
@@ -487,6 +608,13 @@ class ContextAssembler {
       memorySelection: MemorySelection(
         memoryIndexBlock: reduced.memoryIndexBlock,
         messages: reduced.memoryMessages,
+        degraded:
+            reduced.memoryRetrievalStatus !=
+            SemanticMemoryRetrievalStatus.success,
+        status: reduced.memoryRetrievalStatus,
+        reason: reduced.memoryRetrievalReason,
+        embeddingModelId: reduced.embeddingModelIdUsed,
+        skippedCrossModelCount: reduced.skippedCrossModelCount,
       ),
       historySelection: reduced.historySelection,
       workflowContext: reduced.workflowContext,

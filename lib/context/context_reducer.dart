@@ -62,6 +62,10 @@ class ContextReducer {
           plan.tokenAllocation.compactRecommended ||
           estimated + plan.tokenAllocation.outputReserve >
               (plan.tokenAllocation.totalBudget * 0.82).floor(),
+      memoryRetrievalStatus: sources.memoryRetrievalStatus,
+      memoryRetrievalReason: sources.memoryRetrievalReason,
+      embeddingModelIdUsed: sources.embeddingModelIdUsed,
+      skippedCrossModelCount: sources.skippedCrossModelCount,
     );
   }
 

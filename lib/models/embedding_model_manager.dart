@@ -169,8 +169,15 @@ abstract class EmbeddingModelReadinessProvider {
   Future<EmbeddingModelReadiness> checkReadiness();
 }
 
-class EmbeddingModelManager extends ChangeNotifier
+abstract class SemanticEmbeddingModelAccess
     implements EmbeddingModelReadinessProvider {
+  String get selectedModelId;
+
+  Future<SemanticTextEmbedder> requireReadyEmbedder();
+}
+
+class EmbeddingModelManager extends ChangeNotifier
+    implements SemanticEmbeddingModelAccess {
   EmbeddingModelManager({
     required ModelRegistry registry,
     required SettingsController settingsController,
@@ -206,6 +213,7 @@ class EmbeddingModelManager extends ChangeNotifier
     return _registry.defaultEmbeddingModel;
   }
 
+  @override
   String get selectedModelId => selectedModel?.id ?? 'none';
 
   Future<void> initialize() async {
@@ -370,6 +378,7 @@ class EmbeddingModelManager extends ChangeNotifier
     }
   }
 
+  @override
   Future<SemanticTextEmbedder> requireReadyEmbedder() async {
     final current = await checkReadiness();
     if (!current.isReady) {

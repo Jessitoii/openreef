@@ -345,20 +345,38 @@ class MemorySearchToolHandler implements NativeToolHandler {
   ) async {
     final query = (invocation.arguments['query'] as String? ?? '').trim();
     final topK = (invocation.arguments['top_k'] as int?) ?? 3;
-    final matches = await _retriever.search(query: query, limit: topK);
+    final result = await _retriever.search(query: query, limit: topK);
 
-    if (matches.isEmpty) {
+    if (result.isDegraded && !result.hasMatches) {
       return NativeToolExecutionResult(
-        content: 'No relevant memories found.',
+        content: 'Memory retrieval unavailable.',
         metadata: <String, Object?>{
           'query': query,
+          'memory_retrieval_status': result.status.name,
+          'memory_retrieval_reason': result.message,
+          'embedding_model_id_used': result.modelIdUsed,
+          'memory_retrieval_degraded': true,
           'results': const <Object?>[],
           'executedAt': context.now().toIso8601String(),
         },
       );
     }
 
-    final results = matches
+    if (!result.hasMatches) {
+      return NativeToolExecutionResult(
+        content: 'No relevant memories found.',
+        metadata: <String, Object?>{
+          'query': query,
+          'memory_retrieval_status': result.status.name,
+          'memory_retrieval_reason': result.message,
+          'embedding_model_id_used': result.modelIdUsed,
+          'results': const <Object?>[],
+          'executedAt': context.now().toIso8601String(),
+        },
+      );
+    }
+
+    final results = result.matches
         .map(
           (match) => <String, Object?>{
             'key': match.record.key,
@@ -377,6 +395,10 @@ class MemorySearchToolHandler implements NativeToolHandler {
         'query': query,
         'results': results,
         'results_json': jsonEncode(results),
+        'memory_retrieval_status': result.status.name,
+        'memory_retrieval_reason': result.message,
+        'embedding_model_id_used': result.modelIdUsed,
+        'excluded_cross_model_matches': result.skippedCrossModelCount,
         'executedAt': context.now().toIso8601String(),
       },
     );

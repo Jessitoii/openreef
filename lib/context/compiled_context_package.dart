@@ -1,6 +1,7 @@
 import 'package:openreef/agent/agent_models.dart';
 import 'package:openreef/agent/tool_router.dart';
 import 'package:openreef/context/context_assembler.dart';
+import 'package:openreef/memory/semantic_memory_retriever.dart';
 
 enum ExecutionMode {
   chat,
@@ -265,6 +266,11 @@ class ContextAuditTrace {
     this.finalExposureReasons = const <String, String>{},
     this.candidateIndexVersion = 0,
     this.embeddingModelId = '',
+    this.memoryRetrievalStatus = SemanticMemoryRetrievalStatus.noMatches,
+    this.memoryRetrievalReason = '',
+    this.memoryEmbeddingModelId = 'none',
+    this.memorySkippedCrossModelCount = 0,
+    this.memoryRetrievalSignals = const <String>[],
   });
 
   final String traceId;
@@ -286,6 +292,11 @@ class ContextAuditTrace {
   final Map<String, String> finalExposureReasons;
   final int candidateIndexVersion;
   final String embeddingModelId;
+  final SemanticMemoryRetrievalStatus memoryRetrievalStatus;
+  final String memoryRetrievalReason;
+  final String memoryEmbeddingModelId;
+  final int memorySkippedCrossModelCount;
+  final List<String> memoryRetrievalSignals;
 }
 
 class ContextPlan {
@@ -308,6 +319,10 @@ class ContextPlan {
     this.candidateIndexVersion = 0,
     this.embeddingModelId = '',
     this.policyDecisions = const <ContextPolicyDecision>[],
+    this.memoryRetrievalStatus = SemanticMemoryRetrievalStatus.noMatches,
+    this.memoryRetrievalReason = '',
+    this.embeddingModelIdUsed = 'none',
+    this.skippedCrossModelCount = 0,
   });
 
   final ExecutionMode executionMode;
@@ -328,6 +343,10 @@ class ContextPlan {
   final int candidateIndexVersion;
   final String embeddingModelId;
   final List<ContextPolicyDecision> policyDecisions;
+  final SemanticMemoryRetrievalStatus memoryRetrievalStatus;
+  final String memoryRetrievalReason;
+  final String embeddingModelIdUsed;
+  final int skippedCrossModelCount;
 }
 
 class CompiledContextSection {
@@ -392,11 +411,19 @@ class MemorySelection {
     this.memoryIndexBlock = '',
     this.messages = const <AgentMessage>[],
     this.degraded = false,
+    this.status = SemanticMemoryRetrievalStatus.noMatches,
+    this.reason = '',
+    this.embeddingModelId = 'none',
+    this.skippedCrossModelCount = 0,
   });
 
   final String memoryIndexBlock;
   final List<AgentMessage> messages;
   final bool degraded;
+  final SemanticMemoryRetrievalStatus status;
+  final String reason;
+  final String embeddingModelId;
+  final int skippedCrossModelCount;
 }
 
 class RetrievedContextSources {
@@ -405,12 +432,20 @@ class RetrievedContextSources {
     this.memoryMessages = const <AgentMessage>[],
     this.standingOrders = const <AgentMessage>[],
     this.workflowContext = const WorkflowContext(),
+    this.memoryRetrievalStatus = SemanticMemoryRetrievalStatus.noMatches,
+    this.memoryRetrievalReason = '',
+    this.embeddingModelIdUsed = 'none',
+    this.skippedCrossModelCount = 0,
   });
 
   final String memoryIndexBlock;
   final List<AgentMessage> memoryMessages;
   final List<AgentMessage> standingOrders;
   final WorkflowContext workflowContext;
+  final SemanticMemoryRetrievalStatus memoryRetrievalStatus;
+  final String memoryRetrievalReason;
+  final String embeddingModelIdUsed;
+  final int skippedCrossModelCount;
 }
 
 class ReducedContextSources {
@@ -424,6 +459,10 @@ class ReducedContextSources {
     this.reductions = const <ContextReduction>[],
     this.droppedItems = const <ContextDroppedItem>[],
     this.compactRecommended = false,
+    this.memoryRetrievalStatus = SemanticMemoryRetrievalStatus.noMatches,
+    this.memoryRetrievalReason = '',
+    this.embeddingModelIdUsed = 'none',
+    this.skippedCrossModelCount = 0,
   });
 
   final String memoryIndexBlock;
@@ -435,6 +474,10 @@ class ReducedContextSources {
   final List<ContextReduction> reductions;
   final List<ContextDroppedItem> droppedItems;
   final bool compactRecommended;
+  final SemanticMemoryRetrievalStatus memoryRetrievalStatus;
+  final String memoryRetrievalReason;
+  final String embeddingModelIdUsed;
+  final int skippedCrossModelCount;
 }
 
 class RenderedContextPackage {

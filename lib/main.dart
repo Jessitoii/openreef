@@ -185,16 +185,6 @@ class OpenReefBootstrap {
     await memoryStorage.initialize();
 
     final memoryIndex = MemoryIndex(memoryStorage);
-    final semanticEmbedder = OnDeviceSemanticTextEmbedder();
-    final semanticMemoryRetriever = SemanticMemoryRetriever(
-      storage: memoryStorage,
-      embedder: semanticEmbedder,
-    );
-    final memoryFormer = MemoryFormer(
-      storage: memoryStorage,
-      memoryIndex: memoryIndex,
-      embedder: semanticEmbedder,
-    );
     final executionBridge = _DelegatingAgentTaskExecutor();
     final triggerRepository = TriggerRepository(
       file: File(
@@ -220,6 +210,66 @@ class OpenReefBootstrap {
       taskExecutor: executionBridge,
     );
 
+    final liteRtBridge = LiteRtBridge();
+    final modelRegistry = const ModelRegistry();
+    final modelStorage = ModelStorage();
+    final modelDownloader = ModelDownloader(storage: modelStorage);
+    final modelDownloadController = ModelDownloadController(
+      registry: modelRegistry,
+      storage: modelStorage,
+      downloader: modelDownloader,
+      bridge: liteRtBridge,
+    );
+    await modelDownloadController.initialize();
+
+    late final CapabilityEmbeddingIndex capabilityEmbeddingIndex;
+    final embeddingModelManager = EmbeddingModelManager(
+      registry: modelRegistry,
+      settingsController: settingsController,
+      tokenStore: const SecureHuggingFaceTokenStore(),
+      onModelChanged: () => capabilityEmbeddingIndex.invalidate(),
+    );
+    await embeddingModelManager.initialize();
+    capabilityEmbeddingIndex = CapabilityEmbeddingIndex(
+      embedder: ManagedSemanticTextEmbedder(embeddingModelManager),
+    );
+    late final SemanticMemoryRetriever semanticMemoryRetriever;
+    late final MemoryFormer memoryFormer;
+    semanticMemoryRetriever = SemanticMemoryRetriever(
+      storage: memoryStorage,
+      embeddingModelManager: embeddingModelManager,
+    );
+    memoryFormer = MemoryFormer(
+      storage: memoryStorage,
+      memoryIndex: memoryIndex,
+      embeddingModelManager: embeddingModelManager,
+    );
+
+    var modelReady = false;
+    final installedModel = modelDownloadController.state.installedModel;
+    if (installedModel != null) {
+      try {
+        await initializeLiteRtBridge(
+          liteRtBridge,
+          path: installedModel.modelId,
+        );
+        modelReady = true;
+      } catch (error) {
+        await modelDownloadController.recoverFromCorruptInstalledModel(
+          installedModel,
+        );
+        modelDownloadController.setInitializationError(error);
+        modelReady = false;
+      }
+    }
+
+    final lexicalIntentEmbedder = const LexicalIntentEmbedder();
+    final skillsDir = Directory(
+      '${documentsDir.path}${Platform.pathSeparator}skills',
+    );
+    final builtInSkillsDir = await const BuiltInSkillSource().materialize(
+      parentDirectory: documentsDir,
+    );
     final toolRegistry = ToolManifestRegistry(
       createMvpNativeToolHandlers(
         volumeAdapter: PlatformVolumeAdapter(),
@@ -235,8 +285,15 @@ class OpenReefBootstrap {
         notificationAdapter: PlatformNotificationAdapter(),
         appLauncherAdapter: PlatformAppLauncherAdapter(),
         shareAdapter: PlatformShareAdapter(),
-        memoryRetriever: semanticMemoryRetriever,
-        memoryFormer: memoryFormer,
+        memoryRetriever: SemanticMemoryRetriever(
+          storage: memoryStorage,
+          embeddingModelManager: embeddingModelManager,
+        ),
+        memoryFormer: MemoryFormer(
+          storage: memoryStorage,
+          memoryIndex: memoryIndex,
+          embeddingModelManager: embeddingModelManager,
+        ),
         memoryIndex: memoryIndex,
         settingsController: settingsController,
         triggerSystem: triggerSystem,
@@ -373,44 +430,6 @@ class OpenReefBootstrap {
     final toolCatalog = RuntimeToolCatalog(
       sourceTools: <String, List<ToolDefinition>>{'native': nativeTools},
     );
-
-    final liteRtBridge = LiteRtBridge();
-    final modelRegistry = const ModelRegistry();
-    final modelStorage = ModelStorage();
-    final modelDownloader = ModelDownloader(storage: modelStorage);
-    final modelDownloadController = ModelDownloadController(
-      registry: modelRegistry,
-      storage: modelStorage,
-      downloader: modelDownloader,
-      bridge: liteRtBridge,
-    );
-    await modelDownloadController.initialize();
-
-    var modelReady = false;
-    final installedModel = modelDownloadController.state.installedModel;
-    if (installedModel != null) {
-      try {
-        await initializeLiteRtBridge(
-          liteRtBridge,
-          path: installedModel.modelId,
-        );
-        modelReady = true;
-      } catch (error) {
-        await modelDownloadController.recoverFromCorruptInstalledModel(
-          installedModel,
-        );
-        modelDownloadController.setInitializationError(error);
-        modelReady = false;
-      }
-    }
-
-    final lexicalIntentEmbedder = const LexicalIntentEmbedder();
-    final skillsDir = Directory(
-      '${documentsDir.path}${Platform.pathSeparator}skills',
-    );
-    final builtInSkillsDir = await const BuiltInSkillSource().materialize(
-      parentDirectory: documentsDir,
-    );
     final skillRuntimeCatalog = SkillRuntimeCatalog(
       registry: SkillRegistry(
         rootPaths: const <String>[],
@@ -432,25 +451,14 @@ class OpenReefBootstrap {
     );
     await skillRuntimeCatalog.reload();
 
-    late final CapabilityEmbeddingIndex capabilityEmbeddingIndex;
-    final embeddingModelManager = EmbeddingModelManager(
-      registry: modelRegistry,
-      settingsController: settingsController,
-      tokenStore: const SecureHuggingFaceTokenStore(),
-      onModelChanged: () => capabilityEmbeddingIndex.invalidate(),
-    );
-    await embeddingModelManager.initialize();
-    capabilityEmbeddingIndex = CapabilityEmbeddingIndex(
-      embedder: ManagedSemanticTextEmbedder(embeddingModelManager),
-    );
-
     final contextAssembler = ContextAssembler(
       memoryIndex: memoryIndex,
       embedder: lexicalIntentEmbedder,
       toolCatalog: toolCatalog,
       skillCatalog: skillRuntimeCatalog,
-      memoryContextProvider: SemanticMemoryContextProvider(
-        semanticMemoryRetriever,
+      memoryContextProvider: ManagedSemanticMemoryContextProvider(
+        retriever: semanticMemoryRetriever,
+        readinessProvider: embeddingModelManager,
       ),
       capabilityIndex: capabilityEmbeddingIndex,
       embeddingReadinessProvider: embeddingModelManager,

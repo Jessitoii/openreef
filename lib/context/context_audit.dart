@@ -1,4 +1,5 @@
 import 'package:openreef/context/compiled_context_package.dart';
+import 'package:openreef/memory/semantic_memory_retriever.dart';
 
 class ContextAudit {
   const ContextAudit();
@@ -7,6 +8,10 @@ class ContextAudit {
     required ContextPlan plan,
     required List<CompiledContextSection> sections,
     required List<ContextReduction> reductions,
+    required SemanticMemoryRetrievalStatus memoryRetrievalStatus,
+    required String memoryRetrievalReason,
+    required String memoryEmbeddingModelId,
+    required int memorySkippedCrossModelCount,
     List<String> droppedSectionIds = const <String>[],
     List<ContextDroppedItem> droppedItems = const <ContextDroppedItem>[],
     bool degraded = false,
@@ -75,6 +80,22 @@ class ContextAudit {
       finalExposureReasons: plan.finalExposureReasons,
       candidateIndexVersion: plan.candidateIndexVersion,
       embeddingModelId: plan.embeddingModelId,
+      memoryRetrievalStatus: memoryRetrievalStatus,
+      memoryRetrievalReason: memoryRetrievalReason,
+      memoryEmbeddingModelId: memoryEmbeddingModelId,
+      memorySkippedCrossModelCount: memorySkippedCrossModelCount,
+      memoryRetrievalSignals: <String>[
+        if (memoryRetrievalStatus ==
+            SemanticMemoryRetrievalStatus.unavailable)
+          'memory_retrieval_skipped_no_embedder',
+        if (memoryRetrievalStatus ==
+            SemanticMemoryRetrievalStatus.degraded)
+          'memory_retrieval_degraded',
+        if (memoryRetrievalStatus ==
+            SemanticMemoryRetrievalStatus.success)
+          'memory_retrieval_success',
+        'embedding_model_id_used:$memoryEmbeddingModelId',
+      ],
     );
   }
 }

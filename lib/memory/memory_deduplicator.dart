@@ -36,6 +36,6 @@ class MemoryDeduplicator {
       store: MemoryStoreKind.longTerm,
       category: fact.category,
     );
-    return similar.isNotEmpty;
+    return similar.matches.isNotEmpty;
   }
 }
