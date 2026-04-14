@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:openreef/agent/tool_router.dart';
 import 'package:openreef/memory/chat_session_repository.dart';
+import 'package:openreef/memory/memory_index.dart';
 import 'package:openreef/memory/memory_storage.dart';
 import 'package:openreef/memory/sqlite_memory_storage_backend.dart';
 import 'package:openreef/mcp/mcp_connection_store.dart';
@@ -20,6 +21,8 @@ import 'package:openreef/settings/settings_controller.dart';
 import 'package:openreef/settings/settings_store.dart';
 import 'package:openreef/skills/skill_registry.dart';
 import 'package:openreef/skills/skill_registry_controller.dart';
+import 'package:openreef/skills/skill_package_repository.dart';
+import 'package:openreef/skills/skill_package_service.dart';
 import 'package:openreef/skills/skill_runtime_catalog.dart';
 import 'package:openreef/ui/chat_session_port.dart';
 import 'package:openreef/ui/mock_chat_session.dart';
@@ -207,6 +210,28 @@ void main() {
     await tester.tap(find.byKey(const Key('drawer-mcp')));
     await tester.pumpAndSettle();
     expect(find.text('MCP CONNECTIONS'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('open-drawer-button')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('drawer-memory')));
+    await tester.pumpAndSettle();
+    expect(find.text('MEMORY MANAGEMENT'), findsOneWidget);
+  });
+
+  testWidgets('automation destination is reachable from drawer', (
+    tester,
+  ) async {
+    _setLargeSurface(tester);
+    await tester.pumpWidget(await _buildApp());
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('open-drawer-button')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('drawer-automation')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('drawer-automation')));
+    await tester.pumpAndSettle();
+    expect(find.text('Automation'), findsOneWidget);
   });
 }
 
@@ -235,6 +260,7 @@ Future<Widget> _buildApp({
     ),
   );
   await memoryStorage.initialize();
+  final memoryIndex = MemoryIndex(memoryStorage);
   final skillsDirectory = await Directory.systemTemp.createTemp(
     'widget-skills-',
   );
@@ -246,13 +272,25 @@ Future<Widget> _buildApp({
     ),
   );
   await skillCatalog.reload();
+  final packageService = SkillPackageService(
+    registry: SkillRegistry(rootPaths: <String>[skillsDirectory.path]),
+    toolCatalog: InMemoryToolCatalog(const <ToolDefinition>[]),
+    repository: SkillPackageRepository(
+      localRootDirectory: skillsDirectory,
+      builtinRootDirectory: skillsDirectory,
+    ),
+    isEnabled: (skillId) => skillCatalog.enabledById[skillId] ?? true,
+  );
   final skillRegistryController = SkillRegistryController(
     catalog: skillCatalog,
+    packageService: packageService,
   );
+  final secretStore = InMemoryMcpSecretStore();
   final mcpConnectionsController = McpConnectionsController(
+    secretStore: secretStore,
     store: McpConnectionStore(
       memoryStorage,
-      secretStore: InMemoryMcpSecretStore(),
+      secretStore: secretStore,
     ),
     runtimeCoordinator: McpRuntimeCoordinator(
       toolCatalog: RuntimeToolCatalog(),
@@ -280,6 +318,8 @@ Future<Widget> _buildApp({
     ),
     skillRegistryController: skillRegistryController,
     mcpConnectionsController: mcpConnectionsController,
+    memoryStorage: memoryStorage,
+    memoryIndex: memoryIndex,
     modelReady: true,
     onModelReady: () async {},
   );

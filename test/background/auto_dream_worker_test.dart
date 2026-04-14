@@ -221,8 +221,34 @@ class _SlowMemoryStorageBackend implements MemoryStorageBackend {
   }
 
   @override
+  Future<MemoryReadResult> fetchRecordsWithReport({
+    MemoryStoreKind? store,
+    bool includeExpired = false,
+  }) {
+    return _delegate.fetchRecordsWithReport(
+      store: store,
+      includeExpired: includeExpired,
+    );
+  }
+
+  @override
   Future<void> saveEmbedding(MemoryEmbeddingRecord record) {
     return _delegate.saveEmbedding(record);
+  }
+
+  @override
+  Future<MemoryMutationResult> saveRecordSafely(
+    MemoryRecord record, {
+    MemoryRecord? previousRecord,
+    MemoryEmbeddingRecord? preparedEmbedding,
+    Future<void> Function()? rebuildIndex,
+  }) {
+    return _delegate.saveRecordSafely(
+      record,
+      previousRecord: previousRecord,
+      preparedEmbedding: preparedEmbedding,
+      rebuildIndex: rebuildIndex,
+    );
   }
 
   @override
@@ -264,6 +290,41 @@ class _SlowMemoryStorageBackend implements MemoryStorageBackend {
 
   @override
   Future<void> deleteRecord(String key) => _delegate.deleteRecord(key);
+
+  @override
+  Future<MemoryMutationResult> deleteRecordSafely(
+    MemoryRecord record, {
+    Future<void> Function()? rebuildIndex,
+  }) {
+    return _delegate.deleteRecordSafely(
+      record,
+      rebuildIndex: rebuildIndex,
+    );
+  }
+
+  @override
+  Future<void> deleteRecords({
+    MemoryStoreKind? store,
+    bool includeExpired = true,
+    String? category,
+  }) {
+    return _delegate.deleteRecords(
+      store: store,
+      includeExpired: includeExpired,
+      category: category,
+    );
+  }
+
+  @override
+  Future<MemoryMutationResult> deleteRecordsSafely(
+    List<MemoryRecord> records, {
+    Future<void> Function()? rebuildIndex,
+  }) {
+    return _delegate.deleteRecordsSafely(
+      records,
+      rebuildIndex: rebuildIndex,
+    );
+  }
 
   @override
   Future<void> savePointer(MemoryPointer pointer) => _delegate.savePointer(pointer);

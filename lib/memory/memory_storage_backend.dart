@@ -4,10 +4,75 @@ import 'package:openreef/memory/memory_record.dart';
 import 'package:openreef/memory/semantic_memory_match.dart';
 import 'package:openreef/memory/memory_store_kind.dart';
 
+enum MemoryMutationStatus {
+  successCommitted,
+  failedNoWrite,
+  failedRolledBack,
+  failedInconsistentManualRepairNeeded,
+}
+
+enum MemoryMutationStage {
+  validation,
+  embeddingCompute,
+  rowWrite,
+  embeddingWrite,
+  indexRebuild,
+  rollback,
+}
+
+class MemoryMutationResult {
+  const MemoryMutationResult({
+    required this.status,
+    required this.stage,
+    required this.message,
+    required this.store,
+    this.affectedKey,
+    this.rollbackSucceeded = true,
+  });
+
+  const MemoryMutationResult.success({
+    required String message,
+    required MemoryStoreKind store,
+    String? affectedKey,
+  }) : this(
+          status: MemoryMutationStatus.successCommitted,
+          stage: MemoryMutationStage.indexRebuild,
+          message: message,
+          store: store,
+          affectedKey: affectedKey,
+        );
+
+  final MemoryMutationStatus status;
+  final MemoryMutationStage stage;
+  final String message;
+  final MemoryStoreKind store;
+  final String? affectedKey;
+  final bool rollbackSucceeded;
+
+  bool get isSuccess => status == MemoryMutationStatus.successCommitted;
+}
+
+class MemoryReadResult {
+  const MemoryReadResult({
+    required this.records,
+    required this.skippedCount,
+  });
+
+  final List<MemoryRecord> records;
+  final int skippedCount;
+}
+
 abstract class MemoryStorageBackend {
   Future<void> initialize();
 
   Future<void> saveRecord(MemoryRecord record);
+
+  Future<MemoryMutationResult> saveRecordSafely(
+    MemoryRecord record, {
+    MemoryRecord? previousRecord,
+    MemoryEmbeddingRecord? preparedEmbedding,
+    Future<void> Function()? rebuildIndex,
+  });
 
   Future<MemoryRecord?> fetchRecord(
     String key, {
@@ -16,6 +81,11 @@ abstract class MemoryStorageBackend {
   });
 
   Future<List<MemoryRecord>> fetchRecords({
+    MemoryStoreKind? store,
+    bool includeExpired = false,
+  });
+
+  Future<MemoryReadResult> fetchRecordsWithReport({
     MemoryStoreKind? store,
     bool includeExpired = false,
   });
@@ -40,6 +110,22 @@ abstract class MemoryStorageBackend {
   });
 
   Future<void> deleteRecord(String key);
+
+  Future<MemoryMutationResult> deleteRecordSafely(
+    MemoryRecord record, {
+    Future<void> Function()? rebuildIndex,
+  });
+
+  Future<void> deleteRecords({
+    MemoryStoreKind? store,
+    bool includeExpired = true,
+    String? category,
+  });
+
+  Future<MemoryMutationResult> deleteRecordsSafely(
+    List<MemoryRecord> records, {
+    Future<void> Function()? rebuildIndex,
+  });
 
   Future<void> savePointer(MemoryPointer pointer);
 

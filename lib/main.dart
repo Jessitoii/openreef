@@ -39,6 +39,8 @@ import 'package:openreef/settings/settings_store.dart';
 import 'package:openreef/settings/settings_controller.dart';
 import 'package:openreef/skills/builtin_skill_source.dart';
 import 'package:openreef/skills/skill.dart';
+import 'package:openreef/skills/skill_package_repository.dart';
+import 'package:openreef/skills/skill_package_service.dart';
 import 'package:openreef/skills/skill_registry.dart';
 import 'package:openreef/skills/skill_registry_controller.dart';
 import 'package:openreef/skills/skill_runtime_catalog.dart';
@@ -51,9 +53,11 @@ import 'package:openreef/triggers/in_process_interval_scheduler_backend.dart';
 import 'package:openreef/triggers/mini_kairos.dart';
 import 'package:openreef/triggers/trigger_native_sync.dart';
 import 'package:openreef/triggers/trigger_repository.dart';
+import 'package:openreef/triggers/battery_trigger_scheduler_backend.dart';
 import 'package:openreef/triggers/trigger_event_bridge.dart';
 import 'package:openreef/triggers/trigger_system.dart';
 import 'package:openreef/ui/agent_loop_chat_session.dart';
+import 'package:openreef/ui/automation_controller.dart';
 import 'package:openreef/ui/chat_session_port.dart';
 import 'package:openreef/ui/openreef_app.dart';
 import 'package:openreef/voice/audio_service.dart';
@@ -116,9 +120,12 @@ class _MyAppState extends State<MyApp> {
     return OpenReefApp(
       settingsController: widget.bootstrap.settingsController,
       chatSession: widget.bootstrap.chatSession,
+      memoryStorage: widget.bootstrap.memoryStorage,
+      memoryIndex: widget.bootstrap.memoryIndex,
       wakeWordController: widget.bootstrap.wakeWordController,
       modelDownloadController: widget.bootstrap.modelDownloadController,
       skillRegistryController: widget.bootstrap.skillRegistryController,
+      automationController: widget.bootstrap.automationController,
       mcpConnectionsController: widget.bootstrap.mcpConnectionsController,
       embeddingModelManager: widget.bootstrap.embeddingModelManager,
       modelReady: _modelReady,
@@ -138,6 +145,8 @@ class OpenReefBootstrap {
   OpenReefBootstrap._({
     required this.settingsController,
     required this.chatSession,
+    required this.memoryStorage,
+    required this.memoryIndex,
     required this.modelDownloadController,
     required this.liteRtBridge,
     required this.audioService,
@@ -145,6 +154,7 @@ class OpenReefBootstrap {
     required this.triggerSystem,
     required this.wakeWordController,
     required this.skillRegistryController,
+    required this.automationController,
     required this.mcpConnectionsController,
     required this.embeddingModelManager,
     required bool modelReady,
@@ -152,6 +162,8 @@ class OpenReefBootstrap {
 
   final SettingsController settingsController;
   final ChatSessionPort chatSession;
+  final MemoryStorage memoryStorage;
+  final MemoryIndex memoryIndex;
   final ModelDownloadController modelDownloadController;
   final LiteRtBridge liteRtBridge;
   final AudioService audioService;
@@ -159,6 +171,7 @@ class OpenReefBootstrap {
   final TriggerSystem triggerSystem;
   final WakeWordController wakeWordController;
   final SkillRegistryController skillRegistryController;
+  final AutomationController automationController;
   final McpConnectionsController mcpConnectionsController;
   final EmbeddingModelManager embeddingModelManager;
   bool _modelReady;
@@ -202,9 +215,20 @@ class OpenReefBootstrap {
         await triggerSystem.fireInterval(triggerId);
       },
     );
+    final batteryAdapter = PlatformBatteryAdapter();
+    final batteryBackend = PollingBatterySchedulerBackend(
+      batteryAdapter: batteryAdapter,
+      onTriggerFired: (delivery) async {
+        await triggerSystem.fireBattery(
+          delivery.triggerId,
+          payload: delivery.payload,
+        );
+      },
+    );
     triggerSystem = TriggerSystem(
       scheduleBackend: AndroidScheduleSchedulerBackend(),
       intervalBackend: intervalBackend,
+      batteryBackend: batteryBackend,
       miniKairos: MiniKairos(
         contextLoader: () async => const KairosContext(
           isAppForeground: true,
@@ -279,7 +303,7 @@ class OpenReefBootstrap {
       createMvpNativeToolHandlers(
         volumeAdapter: PlatformVolumeAdapter(),
         clipboardAdapter: const PlatformClipboardAdapter(),
-        batteryAdapter: PlatformBatteryAdapter(),
+        batteryAdapter: batteryAdapter,
         contactAdapter: PlatformContactAdapter(),
         draftMessageAdapter: PlatformDraftMessageAdapter(),
         flashlightAdapter: PlatformFlashlightAdapter(),
@@ -436,26 +460,39 @@ class OpenReefBootstrap {
     final toolCatalog = RuntimeToolCatalog(
       sourceTools: <String, List<ToolDefinition>>{'native': nativeTools},
     );
+    final skillRegistry = SkillRegistry(
+      rootPaths: const <String>[],
+      roots: <SkillRegistryRoot>[
+        SkillRegistryRoot(
+          path: builtInSkillsDir.path,
+          sourceType: SkillSourceType.builtin,
+        ),
+        SkillRegistryRoot(
+          path: skillsDir.path,
+          sourceType: SkillSourceType.user,
+        ),
+      ],
+    );
     final skillRuntimeCatalog = SkillRuntimeCatalog(
-      registry: SkillRegistry(
-        rootPaths: const <String>[],
-        roots: <SkillRegistryRoot>[
-          SkillRegistryRoot(
-            path: builtInSkillsDir.path,
-            sourceType: SkillSourceType.builtin,
-          ),
-          SkillRegistryRoot(
-            path: skillsDir.path,
-            sourceType: SkillSourceType.user,
-          ),
-        ],
-      ),
+      registry: skillRegistry,
       toolCatalog: toolCatalog,
       stateFile: File(
         '${skillsDir.path}${Platform.pathSeparator}runtime_state.json',
       ),
     );
     await skillRuntimeCatalog.reload();
+    final skillPackageRepository = SkillPackageRepository(
+      localRootDirectory: Directory(
+        '${documentsDir.path}${Platform.pathSeparator}skills',
+      ),
+      builtinRootDirectory: builtInSkillsDir,
+    );
+    final skillPackageService = SkillPackageService(
+      registry: skillRegistry,
+      toolCatalog: toolCatalog,
+      repository: skillPackageRepository,
+      isEnabled: (skillId) => skillRuntimeCatalog.enabledById[skillId] ?? true,
+    );
 
     final contextAssembler = ContextAssembler(
       memoryIndex: memoryIndex,
@@ -522,20 +559,30 @@ class OpenReefBootstrap {
     await triggerNativeSync.registerGlobalPollingWork();
     final skillRegistryController = SkillRegistryController(
       catalog: skillRuntimeCatalog,
+      packageService: skillPackageService,
     );
+    final automationController = AutomationController(
+      repository: triggerRepository,
+      triggerSystem: triggerSystem,
+    );
+    final mcpSecretStore = PlatformMcpSecretStore();
     final mcpConnectionsController = McpConnectionsController(
       store: McpConnectionStore(
         memoryStorage,
-        secretStore: PlatformMcpSecretStore(),
+        secretStore: mcpSecretStore,
       ),
       runtimeCoordinator: mcpRuntimeCoordinator,
+      secretStore: mcpSecretStore,
     );
+    await mcpConnectionsController.initialize();
     triggerEventBridge.events.listen((event) {
       unawaited(triggerSystem.handlePlatformEvent(event));
     });
     final bootstrap = OpenReefBootstrap._(
       settingsController: settingsController,
       chatSession: chatSession,
+      memoryStorage: memoryStorage,
+      memoryIndex: memoryIndex,
       modelDownloadController: modelDownloadController,
       liteRtBridge: liteRtBridge,
       audioService: AudioService(settingsController: settingsController),
@@ -545,6 +592,7 @@ class OpenReefBootstrap {
         settingsController: settingsController,
       ),
       skillRegistryController: skillRegistryController,
+      automationController: automationController,
       mcpConnectionsController: mcpConnectionsController,
       embeddingModelManager: embeddingModelManager,
       modelReady: modelReady,

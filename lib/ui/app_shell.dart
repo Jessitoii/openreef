@@ -1,14 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:openreef/memory/chat_session_record.dart';
 import 'package:openreef/memory/chat_session_repository.dart';
+import 'package:openreef/memory/memory_index.dart';
+import 'package:openreef/memory/memory_storage.dart';
 import 'package:openreef/models/embedding_model_manager.dart';
 import 'package:openreef/models/model_download_controller.dart';
 import 'package:openreef/settings/settings_controller.dart';
 import 'package:openreef/skills/skill_registry_controller.dart';
+import 'package:openreef/ui/automation_controller.dart';
 import 'package:openreef/ui/chat_session_port.dart';
 import 'package:openreef/ui/chat_workspace_controller.dart';
+import 'package:openreef/ui/screens/automation_screen.dart';
+import 'package:openreef/ui/memory_management_controller.dart';
 import 'package:openreef/ui/screens/chat_screen.dart';
 import 'package:openreef/ui/screens/mcp_connections_screen.dart';
+import 'package:openreef/ui/screens/memory_screen.dart';
 import 'package:openreef/ui/screens/model_download_screen.dart';
 import 'package:openreef/ui/screens/settings_screen.dart';
 import 'package:openreef/ui/screens/skills_screen.dart';
@@ -22,10 +28,13 @@ class AppShell extends StatefulWidget {
     this.wakeWordController,
     required this.modelDownloadController,
     required this.skillRegistryController,
+    this.automationController,
     required this.mcpConnectionsController,
     required this.onModelReady,
     this.embeddingModelManager,
     this.chatSessionRepository,
+    required this.memoryStorage,
+    required this.memoryIndex,
     super.key,
   });
 
@@ -34,10 +43,13 @@ class AppShell extends StatefulWidget {
   final WakeWordController? wakeWordController;
   final ModelDownloadController modelDownloadController;
   final SkillRegistryController skillRegistryController;
+  final AutomationController? automationController;
   final McpConnectionsController mcpConnectionsController;
   final Future<void> Function() onModelReady;
   final EmbeddingModelManager? embeddingModelManager;
   final ChatSessionRepository? chatSessionRepository;
+  final MemoryStorage memoryStorage;
+  final MemoryIndex memoryIndex;
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -45,6 +57,7 @@ class AppShell extends StatefulWidget {
 
 class _AppShellState extends State<AppShell> {
   late final ChatWorkspaceController _workspaceController;
+  late final MemoryManagementController _memoryController;
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
   @override
@@ -55,11 +68,17 @@ class _AppShellState extends State<AppShell> {
       repository: widget.chatSessionRepository ?? ChatSessionRepository(),
     );
     _workspaceController.initialize();
+    _memoryController = MemoryManagementController(
+      storage: widget.memoryStorage,
+      memoryIndex: widget.memoryIndex,
+      embeddingModelManager: widget.embeddingModelManager,
+    )..initialize();
   }
 
   @override
   void dispose() {
     _workspaceController.dispose();
+    _memoryController.dispose();
     super.dispose();
   }
 
@@ -140,6 +159,20 @@ class _AppShellState extends State<AppShell> {
                           },
                         ),
                         ListTile(
+                          key: const Key('drawer-automation'),
+                          leading: const Icon(Icons.tune_outlined),
+                          title: const Text('Automation'),
+                          selected:
+                              _workspaceController.destination ==
+                              AppShellDestination.automation,
+                          onTap: () {
+                            Navigator.of(context).pop();
+                            _workspaceController.showDestination(
+                              AppShellDestination.automation,
+                            );
+                          },
+                        ),
+                        ListTile(
                           key: const Key('drawer-mcp'),
                           leading: const Icon(Icons.hub_outlined),
                           title: const Text('MCP Connections'),
@@ -150,6 +183,20 @@ class _AppShellState extends State<AppShell> {
                             Navigator.of(context).pop();
                             _workspaceController.showDestination(
                               AppShellDestination.mcp,
+                            );
+                          },
+                        ),
+                        ListTile(
+                          key: const Key('drawer-memory'),
+                          leading: const Icon(Icons.storage_outlined),
+                          title: const Text('Memory'),
+                          selected:
+                              _workspaceController.destination ==
+                              AppShellDestination.memory,
+                          onTap: () {
+                            Navigator.of(context).pop();
+                            _workspaceController.showDestination(
+                              AppShellDestination.memory,
                             );
                           },
                         ),
@@ -218,10 +265,16 @@ class _AppShellState extends State<AppShell> {
         );
       case AppShellDestination.skills:
         return SkillsScreen(controller: widget.skillRegistryController);
+      case AppShellDestination.automation:
+        return widget.automationController == null
+            ? const Center(child: Text('Automation unavailable'))
+            : AutomationScreen(controller: widget.automationController!);
       case AppShellDestination.mcp:
         return McpConnectionsScreen(
           controller: widget.mcpConnectionsController,
         );
+      case AppShellDestination.memory:
+        return MemoryScreen(controller: _memoryController);
     }
   }
 
@@ -233,8 +286,12 @@ class _AppShellState extends State<AppShell> {
         return 'Settings';
       case AppShellDestination.skills:
         return 'Skills';
+      case AppShellDestination.automation:
+        return 'Automation';
       case AppShellDestination.mcp:
         return 'MCP Connections';
+      case AppShellDestination.memory:
+        return 'Memory';
     }
   }
 }

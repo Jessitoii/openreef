@@ -73,7 +73,8 @@ void main() {
       final controller = McpConnectionsController(
         store: store,
         runtimeCoordinator: runtimeCoordinator,
-        transportFactory: (endpoint) {
+        secretStore: secretStore,
+        transportFactory: (endpoint, {headers = const <String, String>{}, headersProvider}) {
           connectedEndpoints.add(endpoint);
           return _FakeMcpTransport(endpoint);
         },
@@ -123,7 +124,9 @@ void main() {
       final controller = McpConnectionsController(
         store: store,
         runtimeCoordinator: runtimeCoordinator,
-        transportFactory: (endpoint) => _FakeMcpTransport(endpoint),
+        secretStore: secretStore,
+        transportFactory: (endpoint, {headers = const <String, String>{}, headersProvider}) =>
+            _FakeMcpTransport(endpoint),
       );
 
       await controller.initialize();
@@ -142,7 +145,9 @@ void main() {
     final controller = McpConnectionsController(
       store: store,
       runtimeCoordinator: runtimeCoordinator,
-      transportFactory: (endpoint) => _FakeMcpTransport(endpoint),
+      secretStore: secretStore,
+      transportFactory: (endpoint, {headers = const <String, String>{}, headersProvider}) =>
+          _FakeMcpTransport(endpoint),
     );
 
     await controller.connect('http://example.com/sse', persist: false);
@@ -156,7 +161,9 @@ void main() {
     final controller = McpConnectionsController(
       store: store,
       runtimeCoordinator: runtimeCoordinator,
-      transportFactory: (endpoint) => _FakeMcpTransport(endpoint),
+      secretStore: secretStore,
+      transportFactory: (endpoint, {headers = const <String, String>{}, headersProvider}) =>
+          _FakeMcpTransport(endpoint),
     );
 
     await controller.connect('https://example.com/sse', persist: false);
@@ -176,7 +183,8 @@ void main() {
     final controller = McpConnectionsController(
       store: store,
       runtimeCoordinator: runtimeCoordinator,
-      transportFactory: (endpoint) {
+      secretStore: secretStore,
+      transportFactory: (endpoint, {headers = const <String, String>{}, headersProvider}) {
         transport = _FakeMcpTransport(endpoint);
         return transport;
       },
@@ -197,12 +205,64 @@ void main() {
     expect(event.eventName, 'notifications/github.pr_merged');
     expect(event.payload['method'], 'notifications/github.pr_merged');
   });
+
+  test('disabled connectors are excluded from runtime tool injection', () async {
+    final controller = McpConnectionsController(
+      store: store,
+      runtimeCoordinator: runtimeCoordinator,
+      secretStore: secretStore,
+      transportFactory: (endpoint, {headers = const <String, String>{}, headersProvider}) =>
+          _FakeMcpTransport(endpoint),
+    );
+
+    await controller.connect('https://example.com/sse', persist: false);
+    final state = controller.connections.value.single;
+
+    expect(runtimeToolCatalog.listTools(), isNotEmpty);
+
+    await controller.setEnabled(state.url, false);
+
+    expect(runtimeToolCatalog.listTools(), isEmpty);
+    final disabledState = controller.connections.value.single;
+    expect(disabledState.enabled, isFalse);
+    expect(disabledState.importedToolCount, 0);
+  });
+
+  test('missing discovery never fabricates tools or events', () async {
+    final controller = McpConnectionsController(
+      store: store,
+      runtimeCoordinator: runtimeCoordinator,
+      secretStore: secretStore,
+      transportFactory: (endpoint, {headers = const <String, String>{}, headersProvider}) => _FakeMcpTransport(
+        endpoint,
+        tools: const <Map<String, Object?>>[],
+      ),
+    );
+
+    await controller.connect('https://example.com/sse', persist: false);
+    final state = controller.connections.value.single;
+
+    expect(state.connected, isTrue);
+    expect(state.tools, isEmpty);
+    expect(state.toolsImportedIntoRuntime, isFalse);
+    expect(state.enabled, isTrue);
+  });
 }
 
 class _FakeMcpTransport implements McpTransport {
-  _FakeMcpTransport(this.endpoint);
+  _FakeMcpTransport(
+    this.endpoint, {
+    this.tools = const <Map<String, Object?>>[
+      <String, Object?>{
+        'name': 'ping',
+        'description': 'Returns pong',
+        'inputSchema': <String, Object?>{'type': 'object'},
+      },
+    ],
+  });
 
   final Uri endpoint;
+  final List<Map<String, Object?>> tools;
   final StreamController<McpTransportMessage> _messages =
       StreamController<McpTransportMessage>.broadcast();
   var _closed = false;
@@ -239,17 +299,9 @@ class _FakeMcpTransport implements McpTransport {
       );
     }
     if (method == 'tools/list') {
-      return const McpJsonRpcResponse(
+      return McpJsonRpcResponse(
         id: 2,
-        result: <String, Object?>{
-          'tools': <Map<String, Object?>>[
-            <String, Object?>{
-              'name': 'ping',
-              'description': 'Returns pong',
-              'inputSchema': <String, Object?>{'type': 'object'},
-            },
-          ],
-        },
+        result: <String, Object?>{'tools': tools},
       );
     }
     throw StateError('Unexpected method: $method');

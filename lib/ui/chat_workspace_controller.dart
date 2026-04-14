@@ -5,7 +5,7 @@ import 'package:openreef/memory/chat_session_record.dart';
 import 'package:openreef/memory/chat_session_repository.dart';
 import 'package:openreef/ui/chat_session_port.dart';
 
-enum AppShellDestination { chat, settings, skills, mcp }
+enum AppShellDestination { chat, settings, skills, automation, mcp, memory }
 
 class ChatWorkspaceSession {
   ChatWorkspaceSession({required this.record, required this.chatSession});

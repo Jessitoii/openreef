@@ -68,6 +68,43 @@ class McpConnectionStore {
     return endpoint;
   }
 
+  Future<McpPersistedEndpoint> saveConnectorEndpoint({
+    required String connectorId,
+    required String runtimeUrl,
+    required bool trusted,
+    required String credentialRef,
+    required String credentialType,
+  }) async {
+    final now = _clock().toUtc();
+    final normalized = McpEndpointPolicy.normalizeForPersistence(
+      id: _idGenerator(),
+      rawUrl: runtimeUrl,
+      trusted: trusted,
+      migrationState: McpPersistedEndpointMigrationState.nativeTrusted,
+      createdAt: now,
+      persistedAt: now,
+    );
+    final endpoint = normalized.endpoint.copyWith(
+      trusted: trusted,
+      connectorId: connectorId,
+      credentialRef: credentialRef,
+      credentialType: credentialType,
+      requiresSecret: false,
+      secretRef: null,
+    );
+    await _storage.saveRecord(
+      MemoryRecord(
+        store: MemoryStoreKind.mcpConnections,
+        key: endpoint.storageKey,
+        content: endpoint.encode(),
+        category: 'mcp_connection',
+        importance: 0,
+        createdAt: now,
+      ),
+    );
+    return endpoint;
+  }
+
   Future<void> deleteById(String endpointId) async {
     await _secretStore.deleteSecret(endpointId);
     await _storage.deleteRecord(_keyFor(endpointId));
@@ -91,6 +128,9 @@ class McpConnectionStore {
   }
 
   Future<String?> resolveRuntimeUrl(McpPersistedEndpoint endpoint) async {
+    if (endpoint.connectorId != null) {
+      return endpoint.buildRuntimeUri();
+    }
     if (endpoint.requiresManualSecretEntry) {
       return null;
     }
@@ -208,6 +248,10 @@ extension on McpPersistedEndpoint {
     bool? trusted,
     String? secretRef,
     McpPersistedEndpointMigrationState? migrationState,
+    String? connectorId,
+    String? credentialRef,
+    String? credentialType,
+    bool? requiresSecret,
   }) {
     return McpPersistedEndpoint(
       id: id,
@@ -217,8 +261,11 @@ extension on McpPersistedEndpoint {
       path: path,
       publicQuerySegments: publicQuerySegments,
       trusted: trusted ?? this.trusted,
-      secretRef: secretRef,
-      requiresSecret: requiresSecret,
+      secretRef: secretRef ?? this.secretRef,
+      requiresSecret: requiresSecret ?? this.requiresSecret,
+      connectorId: connectorId ?? this.connectorId,
+      credentialRef: credentialRef ?? this.credentialRef,
+      credentialType: credentialType ?? this.credentialType,
       migrationState: migrationState ?? this.migrationState,
       createdAt: createdAt,
       persistedAt: persistedAt,

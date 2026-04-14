@@ -134,4 +134,52 @@ void main() {
 
     expect(expired, isNull);
   });
+
+  test('updates records and bulk deletes by store and category', () async {
+    final now = DateTime.now().toUtc();
+    await storage.saveRecord(
+      MemoryRecord(
+        store: MemoryStoreKind.longTerm,
+        key: 'long-1',
+        content: 'Original long-term memory',
+        category: 'user_prefs',
+        importance: 5,
+        createdAt: now,
+      ),
+    );
+    await storage.saveRecord(
+      MemoryRecord(
+        store: MemoryStoreKind.shortTerm,
+        key: 'short-1',
+        content: 'Temporary memory',
+        category: 'turn_status',
+        importance: 1,
+        createdAt: now,
+        expiresAt: now.add(const Duration(hours: 1)),
+      ),
+    );
+
+    await storage.saveRecord(
+      MemoryRecord(
+        store: MemoryStoreKind.longTerm,
+        key: 'long-1',
+        content: 'Updated long-term memory',
+        category: 'user_prefs',
+        importance: 4,
+        createdAt: now,
+      ),
+    );
+
+    final updated = await storage.readRecord('long-1', store: MemoryStoreKind.longTerm);
+    expect(updated?.content, 'Updated long-term memory');
+    expect(updated?.importance, 4);
+
+    await storage.deleteRecords(store: MemoryStoreKind.shortTerm, category: 'turn_status');
+    final deletedShort = await storage.readRecord('short-1', store: MemoryStoreKind.shortTerm);
+    expect(deletedShort, isNull);
+
+    await storage.deleteRecords(store: MemoryStoreKind.longTerm);
+    final deletedLong = await storage.readRecord('long-1', store: MemoryStoreKind.longTerm);
+    expect(deletedLong, isNull);
+  });
 }

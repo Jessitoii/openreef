@@ -43,12 +43,15 @@ class MainActivity : FlutterActivity() {
     private var wakeWordChannel: MethodChannel? = null
     private var wakeWordEventChannel: EventChannel? = null
     private var mcpSecretStoreChannel: MethodChannel? = null
+    private var mcpOAuthBridgeChannel: MethodChannel? = null
+    private var pendingOAuthCallbackUri: String? = null
     private val permissionCallbacks = mutableMapOf<Int, (Boolean) -> Unit>()
     private var nextPermissionRequestCode = 2000
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         TriggerChannelBridge.registerGlobalPollingWork(applicationContext)
+        captureOAuthCallbackFromIntent(intent)
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -206,6 +209,21 @@ class MainActivity : FlutterActivity() {
                     }
                 }
         }
+        if (mcpOAuthBridgeChannel == null) {
+            mcpOAuthBridgeChannel =
+                MethodChannel(
+                    flutterEngine.dartExecutor.binaryMessenger,
+                    "openreef/mcp_oauth_bridge",
+                )
+        }
+        dispatchPendingOAuthCallback()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        captureOAuthCallbackFromIntent(intent)
+        dispatchPendingOAuthCallback()
     }
 
     override fun onDestroy() {
@@ -219,8 +237,31 @@ class MainActivity : FlutterActivity() {
         wakeWordEventChannel = null
         mcpSecretStoreChannel?.setMethodCallHandler(null)
         mcpSecretStoreChannel = null
+        mcpOAuthBridgeChannel = null
         OpenReefForegroundService.attachEventSink(null)
         super.onDestroy()
+    }
+
+    private fun captureOAuthCallbackFromIntent(intent: Intent?) {
+        val dataString = intent?.dataString ?: return
+        val uri = Uri.parse(dataString)
+        if (uri.scheme != "openreef" || uri.host != "oauth") {
+            return
+        }
+        pendingOAuthCallbackUri = dataString
+    }
+
+    private fun dispatchPendingOAuthCallback() {
+        val channel = mcpOAuthBridgeChannel ?: return
+        val callbackUri = pendingOAuthCallbackUri ?: return
+        pendingOAuthCallbackUri = null
+        channel.invokeMethod(
+            "oauthCallback",
+            mapOf(
+                "uri" to callbackUri,
+                "source" to "android_intent",
+            ),
+        )
     }
 
     override fun onRequestPermissionsResult(

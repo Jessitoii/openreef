@@ -58,6 +58,168 @@ class SqliteMemoryStorageBackend implements MemoryStorageBackend {
   }
 
   @override
+  Future<MemoryMutationResult> saveRecordSafely(
+    MemoryRecord record, {
+    MemoryRecord? previousRecord,
+    MemoryEmbeddingRecord? preparedEmbedding,
+    Future<void> Function()? rebuildIndex,
+  }) async {
+    final isLongTerm = record.store == MemoryStoreKind.longTerm ||
+        previousRecord?.store == MemoryStoreKind.longTerm;
+    if (previousRecord != null && previousRecord.store != record.store) {
+      return MemoryMutationResult(
+        status: MemoryMutationStatus.failedNoWrite,
+        stage: MemoryMutationStage.validation,
+        message: 'Store changes are not allowed for existing memory records.',
+        store: previousRecord.store,
+        affectedKey: record.key,
+        rollbackSucceeded: true,
+      );
+    }
+    if (isLongTerm && rebuildIndex == null) {
+      return MemoryMutationResult(
+        status: MemoryMutationStatus.failedNoWrite,
+        stage: MemoryMutationStage.validation,
+        message: 'Long-term mutations require an index rebuild callback.',
+        store: record.store,
+        affectedKey: record.key,
+        rollbackSucceeded: true,
+      );
+    }
+
+    if (record.store != MemoryStoreKind.longTerm) {
+      try {
+        final database = await _requireDatabase();
+        await database.transaction((txn) async {
+          await txn.insert(
+            memoryTable,
+            record.toDatabaseMap()..remove('id'),
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
+          if (previousRecord != null && previousRecord.key != record.key) {
+            await txn.delete(
+              memoryTable,
+              where: 'memory_key = ?',
+              whereArgs: <Object?>[previousRecord.key],
+            );
+            await txn.delete(
+              embeddingTable,
+              where: 'memory_key = ?',
+              whereArgs: <Object?>[previousRecord.key],
+            );
+          }
+        });
+        if (rebuildIndex != null) {
+          await rebuildIndex();
+        }
+        return MemoryMutationResult.success(
+          message: 'Record committed.',
+          store: record.store,
+          affectedKey: record.key,
+        );
+      } catch (error) {
+        return MemoryMutationResult(
+          status: MemoryMutationStatus.failedNoWrite,
+          stage: MemoryMutationStage.rowWrite,
+          message: error.toString(),
+          store: record.store,
+          affectedKey: record.key,
+          rollbackSucceeded: true,
+        );
+      }
+    }
+
+    final database = await _requireDatabase();
+    final priorRecord = previousRecord;
+    final priorKey = priorRecord?.key;
+    final newKey = record.key;
+    MemoryEmbeddingRecord? priorEmbedding;
+    if (priorKey != null) {
+      priorEmbedding = await fetchEmbedding(priorKey);
+    }
+    final embeddingRecord = preparedEmbedding;
+    if (embeddingRecord == null) {
+      return MemoryMutationResult(
+        status: MemoryMutationStatus.failedNoWrite,
+        stage: MemoryMutationStage.embeddingCompute,
+        message: 'Embedding support is unavailable.',
+        store: record.store,
+        affectedKey: record.key,
+        rollbackSucceeded: true,
+      );
+    }
+    try {
+      await database.transaction((txn) async {
+        await txn.insert(
+          memoryTable,
+          record.toDatabaseMap()..remove('id'),
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+        await txn.insert(
+          embeddingTable,
+          <String, Object?>{
+            'memory_key': embeddingRecord.memoryKey,
+            'model_id': embeddingRecord.modelId,
+            'embedding': embeddingRecord.toBlob(),
+            'normalized_content': embeddingRecord.normalizedContent,
+            'updated_at': embeddingRecord.updatedAt.toUtc().toIso8601String(),
+          },
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+        if (priorKey != null && priorKey != newKey) {
+          await txn.delete(
+            memoryTable,
+            where: 'memory_key = ?',
+            whereArgs: <Object?>[priorKey],
+          );
+          await txn.delete(
+            embeddingTable,
+            where: 'memory_key = ?',
+            whereArgs: <Object?>[priorKey],
+          );
+        }
+      });
+    } catch (error) {
+      return MemoryMutationResult(
+        status: MemoryMutationStatus.failedRolledBack,
+        stage: MemoryMutationStage.rowWrite,
+        message: error.toString(),
+        store: record.store,
+        affectedKey: record.key,
+        rollbackSucceeded: true,
+      );
+    }
+
+    if (rebuildIndex != null) {
+      try {
+        await rebuildIndex();
+      } catch (error) {
+        final rollback = await _restoreLongTermRecord(
+          previousRecord: priorRecord,
+          previousEmbedding: priorEmbedding,
+          currentRecord: record,
+        );
+        return MemoryMutationResult(
+          status: rollback
+              ? MemoryMutationStatus.failedRolledBack
+              : MemoryMutationStatus.failedInconsistentManualRepairNeeded,
+          stage: MemoryMutationStage.indexRebuild,
+          message: error.toString(),
+          store: record.store,
+          affectedKey: record.key,
+          rollbackSucceeded: rollback,
+        );
+      }
+    }
+
+    return MemoryMutationResult.success(
+      message: 'Record committed.',
+      store: record.store,
+      affectedKey: record.key,
+    );
+  }
+
+  @override
   Future<MemoryRecord?> fetchRecord(
     String key, {
     MemoryStoreKind? store,
@@ -87,6 +249,18 @@ class SqliteMemoryStorageBackend implements MemoryStorageBackend {
     MemoryStoreKind? store,
     bool includeExpired = false,
   }) async {
+    final result = await fetchRecordsWithReport(
+      store: store,
+      includeExpired: includeExpired,
+    );
+    return result.records;
+  }
+
+  @override
+  Future<MemoryReadResult> fetchRecordsWithReport({
+    MemoryStoreKind? store,
+    bool includeExpired = false,
+  }) async {
     final database = await _requireDatabase();
     final rows = await database.query(
       memoryTable,
@@ -95,10 +269,19 @@ class SqliteMemoryStorageBackend implements MemoryStorageBackend {
         store: store,
         includeExpired: includeExpired,
       ),
-      orderBy: 'category ASC, importance DESC, created_at DESC',
+      orderBy: 'created_at DESC',
     );
 
-    return rows.map(MemoryRecord.fromDatabaseMap).toList();
+    final records = <MemoryRecord>[];
+    var skippedCount = 0;
+    for (final row in rows) {
+      try {
+        records.add(MemoryRecord.fromDatabaseMap(row));
+      } catch (_) {
+        skippedCount += 1;
+      }
+    }
+    return MemoryReadResult(records: records, skippedCount: skippedCount);
   }
 
   @override
@@ -283,6 +466,247 @@ class SqliteMemoryStorageBackend implements MemoryStorageBackend {
   }
 
   @override
+  Future<MemoryMutationResult> deleteRecordSafely(
+    MemoryRecord record, {
+    Future<void> Function()? rebuildIndex,
+  }) async {
+    if (record.store == MemoryStoreKind.longTerm && rebuildIndex == null) {
+      return MemoryMutationResult(
+        status: MemoryMutationStatus.failedNoWrite,
+        stage: MemoryMutationStage.validation,
+        message: 'Long-term deletes require an index rebuild callback.',
+        store: record.store,
+        affectedKey: record.key,
+        rollbackSucceeded: true,
+      );
+    }
+    if (record.store != MemoryStoreKind.longTerm) {
+      try {
+        final database = await _requireDatabase();
+        await database.transaction((txn) async {
+          await txn.delete(
+            embeddingTable,
+            where: 'memory_key = ?',
+            whereArgs: <Object?>[record.key],
+          );
+          await txn.delete(
+            memoryTable,
+            where: 'memory_key = ?',
+            whereArgs: <Object?>[record.key],
+          );
+        });
+        if (rebuildIndex != null) {
+          await rebuildIndex();
+        }
+        return MemoryMutationResult.success(
+          message: 'Record deleted.',
+          store: record.store,
+          affectedKey: record.key,
+        );
+      } catch (error) {
+        return MemoryMutationResult(
+          status: MemoryMutationStatus.failedNoWrite,
+          stage: MemoryMutationStage.rowWrite,
+          message: error.toString(),
+          store: record.store,
+          affectedKey: record.key,
+          rollbackSucceeded: true,
+        );
+      }
+    }
+
+    final database = await _requireDatabase();
+    final priorEmbedding = await fetchEmbedding(record.key);
+    final snapshot = record;
+    try {
+      await database.transaction((txn) async {
+        await txn.delete(
+          embeddingTable,
+          where: 'memory_key = ?',
+          whereArgs: <Object?>[record.key],
+        );
+        await txn.delete(
+          memoryTable,
+          where: 'memory_key = ?',
+          whereArgs: <Object?>[record.key],
+        );
+      });
+    } catch (error) {
+      return MemoryMutationResult(
+        status: MemoryMutationStatus.failedRolledBack,
+        stage: MemoryMutationStage.rowWrite,
+        message: error.toString(),
+        store: record.store,
+        affectedKey: record.key,
+        rollbackSucceeded: true,
+      );
+    }
+
+    if (rebuildIndex != null) {
+      try {
+        await rebuildIndex();
+      } catch (error) {
+        final rollback = await _restoreLongTermRecord(
+          previousRecord: snapshot,
+          previousEmbedding: priorEmbedding,
+          currentRecord: null,
+        );
+        return MemoryMutationResult(
+          status: rollback
+              ? MemoryMutationStatus.failedRolledBack
+              : MemoryMutationStatus.failedInconsistentManualRepairNeeded,
+          stage: MemoryMutationStage.indexRebuild,
+          message: error.toString(),
+          store: record.store,
+          affectedKey: record.key,
+          rollbackSucceeded: rollback,
+        );
+      }
+    }
+
+    return MemoryMutationResult.success(
+      message: 'Record deleted.',
+      store: record.store,
+      affectedKey: record.key,
+    );
+  }
+
+  @override
+  Future<void> deleteRecords({
+    MemoryStoreKind? store,
+    bool includeExpired = true,
+    String? category,
+  }) async {
+    final database = await _requireDatabase();
+    final clauses = <String>[];
+    final args = <Object?>[];
+    if (store != null) {
+      clauses.add('store_kind = ?');
+      args.add(store.value);
+    }
+    if (category != null && category.isNotEmpty) {
+      clauses.add('category = ?');
+      args.add(category);
+    }
+    if (!includeExpired) {
+      clauses.add('(expires_at IS NULL OR expires_at > ?)');
+      args.add(DateTime.now().toUtc().toIso8601String());
+    }
+    final whereClause = clauses.isEmpty ? null : clauses.join(' AND ');
+    final rows = await database.query(
+      memoryTable,
+      columns: <String>['memory_key'],
+      where: whereClause,
+      whereArgs: args.isEmpty ? null : args,
+    );
+    if (rows.isEmpty) {
+      return;
+    }
+    final keys = rows
+        .map((row) => row['memory_key'] as String?)
+        .whereType<String>()
+        .toList(growable: false);
+    final batch = database.batch();
+    for (final key in keys) {
+      batch.delete(
+        embeddingTable,
+        where: 'memory_key = ?',
+        whereArgs: <Object?>[key],
+      );
+      batch.delete(
+        memoryTable,
+        where: 'memory_key = ?',
+        whereArgs: <Object?>[key],
+      );
+    }
+    await batch.commit(noResult: true);
+  }
+
+  @override
+  Future<MemoryMutationResult> deleteRecordsSafely(
+    List<MemoryRecord> records, {
+    Future<void> Function()? rebuildIndex,
+  }) async {
+    if (records.isEmpty) {
+      return MemoryMutationResult.success(
+        message: 'No records matched the deletion scope.',
+        store: MemoryStoreKind.shortTerm,
+      );
+    }
+
+    final snapshots = <String, MemoryRecord>{};
+    final embeddings = <String, MemoryEmbeddingRecord?>{};
+    for (final record in records) {
+      snapshots[record.key] = record;
+      embeddings[record.key] = await fetchEmbedding(record.key);
+    }
+
+    final database = await _requireDatabase();
+    try {
+      await database.transaction((txn) async {
+        for (final record in records) {
+          await txn.delete(
+            embeddingTable,
+            where: 'memory_key = ?',
+            whereArgs: <Object?>[record.key],
+          );
+          await txn.delete(
+            memoryTable,
+            where: 'memory_key = ?',
+            whereArgs: <Object?>[record.key],
+          );
+        }
+      });
+    } catch (error) {
+      return MemoryMutationResult(
+        status: MemoryMutationStatus.failedRolledBack,
+        stage: MemoryMutationStage.rowWrite,
+        message: error.toString(),
+        store: records.first.store,
+        affectedKey: records.first.key,
+        rollbackSucceeded: true,
+      );
+    }
+    if (records.any((record) => record.store == MemoryStoreKind.longTerm) &&
+        rebuildIndex == null) {
+      return MemoryMutationResult(
+        status: MemoryMutationStatus.failedNoWrite,
+        stage: MemoryMutationStage.validation,
+        message: 'Long-term bulk deletes require an index rebuild callback.',
+        store: MemoryStoreKind.longTerm,
+        rollbackSucceeded: true,
+      );
+    }
+
+    if (records.any((record) => record.store == MemoryStoreKind.longTerm) &&
+        rebuildIndex != null) {
+      try {
+        await rebuildIndex();
+      } catch (error) {
+        final rollback = await _restoreBulkLongTermRecords(
+          snapshots: snapshots,
+          embeddings: embeddings,
+        );
+        return MemoryMutationResult(
+          status: rollback
+              ? MemoryMutationStatus.failedRolledBack
+              : MemoryMutationStatus.failedInconsistentManualRepairNeeded,
+          stage: MemoryMutationStage.indexRebuild,
+          message: error.toString(),
+          store: MemoryStoreKind.longTerm,
+          rollbackSucceeded: rollback,
+        );
+      }
+    }
+
+    return MemoryMutationResult.success(
+      message: 'Records deleted.',
+      store: records.first.store,
+      affectedKey: records.first.key,
+    );
+  }
+
+  @override
   Future<void> savePointer(MemoryPointer pointer) async {
     final database = await _requireDatabase();
     await database.insert(
@@ -457,5 +881,114 @@ class SqliteMemoryStorageBackend implements MemoryStorageBackend {
     }
 
     return dot / (sqrt(leftMagnitude) * sqrt(rightMagnitude));
+  }
+
+  Future<bool> _restoreLongTermRecord({
+    required MemoryRecord? previousRecord,
+    required MemoryEmbeddingRecord? previousEmbedding,
+    required MemoryRecord? currentRecord,
+  }) async {
+    final database = await _requireDatabase();
+    try {
+      await database.transaction((txn) async {
+        if (previousRecord != null) {
+          await txn.insert(
+            memoryTable,
+            previousRecord.toDatabaseMap()..remove('id'),
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
+          if (previousEmbedding != null) {
+            await txn.insert(
+              embeddingTable,
+              <String, Object?>{
+                'memory_key': previousEmbedding.memoryKey,
+                'model_id': previousEmbedding.modelId,
+                'embedding': previousEmbedding.toBlob(),
+                'normalized_content': previousEmbedding.normalizedContent,
+                'updated_at': previousEmbedding.updatedAt.toUtc().toIso8601String(),
+              },
+              conflictAlgorithm: ConflictAlgorithm.replace,
+            );
+          } else {
+            await txn.delete(
+              embeddingTable,
+              where: 'memory_key = ?',
+              whereArgs: <Object?>[previousRecord.key],
+            );
+          }
+        } else {
+          if (currentRecord != null) {
+            await txn.delete(
+              embeddingTable,
+              where: 'memory_key = ?',
+              whereArgs: <Object?>[currentRecord.key],
+            );
+            await txn.delete(
+              memoryTable,
+              where: 'memory_key = ?',
+              whereArgs: <Object?>[currentRecord.key],
+            );
+          }
+        }
+
+        if (currentRecord != null && previousRecord != null &&
+            currentRecord.key != previousRecord.key) {
+          await txn.delete(
+            embeddingTable,
+            where: 'memory_key = ?',
+            whereArgs: <Object?>[currentRecord.key],
+          );
+          await txn.delete(
+            memoryTable,
+            where: 'memory_key = ?',
+            whereArgs: <Object?>[currentRecord.key],
+          );
+        }
+      });
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> _restoreBulkLongTermRecords({
+    required Map<String, MemoryRecord> snapshots,
+    required Map<String, MemoryEmbeddingRecord?> embeddings,
+  }) async {
+    final database = await _requireDatabase();
+    try {
+      await database.transaction((txn) async {
+        for (final entry in snapshots.entries) {
+          await txn.insert(
+            memoryTable,
+            entry.value.toDatabaseMap()..remove('id'),
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
+          final embedding = embeddings[entry.key];
+          if (embedding != null) {
+            await txn.insert(
+              embeddingTable,
+              <String, Object?>{
+                'memory_key': embedding.memoryKey,
+                'model_id': embedding.modelId,
+                'embedding': embedding.toBlob(),
+                'normalized_content': embedding.normalizedContent,
+                'updated_at': embedding.updatedAt.toUtc().toIso8601String(),
+              },
+              conflictAlgorithm: ConflictAlgorithm.replace,
+            );
+          } else {
+            await txn.delete(
+              embeddingTable,
+              where: 'memory_key = ?',
+              whereArgs: <Object?>[entry.key],
+            );
+          }
+        }
+      });
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 }

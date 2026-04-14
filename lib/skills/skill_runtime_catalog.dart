@@ -27,6 +27,9 @@ class SkillRuntimeCatalog extends ChangeNotifier implements SkillCatalog {
   List<SkillRuntimeSnapshot> get snapshots =>
       List<SkillRuntimeSnapshot>.unmodifiable(_snapshots);
 
+  Map<String, bool> get enabledById =>
+      Map<String, bool>.unmodifiable(_enabledById);
+
   Future<void> reload() async {
     final discovered = await _registry.discoverSkills();
     _enabledById = await _loadEnabledState();

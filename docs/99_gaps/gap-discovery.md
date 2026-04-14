@@ -726,7 +726,7 @@ Validate the full skill path:
 
 ### Status
 
-Open
+CLOSED
 
 ### Severity
 
@@ -1106,10 +1106,23 @@ Users need transparency and control over what the agent remembers. Without a man
 A dedicated Memory Management page accessible via the navigation drawer where users can:
 
 *   View all stored memory fragments
-*   Edit existing memories
-*   Delete specific or all memories
+*   Edit existing memories with store-safe constraints
+*   Delete specific or scoped memory sets with confirmation
 *   Manually add new memory context
 *   Search and filter memories by content or metadata
+*   Show truthful metadata only when it exists in storage
+
+### Implementation Notes
+
+The UI is backed by the real SQLite memory store and exposes only fields the
+current storage model can truthfully surface.
+
+Known limitations:
+
+*   source/session provenance is only shown when present in `metadata`
+*   store reassignment is not exposed through the edit form
+*   long-term edits preserve embedding/index consistency through the runtime
+    embedder when available, otherwise the UI blocks unsupported mutations
 
 ---
 

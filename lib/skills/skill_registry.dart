@@ -30,6 +30,8 @@ class SkillRegistry {
   final List<SkillRegistryRoot> _roots;
   final SkillFrontmatterParser _parser;
 
+  List<SkillRegistryRoot> get roots => List<SkillRegistryRoot>.unmodifiable(_roots);
+
   Future<List<Skill>> discoverSkills() async {
     final discovered = <Skill>[];
 

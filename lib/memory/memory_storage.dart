@@ -1,8 +1,8 @@
 import 'package:openreef/memory/memory_pointer.dart';
 import 'package:openreef/memory/memory_embedding_record.dart';
 import 'package:openreef/memory/memory_record.dart';
-import 'package:openreef/memory/semantic_memory_match.dart';
 import 'package:openreef/memory/memory_storage_backend.dart';
+import 'package:openreef/memory/semantic_memory_match.dart';
 import 'package:openreef/memory/memory_store_kind.dart';
 
 class MemoryStorage {
@@ -13,6 +13,20 @@ class MemoryStorage {
   Future<void> initialize() => _backend.initialize();
 
   Future<void> saveRecord(MemoryRecord record) => _backend.saveRecord(record);
+
+  Future<MemoryMutationResult> saveRecordSafely(
+    MemoryRecord record, {
+    MemoryRecord? previousRecord,
+    MemoryEmbeddingRecord? preparedEmbedding,
+    Future<void> Function()? rebuildIndex,
+  }) {
+    return _backend.saveRecordSafely(
+      record,
+      previousRecord: previousRecord,
+      preparedEmbedding: preparedEmbedding,
+      rebuildIndex: rebuildIndex,
+    );
+  }
 
   Future<MemoryRecord?> readRecord(
     String key, {
@@ -56,6 +70,16 @@ class MemoryStorage {
     );
   }
 
+  Future<MemoryReadResult> readRecordsWithReport({
+    MemoryStoreKind? store,
+    bool includeExpired = false,
+  }) {
+    return _backend.fetchRecordsWithReport(
+      store: store,
+      includeExpired: includeExpired,
+    );
+  }
+
   Future<List<SemanticMemoryMatch>> searchByEmbedding({
     required List<double> queryEmbedding,
     int limit = 5,
@@ -75,6 +99,38 @@ class MemoryStorage {
   }
 
   Future<void> deleteRecord(String key) => _backend.deleteRecord(key);
+
+  Future<MemoryMutationResult> deleteRecordSafely(
+    MemoryRecord record, {
+    Future<void> Function()? rebuildIndex,
+  }) {
+    return _backend.deleteRecordSafely(
+      record,
+      rebuildIndex: rebuildIndex,
+    );
+  }
+
+  Future<void> deleteRecords({
+    MemoryStoreKind? store,
+    bool includeExpired = true,
+    String? category,
+  }) {
+    return _backend.deleteRecords(
+      store: store,
+      includeExpired: includeExpired,
+      category: category,
+    );
+  }
+
+  Future<MemoryMutationResult> deleteRecordsSafely(
+    List<MemoryRecord> records, {
+    Future<void> Function()? rebuildIndex,
+  }) {
+    return _backend.deleteRecordsSafely(
+      records,
+      rebuildIndex: rebuildIndex,
+    );
+  }
 
   Future<void> savePointer(MemoryPointer pointer) => _backend.savePointer(pointer);
 

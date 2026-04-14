@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:openreef/memory/chat_session_repository.dart';
+import 'package:openreef/memory/memory_index.dart';
+import 'package:openreef/memory/memory_storage.dart';
 import 'package:openreef/models/embedding_model_manager.dart';
 import 'package:openreef/models/model_download_controller.dart';
 import 'package:openreef/settings/settings_controller.dart';
 import 'package:openreef/skills/skill_registry_controller.dart';
+import 'package:openreef/ui/automation_controller.dart';
 import 'package:openreef/ui/app_shell.dart';
 import 'package:openreef/ui/app_theme.dart';
 import 'package:openreef/ui/chat_session_port.dart';
@@ -18,11 +21,14 @@ class OpenReefApp extends StatelessWidget {
     this.wakeWordController,
     required this.modelDownloadController,
     required this.skillRegistryController,
+    this.automationController,
     required this.mcpConnectionsController,
     required this.modelReady,
     required this.onModelReady,
     this.embeddingModelManager,
     this.chatSessionRepository,
+    required this.memoryStorage,
+    required this.memoryIndex,
     super.key,
   });
 
@@ -31,11 +37,14 @@ class OpenReefApp extends StatelessWidget {
   final WakeWordController? wakeWordController;
   final ModelDownloadController modelDownloadController;
   final SkillRegistryController skillRegistryController;
+  final AutomationController? automationController;
   final McpConnectionsController mcpConnectionsController;
   final bool modelReady;
   final Future<void> Function() onModelReady;
   final EmbeddingModelManager? embeddingModelManager;
   final ChatSessionRepository? chatSessionRepository;
+  final MemoryStorage memoryStorage;
+  final MemoryIndex memoryIndex;
 
   @override
   Widget build(BuildContext context) {
@@ -55,10 +64,13 @@ class OpenReefApp extends StatelessWidget {
                   wakeWordController: wakeWordController,
                   modelDownloadController: modelDownloadController,
                   skillRegistryController: skillRegistryController,
+                  automationController: automationController,
                   mcpConnectionsController: mcpConnectionsController,
                   onModelReady: onModelReady,
                   embeddingModelManager: embeddingModelManager,
                   chatSessionRepository: chatSessionRepository,
+                  memoryStorage: memoryStorage,
+                  memoryIndex: memoryIndex,
                 )
               : ModelDownloadScreen(
                   controller: modelDownloadController,

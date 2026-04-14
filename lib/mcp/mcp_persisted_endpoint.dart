@@ -95,6 +95,9 @@ class McpPersistedEndpoint {
     this.trusted = false,
     this.secretRef,
     this.requiresSecret = false,
+    this.connectorId,
+    this.credentialRef,
+    this.credentialType,
     this.migrationState =
         McpPersistedEndpointMigrationState.manualReentryRequired,
   });
@@ -119,6 +122,9 @@ class McpPersistedEndpoint {
       trusted: json['trusted'] as bool? ?? false,
       secretRef: json['secretRef'] as String?,
       requiresSecret: json['requiresSecret'] as bool? ?? false,
+      connectorId: json['connectorId'] as String?,
+      credentialRef: json['credentialRef'] as String?,
+      credentialType: json['credentialType'] as String?,
       migrationState: McpPersistedEndpointMigrationState.fromValue(
         json['migrationState'] as String? ?? '',
       ),
@@ -140,6 +146,9 @@ class McpPersistedEndpoint {
   final bool trusted;
   final String? secretRef;
   final bool requiresSecret;
+  final String? connectorId;
+  final String? credentialRef;
+  final String? credentialType;
   final McpPersistedEndpointMigrationState migrationState;
   final DateTime createdAt;
   final DateTime persistedAt;
@@ -180,6 +189,9 @@ class McpPersistedEndpoint {
       'trusted': trusted,
       'secretRef': secretRef,
       'requiresSecret': requiresSecret,
+      'connectorId': connectorId,
+      'credentialRef': credentialRef,
+      'credentialType': credentialType,
       'migrationState': migrationState.name,
       'createdAt': createdAt.toUtc().toIso8601String(),
       'persistedAt': persistedAt.toUtc().toIso8601String(),

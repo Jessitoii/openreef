@@ -214,16 +214,67 @@ class _NoopMemoryStorageBackend implements MemoryStorageBackend {
   }) async => const <MemoryRecord>[];
 
   @override
+  Future<MemoryReadResult> fetchRecordsWithReport({
+    MemoryStoreKind? store,
+    bool includeExpired = false,
+  }) async =>
+      const MemoryReadResult(records: <MemoryRecord>[], skippedCount: 0);
+
+  @override
   Future<void> initialize() async {}
 
   @override
   Future<void> saveEmbedding(MemoryEmbeddingRecord record) async {}
 
   @override
+  Future<MemoryMutationResult> saveRecordSafely(
+    MemoryRecord record, {
+    MemoryRecord? previousRecord,
+    MemoryEmbeddingRecord? preparedEmbedding,
+    Future<void> Function()? rebuildIndex,
+  }) async {
+    return MemoryMutationResult.success(
+      message: 'noop',
+      store: record.store,
+      affectedKey: record.key,
+    );
+  }
+
+  @override
   Future<void> savePointer(MemoryPointer pointer) async {}
 
   @override
   Future<void> saveRecord(MemoryRecord record) async {}
+
+  @override
+  Future<MemoryMutationResult> deleteRecordSafely(
+    MemoryRecord record, {
+    Future<void> Function()? rebuildIndex,
+  }) async {
+    return MemoryMutationResult.success(
+      message: 'noop',
+      store: record.store,
+      affectedKey: record.key,
+    );
+  }
+
+  @override
+  Future<void> deleteRecords({
+    MemoryStoreKind? store,
+    bool includeExpired = true,
+    String? category,
+  }) async {}
+
+  @override
+  Future<MemoryMutationResult> deleteRecordsSafely(
+    List<MemoryRecord> records, {
+    Future<void> Function()? rebuildIndex,
+  }) async {
+    return MemoryMutationResult.success(
+      message: 'noop',
+      store: records.isEmpty ? MemoryStoreKind.shortTerm : records.first.store,
+    );
+  }
 
   @override
   Future<List<SemanticMemoryMatch>> searchByEmbedding({

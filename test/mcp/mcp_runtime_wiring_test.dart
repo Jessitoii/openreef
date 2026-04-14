@@ -61,7 +61,9 @@ void main() {
         ),
         runtimeCoordinator: runtimeCoordinator,
         autoConnectPersisted: false,
-        transportFactory: (endpoint) => _SequencedMcpTransport(
+        secretStore: InMemoryMcpSecretStore(),
+        transportFactory: (endpoint, {headers = const <String, String>{}, headersProvider}) =>
+            _SequencedMcpTransport(
           endpoint: endpoint,
           toolLists: <List<Map<String, Object?>>>[
             <Map<String, Object?>>[
@@ -144,7 +146,9 @@ void main() {
       store: McpConnectionStore(storage, secretStore: InMemoryMcpSecretStore()),
       runtimeCoordinator: runtimeCoordinator,
       autoConnectPersisted: false,
-      transportFactory: (endpoint) => transport,
+      secretStore: InMemoryMcpSecretStore(),
+      transportFactory: (endpoint, {headers = const <String, String>{}, headersProvider}) =>
+          transport,
     );
 
     await controller.connect('https://docs.example.com/sse', persist: false);
@@ -203,7 +207,9 @@ void main() {
         ),
         runtimeCoordinator: runtimeCoordinator,
         autoConnectPersisted: false,
-        transportFactory: (endpoint) => transport,
+        secretStore: InMemoryMcpSecretStore(),
+        transportFactory: (endpoint, {headers = const <String, String>{}, headersProvider}) =>
+            transport,
       );
 
       await controller.connect('https://docs.example.com/sse', persist: false);
