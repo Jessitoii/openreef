@@ -1,4 +1,5 @@
-import 'package:openreef/tools/native_tool_errors.dart';
+import 'package:openreef/tools/tool_execution_context.dart';
+import 'package:openreef/tools/tool_errors.dart';
 
 enum ToolArgumentType { string, integer, doubleValue, boolean }
 
@@ -76,13 +77,7 @@ class ToolInvocation {
   final Map<String, Object?> arguments;
 }
 
-class NativeToolContext {
-  const NativeToolContext({DateTime Function()? clock}) : _clock = clock;
 
-  final DateTime Function()? _clock;
-
-  DateTime now() => _clock?.call() ?? DateTime.now().toUtc();
-}
 
 class NativeToolExecutionResult {
   const NativeToolExecutionResult({
@@ -105,7 +100,7 @@ class NativeToolExecutionResult {
        );
 
   NativeToolExecutionResult.failure({
-    required NativeToolError error,
+    required ToolExecutionError error,
     Map<String, Object?> metadata = const <String, Object?>{},
   }) : this(
          status: NativeToolExecutionStatus.failure,
@@ -117,7 +112,7 @@ class NativeToolExecutionResult {
   final NativeToolExecutionStatus status;
   final String content;
   final Map<String, Object?> metadata;
-  final NativeToolError? error;
+  final ToolExecutionError? error;
 
   bool get isFailure => status == NativeToolExecutionStatus.failure;
 }
@@ -129,6 +124,6 @@ abstract class NativeToolHandler {
 
   Future<NativeToolExecutionResult> execute(
     ToolInvocation invocation,
-    NativeToolContext context,
+    ToolExecutionContext context,
   );
 }

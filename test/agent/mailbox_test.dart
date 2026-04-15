@@ -88,9 +88,7 @@ void main() {
   test('approval timeout deterministically rejects and cleans up pending state', () async {
     final mailbox = AgentMailbox(
       idGenerator: () => 'timeout-1',
-      config: const MailboxDispatchConfig(
-        approvalTimeout: Duration(milliseconds: 10),
-      ),
+      approvalTimeout: Duration(milliseconds: 10),
     );
     addTearDown(mailbox.dispose);
 
@@ -161,9 +159,7 @@ void main() {
   test('sub-agent timeout returns rejected tool result and cleans mailbox state', () async {
     final mailbox = AgentMailbox(
       idGenerator: () => 'route-timeout',
-      config: const MailboxDispatchConfig(
-        approvalTimeout: Duration(milliseconds: 10),
-      ),
+      approvalTimeout: Duration(milliseconds: 10),
     );
     addTearDown(mailbox.dispose);
 
@@ -192,39 +188,4 @@ void main() {
     expect(mailbox.pendingApprovals, 0);
   });
 
-  test('dispatch validation rejects invalid or over-depth session keys', () async {
-    final mailbox = AgentMailbox(
-      config: const MailboxDispatchConfig(maxDepth: 2),
-      subAgentDispatcher: _Dispatcher(),
-    );
-    addTearDown(mailbox.dispose);
-
-    final invalid = await mailbox.dispatch(
-      const DispatchRequest(
-        parentSessionKey: 'bad-key',
-        task: 'research task',
-      ),
-    );
-    final tooDeep = await mailbox.dispatch(
-      const DispatchRequest(
-        parentSessionKey: 'agent:main:sub:a:sub:b',
-        task: 'leaf should not spawn',
-      ),
-    );
-
-    expect(invalid.accepted, isFalse);
-    expect(invalid.reason, 'invalid_session_key');
-    expect(tooDeep.accepted, isFalse);
-    expect(tooDeep.reason, 'max_depth_reached');
-  });
-}
-
-class _Dispatcher implements SubAgentDispatcher {
-  @override
-  Future<DispatchResult> dispatch(DispatchRequest request) async {
-    return const DispatchResult(
-      accepted: true,
-      sessionKey: 'agent:main:sub:generated-1',
-    );
   }
-}

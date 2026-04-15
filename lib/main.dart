@@ -318,12 +318,7 @@ class OpenReefBootstrap {
           storage: memoryStorage,
           embeddingModelManager: embeddingModelManager,
         ),
-        memoryFormer: MemoryFormer(
-          storage: memoryStorage,
-          memoryIndex: memoryIndex,
-          embeddingModelManager: embeddingModelManager,
-        ),
-        memoryIndex: memoryIndex,
+        memoryStorage: memoryStorage,
         settingsController: settingsController,
         triggerNativeSync: triggerNativeSync,
         triggerSystem: triggerSystem,

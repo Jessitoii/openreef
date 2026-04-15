@@ -1,8 +1,9 @@
+import 'package:openreef/tools/tool_execution_context.dart';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:openreef/tools/native_tool_errors.dart';
+import 'package:openreef/tools/tool_errors.dart';
 import 'package:openreef/tools/platform_native_tool_adapters.dart';
 
 void main() {
@@ -43,10 +44,10 @@ void main() {
     expect(
       () => adapter.searchContacts(limit: 5),
       throwsA(
-        isA<NativeToolException>().having(
+        isA<ToolExecutionException>().having(
           (error) => error.error.code,
           'code',
-          NativeToolErrorCode.permissionDenied,
+          ToolErrorCode.permissionDenied,
         ),
       ),
     );
@@ -90,10 +91,10 @@ void main() {
     expect(
       () => adapter.openNavigation(query: 'Istanbul Airport'),
       throwsA(
-        isA<NativeToolException>().having(
+        isA<ToolExecutionException>().having(
           (error) => error.error.code,
           'code',
-          NativeToolErrorCode.appUnavailable,
+          ToolErrorCode.appUnavailable,
         ),
       ),
     );

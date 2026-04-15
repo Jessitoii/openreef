@@ -191,7 +191,10 @@ class LiteRtBridge {
           supportsFunctionCalls: toolConfig.supportsFunctionCalls,
           toolChoice: toolConfig.toolChoice,
         );
-        debugPrint('LiteRtBridge.generateStream: addQueryChunk');
+        debugPrint('DIAGNOSTIC: Active model ID: $_activeModelId');
+        debugPrint('DIAGNOSTIC: Is marked function-capable: ${_isFunctionGemmaModel(_activeModelId)}');
+        debugPrint('DIAGNOSTIC: Tools provided to session: ${selectedTools.isNotEmpty} (count: ${selectedTools.length})');
+
         await _activeChat!.addQueryChunk(
           Message.text(text: context, isUser: true),
         );
@@ -202,6 +205,7 @@ class LiteRtBridge {
         _activeChat!.generateChatResponseAsync().listen(
           (ModelResponse response) {
             if (response is TextResponse) {
+              debugPrint('DIAGNOSTIC: Received model response type: TEXT (token: "${response.token.trim()}")');
               if (response.token.trim().isNotEmpty) {
                 emittedVisibleText = true;
               }
@@ -213,9 +217,8 @@ class LiteRtBridge {
 
             if (response is FunctionCallResponse) {
               emittedToolCall = true;
-              debugPrint(
-                'LiteRtBridge.generateStream: function call ${response.name} args=${jsonEncode(response.args)}',
-              );
+              debugPrint('DIAGNOSTIC: Received model response type: FUNCTION_CALL');
+              debugPrint('DIAGNOSTIC: Bridge emitted typed toolCall as JSON text (flattening!)');
               controller.add(
                 LiteRtGenerationEvent(
                   chunk: jsonEncode(<String, Object?>{
@@ -234,9 +237,8 @@ class LiteRtBridge {
             if (response is ParallelFunctionCallResponse) {
               emittedToolCall = true;
               final calls = response.calls;
-              debugPrint(
-                'LiteRtBridge.generateStream: parallel function calls count=${calls.length}',
-              );
+              debugPrint('DIAGNOSTIC: Received model response type: PARALLEL_FUNCTION_CALL (count=${calls.length})');
+              debugPrint('DIAGNOSTIC: Bridge emitted typed toolCalls as JSON text (flattening!)');
               controller.add(
                 LiteRtGenerationEvent(
                   chunk: jsonEncode(<String, Object?>{

@@ -3,8 +3,10 @@ import 'dart:async';
 import 'package:openreef/agent/agent_models.dart';
 import 'package:openreef/agent/mailbox.dart';
 import 'package:openreef/agent/subagent_runner.dart';
-import 'package:openreef/tools/native_tool_errors.dart';
+import 'package:openreef/tools/tool_errors.dart';
 import 'package:openreef/tools/tool_manifest.dart';
+import 'package:openreef/tools/tool_errors.dart';
+import 'package:openreef/tools/tool_execution_context.dart';
 
 class ToolDefinition {
   const ToolDefinition({
@@ -247,7 +249,7 @@ class ToolRouter {
     if (error is TimeoutException) {
       return ToolResultStatus.timeout;
     }
-    if (error is NativeToolException) {
+    if (error is ToolExecutionException) {
       return _statusForNativeErrorCode(error.error.code);
     }
     if (error is ArgumentError ||
@@ -274,16 +276,17 @@ class ToolRouter {
     return ToolResultStatus.executionError;
   }
 
-  ToolResultStatus _statusForNativeErrorCode(NativeToolErrorCode code) {
+  ToolResultStatus _statusForNativeErrorCode(ToolErrorCode code) {
     return switch (code) {
-      NativeToolErrorCode.permissionDenied ||
-      NativeToolErrorCode.permissionRequired =>
+      ToolErrorCode.permissionDenied ||
+      ToolErrorCode.permissionRequired =>
         ToolResultStatus.permissionDenied,
-      NativeToolErrorCode.invalidArguments => ToolResultStatus.validationError,
-      NativeToolErrorCode.featureUnavailable ||
-      NativeToolErrorCode.appUnavailable ||
-      NativeToolErrorCode.unsupported => ToolResultStatus.unavailable,
-      NativeToolErrorCode.operationFailed => ToolResultStatus.executionError,
+      ToolErrorCode.invalidArguments => ToolResultStatus.validationError,
+      ToolErrorCode.featureUnavailable ||
+      ToolErrorCode.appUnavailable ||
+      ToolErrorCode.unsupported => ToolResultStatus.unavailable,
+      ToolErrorCode.operationFailed || ToolErrorCode.nativeError || ToolErrorCode.mcpError || ToolErrorCode.runtimeError => ToolResultStatus.executionError,
+      ToolErrorCode.semanticError => ToolResultStatus.executionError,
     };
   }
 
@@ -291,8 +294,8 @@ class ToolRouter {
     if (error is TimeoutException) {
       return 'timeout';
     }
-    if (error is NativeToolException) {
-      return error.error.wireCode;
+    if (error is ToolExecutionException) {
+      return error.error.id;
     }
     if (error is StateError) {
       return error.message;

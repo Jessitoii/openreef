@@ -1,3 +1,4 @@
+import 'package:openreef/agent/agent_orchestrator.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:openreef/agent/agent_task_executor.dart';
 import 'package:openreef/agent/agent_models.dart';
@@ -74,9 +75,7 @@ void main() {
   test('controller clears mailbox approval after timeout resolution', () async {
     final mailbox = AgentMailbox(
       idGenerator: () => 'mailbox-timeout',
-      config: const MailboxDispatchConfig(
-        approvalTimeout: Duration(milliseconds: 10),
-      ),
+      approvalTimeout: Duration(milliseconds: 10),
     );
     addTearDown(mailbox.dispose);
     final controller = MainAgentApprovalController(mailbox: mailbox);

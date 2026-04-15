@@ -1,14 +1,15 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:openreef/memory/memory_fact.dart';
-import 'package:openreef/memory/memory_former.dart';
-import 'package:openreef/memory/memory_index.dart';
-import 'package:openreef/memory/memory_turn.dart';
+import 'package:openreef/tools/tool_errors.dart';
+import 'package:openreef/tools/tool_execution_context.dart';
+
+import 'package:openreef/memory/memory_storage.dart';
+import 'package:openreef/memory/memory_record.dart';
+import 'package:openreef/memory/memory_store_kind.dart';
 import 'package:openreef/memory/semantic_memory_retriever.dart';
 import 'package:openreef/settings/settings_controller.dart';
 import 'package:openreef/tools/native_tool_adapters.dart';
-import 'package:openreef/tools/native_tool_errors.dart';
 import 'package:openreef/tools/tool_manifest.dart';
 import 'package:openreef/triggers/trigger_native_sync.dart';
 import 'package:openreef/triggers/trigger_polling_policy.dart';
@@ -32,8 +33,7 @@ List<NativeToolHandler> createMvpNativeToolHandlers({
   required AppLauncherAdapter appLauncherAdapter,
   required ShareAdapter shareAdapter,
   required SemanticMemoryRetriever memoryRetriever,
-  required MemoryFormer memoryFormer,
-  required MemoryIndex memoryIndex,
+  required MemoryStorage memoryStorage,
   required SettingsController settingsController,
   required TriggerNativeSync triggerNativeSync,
   required TriggerSystem triggerSystem,
@@ -55,7 +55,7 @@ List<NativeToolHandler> createMvpNativeToolHandlers({
     RegexEvalToolHandler(),
     MathEvalToolHandler(),
     TtsSpeakToolHandler(ttsAdapter),
-    MemorySaveToolHandler(memoryFormer: memoryFormer, memoryIndex: memoryIndex),
+    MemorySaveToolHandler(memoryStorage: memoryStorage),
     MemorySearchToolHandler(memoryRetriever),
     NotifyToolHandler(notificationAdapter),
     AppOpenToolHandler(appLauncherAdapter),
@@ -113,7 +113,7 @@ class VolumeSetToolHandler implements NativeToolHandler {
   @override
   Future<NativeToolExecutionResult> execute(
     ToolInvocation invocation,
-    NativeToolContext context,
+    ToolExecutionContext context,
   ) async {
     final level = invocation.arguments['level'] as double;
     final normalizedLevel = level.clamp(0.0, 1.0);
@@ -148,7 +148,7 @@ class ClipboardReadToolHandler implements NativeToolHandler {
   @override
   Future<NativeToolExecutionResult> execute(
     ToolInvocation invocation,
-    NativeToolContext context,
+    ToolExecutionContext context,
   ) async {
     final text = await _adapter.readClipboardText();
     final hasContent = text != null && text.isNotEmpty;
@@ -184,7 +184,7 @@ class ClipboardWriteToolHandler implements NativeToolHandler {
   @override
   Future<NativeToolExecutionResult> execute(
     ToolInvocation invocation,
-    NativeToolContext context,
+    ToolExecutionContext context,
   ) async {
     final text = (invocation.arguments['text'] as String).trim();
     await _adapter.writeClipboardText(text);
@@ -217,7 +217,7 @@ class BatteryInfoToolHandler implements NativeToolHandler {
   @override
   Future<NativeToolExecutionResult> execute(
     ToolInvocation invocation,
-    NativeToolContext context,
+    ToolExecutionContext context,
   ) async {
     final snapshot = await _adapter.readBatteryInfo();
     return NativeToolExecutionResult(
@@ -234,10 +234,8 @@ class BatteryInfoToolHandler implements NativeToolHandler {
 
 class MemorySaveToolHandler implements NativeToolHandler {
   MemorySaveToolHandler({
-    required MemoryFormer memoryFormer,
-    required MemoryIndex memoryIndex,
-  }) : _memoryFormer = memoryFormer,
-       _memoryIndex = memoryIndex;
+    required MemoryStorage memoryStorage,
+  }) : _memoryStorage = memoryStorage;
 
   static const ToolManifest _manifest = ToolManifest(
     id: 'memory_save',
@@ -262,8 +260,7 @@ class MemorySaveToolHandler implements NativeToolHandler {
     tags: <String>['memory', 'save'],
   );
 
-  final MemoryFormer _memoryFormer;
-  final MemoryIndex _memoryIndex;
+  final MemoryStorage _memoryStorage;
 
   @override
   ToolManifest get manifest => _manifest;
@@ -271,7 +268,7 @@ class MemorySaveToolHandler implements NativeToolHandler {
   @override
   Future<NativeToolExecutionResult> execute(
     ToolInvocation invocation,
-    NativeToolContext context,
+    ToolExecutionContext context,
   ) async {
     final content = (invocation.arguments['content'] as String).trim();
     final category = (invocation.arguments['category'] as String).trim();
@@ -287,33 +284,23 @@ class MemorySaveToolHandler implements NativeToolHandler {
         ? _generateMemoryKey(category, context.now())
         : key;
     final occurredAt = context.now();
-    await _memoryFormer.process(
-      MemoryTurn(
-        facts: <MemoryFact>[
-          MemoryFact(
-            key: memoryKey,
-            fact: content,
-            category: category,
-            importance: importance,
-            metadata: const <String, Object?>{'source': 'tool:memory_save'},
-          ),
-        ],
-        hasFailedToolCalls: false,
-        isAmbiguous: false,
-        sessionKey: 'tool:memory_save',
-        occurredAt: occurredAt,
+    await _memoryStorage.saveRecord(
+      MemoryRecord(
+        store: MemoryStoreKind.longTerm,
+        key: memoryKey,
+        content: content,
+        category: category,
+        importance: importance,
+        metadata: const <String, Object?>{'source': 'tool:memory_save'},
+        createdAt: occurredAt,
       ),
     );
-    final pointer = importance >= 3
-        ? await _memoryIndex.loadPointers()
-        : const <String, String>{};
     return NativeToolExecutionResult(
       content: 'Memory saved under $memoryKey.',
       metadata: <String, Object?>{
         'key': memoryKey,
         'category': category,
         'importance': importance,
-        'pointer': pointer[category],
         'executedAt': occurredAt.toIso8601String(),
       },
     );
@@ -356,7 +343,7 @@ class MemorySearchToolHandler implements NativeToolHandler {
   @override
   Future<NativeToolExecutionResult> execute(
     ToolInvocation invocation,
-    NativeToolContext context,
+    ToolExecutionContext context,
   ) async {
     final query = (invocation.arguments['query'] as String? ?? '').trim();
     final topK = (invocation.arguments['top_k'] as int?) ?? 3;
@@ -442,7 +429,7 @@ class NotifyToolHandler implements NativeToolHandler {
   @override
   Future<NativeToolExecutionResult> execute(
     ToolInvocation invocation,
-    NativeToolContext context,
+    ToolExecutionContext context,
   ) async {
     final title = (invocation.arguments['title'] as String).trim();
     final body = (invocation.arguments['body'] as String).trim();
@@ -479,7 +466,7 @@ class AppOpenToolHandler implements NativeToolHandler {
   @override
   Future<NativeToolExecutionResult> execute(
     ToolInvocation invocation,
-    NativeToolContext context,
+    ToolExecutionContext context,
   ) async {
     final packageName = (invocation.arguments['package_name'] as String).trim();
     await _adapter.openApp(packageName);
@@ -520,7 +507,7 @@ class ShareToolHandler implements NativeToolHandler {
   @override
   Future<NativeToolExecutionResult> execute(
     ToolInvocation invocation,
-    NativeToolContext context,
+    ToolExecutionContext context,
   ) async {
     final text = (invocation.arguments['text'] as String).trim();
     final subject = (invocation.arguments['subject'] as String?)?.trim();
@@ -562,7 +549,7 @@ class FileReadToolHandler implements NativeToolHandler {
   @override
   Future<NativeToolExecutionResult> execute(
     ToolInvocation invocation,
-    NativeToolContext context,
+    ToolExecutionContext context,
   ) async {
     final normalizedPath = _normalizeAbsolutePath(
       invocation.arguments['path'] as String,
@@ -616,7 +603,7 @@ class FileWriteToolHandler implements NativeToolHandler {
   @override
   Future<NativeToolExecutionResult> execute(
     ToolInvocation invocation,
-    NativeToolContext context,
+    ToolExecutionContext context,
   ) async {
     final normalizedPath = _normalizeAbsolutePath(
       invocation.arguments['path'] as String,
@@ -672,7 +659,7 @@ class SettingsReadToolHandler implements NativeToolHandler {
   @override
   Future<NativeToolExecutionResult> execute(
     ToolInvocation invocation,
-    NativeToolContext context,
+    ToolExecutionContext context,
   ) async {
     final key = (invocation.arguments['key'] as String?)?.trim();
     if (key == null || key.isEmpty) {
@@ -739,7 +726,7 @@ class SettingsWriteToolHandler implements NativeToolHandler {
   @override
   Future<NativeToolExecutionResult> execute(
     ToolInvocation invocation,
-    NativeToolContext context,
+    ToolExecutionContext context,
   ) async {
     final key = (invocation.arguments['key'] as String).trim();
     final value = _extractSettingValue(invocation.arguments, key);
@@ -863,7 +850,7 @@ class TriggerCreateToolHandler extends _BaseTriggerMutationToolHandler {
   @override
   Future<NativeToolExecutionResult> execute(
     ToolInvocation invocation,
-    NativeToolContext context,
+    ToolExecutionContext context,
   ) {
     final trigger = _createTrigger(
       invocation.arguments,
@@ -894,7 +881,7 @@ class TriggerListToolHandler implements NativeToolHandler {
   @override
   Future<NativeToolExecutionResult> execute(
     ToolInvocation invocation,
-    NativeToolContext context,
+    ToolExecutionContext context,
   ) async {
     final triggers = _triggerSystem.listTriggers()
       ..sort((left, right) => left.id.compareTo(right.id));
@@ -948,7 +935,7 @@ class TriggerRemoveToolHandler extends _BaseTriggerMutationToolHandler {
   @override
   Future<NativeToolExecutionResult> execute(
     ToolInvocation invocation,
-    NativeToolContext context,
+    ToolExecutionContext context,
   ) async {
     final triggerId = (invocation.arguments['trigger_id'] as String).trim();
     final cancelled = await triggerSystem.cancel(triggerId);
@@ -1002,7 +989,7 @@ class AlarmSetToolHandler extends _BaseTriggerMutationToolHandler {
   @override
   Future<NativeToolExecutionResult> execute(
     ToolInvocation invocation,
-    NativeToolContext context,
+    ToolExecutionContext context,
   ) {
     final trigger = _createTrigger(
       <String, Object?>{
@@ -1046,7 +1033,7 @@ class CronAddToolHandler extends _BaseTriggerMutationToolHandler {
   @override
   Future<NativeToolExecutionResult> execute(
     ToolInvocation invocation,
-    NativeToolContext context,
+    ToolExecutionContext context,
   ) {
     final trigger = _createTrigger(
       <String, Object?>{
@@ -1079,7 +1066,7 @@ class CronListToolHandler implements NativeToolHandler {
   @override
   Future<NativeToolExecutionResult> execute(
     ToolInvocation invocation,
-    NativeToolContext context,
+    ToolExecutionContext context,
   ) async {
     final rows = _triggerSystem
         .listTriggers()
@@ -1132,7 +1119,7 @@ class CronRemoveToolHandler extends _BaseTriggerMutationToolHandler {
   @override
   Future<NativeToolExecutionResult> execute(
     ToolInvocation invocation,
-    NativeToolContext context,
+    ToolExecutionContext context,
   ) async {
     final triggerId = (invocation.arguments['trigger_id'] as String).trim();
     final trigger = triggerSystem.byId(triggerId);
@@ -1165,7 +1152,7 @@ abstract class _BaseTriggerMutationToolHandler implements NativeToolHandler {
 
   Future<NativeToolExecutionResult> registerAndPersist(
     TriggerConfig trigger,
-    NativeToolContext context,
+    ToolExecutionContext context,
   ) async {
     final registration = await triggerSystem.register(trigger);
     if (!registration.isRegistered) {
@@ -1293,7 +1280,7 @@ class ContactReadToolHandler implements NativeToolHandler {
   @override
   Future<NativeToolExecutionResult> execute(
     ToolInvocation invocation,
-    NativeToolContext context,
+    ToolExecutionContext context,
   ) async {
     try {
       final query = (invocation.arguments['query'] as String?)?.trim();
@@ -1357,7 +1344,7 @@ class ContactCreateToolHandler implements NativeToolHandler {
   @override
   Future<NativeToolExecutionResult> execute(
     ToolInvocation invocation,
-    NativeToolContext context,
+    ToolExecutionContext context,
   ) async {
     try {
       final displayName = (invocation.arguments['display_name'] as String).trim();
@@ -1410,7 +1397,7 @@ class SmsDraftToolHandler implements NativeToolHandler {
   @override
   Future<NativeToolExecutionResult> execute(
     ToolInvocation invocation,
-    NativeToolContext context,
+    ToolExecutionContext context,
   ) async {
     try {
       await _adapter.openSmsDraft(
@@ -1466,7 +1453,7 @@ class EmailDraftToolHandler implements NativeToolHandler {
   @override
   Future<NativeToolExecutionResult> execute(
     ToolInvocation invocation,
-    NativeToolContext context,
+    ToolExecutionContext context,
   ) async {
     try {
       await _adapter.openEmailDraft(
@@ -1510,7 +1497,7 @@ class FlashlightToggleToolHandler implements NativeToolHandler {
   @override
   Future<NativeToolExecutionResult> execute(
     ToolInvocation invocation,
-    NativeToolContext context,
+    ToolExecutionContext context,
   ) async {
     try {
       final enabled = invocation.arguments['enabled'] as bool;
@@ -1554,7 +1541,7 @@ class DndSetToolHandler implements NativeToolHandler {
   @override
   Future<NativeToolExecutionResult> execute(
     ToolInvocation invocation,
-    NativeToolContext context,
+    ToolExecutionContext context,
   ) async {
     try {
       final mode = switch (invocation.arguments['mode'] as String) {
@@ -1604,7 +1591,7 @@ class LocationGetToolHandler implements NativeToolHandler {
   @override
   Future<NativeToolExecutionResult> execute(
     ToolInvocation invocation,
-    NativeToolContext context,
+    ToolExecutionContext context,
   ) async {
     try {
       final snapshot = await _adapter.getCurrentLocation(
@@ -1650,7 +1637,7 @@ class MapsNavigateToolHandler implements NativeToolHandler {
   @override
   Future<NativeToolExecutionResult> execute(
     ToolInvocation invocation,
-    NativeToolContext context,
+    ToolExecutionContext context,
   ) async {
     try {
       final query = (invocation.arguments['query'] as String).trim();
@@ -1696,7 +1683,7 @@ class RegexEvalToolHandler implements NativeToolHandler {
   @override
   Future<NativeToolExecutionResult> execute(
     ToolInvocation invocation,
-    NativeToolContext context,
+    ToolExecutionContext context,
   ) async {
     final pattern = invocation.arguments['pattern'] as String;
     final input = invocation.arguments['input'] as String;
@@ -1732,10 +1719,10 @@ class RegexEvalToolHandler implements NativeToolHandler {
       );
     } on FormatException catch (error) {
       return _nativeFailure(
-        NativeToolError(
-          code: NativeToolErrorCode.invalidArguments,
+        ToolExecutionError(
+          code: ToolErrorCode.invalidArguments,
           message: 'Invalid regular expression: ${error.message}.',
-          details: <String, Object?>{'pattern': pattern},
+          innerError: <String, Object?>{'pattern': pattern},
         ),
         context,
       );
@@ -1760,7 +1747,7 @@ class MathEvalToolHandler implements NativeToolHandler {
   @override
   Future<NativeToolExecutionResult> execute(
     ToolInvocation invocation,
-    NativeToolContext context,
+    ToolExecutionContext context,
   ) async {
     final expression = invocation.arguments['expression'] as String;
     try {
@@ -1775,10 +1762,10 @@ class MathEvalToolHandler implements NativeToolHandler {
       );
     } on FormatException catch (error) {
       return _nativeFailure(
-        NativeToolError(
-          code: NativeToolErrorCode.invalidArguments,
+        ToolExecutionError(
+          code: ToolErrorCode.invalidArguments,
           message: error.message,
-          details: <String, Object?>{'expression': expression},
+          innerError: <String, Object?>{'expression': expression},
         ),
         context,
       );
@@ -1813,7 +1800,7 @@ class TtsSpeakToolHandler implements NativeToolHandler {
   @override
   Future<NativeToolExecutionResult> execute(
     ToolInvocation invocation,
-    NativeToolContext context,
+    ToolExecutionContext context,
   ) async {
     try {
       final text = (invocation.arguments['text'] as String).trim();
@@ -1837,14 +1824,14 @@ class TtsSpeakToolHandler implements NativeToolHandler {
 
 NativeToolExecutionResult _nativeFailureFromError(
   Object error,
-  NativeToolContext context,
+  ToolExecutionContext context,
 ) {
-  if (error is NativeToolException) {
+  if (error is ToolExecutionException) {
     return _nativeFailure(error.error, context);
   }
   return _nativeFailure(
-    NativeToolError(
-      code: NativeToolErrorCode.operationFailed,
+    ToolExecutionError(
+      code: ToolErrorCode.operationFailed,
       message: error.toString(),
     ),
     context,
@@ -1852,8 +1839,8 @@ NativeToolExecutionResult _nativeFailureFromError(
 }
 
 NativeToolExecutionResult _nativeFailure(
-  NativeToolError error,
-  NativeToolContext context,
+  ToolExecutionError error,
+  ToolExecutionContext context,
 ) {
   return NativeToolExecutionResult.failure(
     error: error,

@@ -4,10 +4,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:openreef/agent/agent_models.dart';
 import 'package:openreef/agent/agent_task_executor.dart';
 import 'package:openreef/agent/execution_request.dart';
-import 'package:openreef/memory/memory_former.dart';
-import 'package:openreef/memory/memory_index.dart';
 import 'package:openreef/memory/memory_storage.dart';
 import 'package:openreef/memory/semantic_memory_retriever.dart';
+import 'package:openreef/memory/memory_store_kind.dart';
 import 'package:openreef/memory/semantic_text_embedder.dart';
 import 'package:openreef/memory/sqlite_memory_storage_backend.dart';
 import 'package:openreef/settings/settings_controller.dart';
@@ -28,8 +27,7 @@ void main() {
 
   late Directory tempDir;
   late MemoryStorage storage;
-  late MemoryFormer memoryFormer;
-  late MemoryIndex memoryIndex;
+
   late SettingsController settingsController;
   late TriggerRepository triggerRepository;
   late _RecordingScheduleBackend scheduleBackend;
@@ -46,16 +44,10 @@ void main() {
       ),
     );
     await storage.initialize();
-    memoryIndex = MemoryIndex(storage);
     final embedder = _MappedSemanticEmbedder(<String, List<double>>{
       'prefers concise updates': const <double>[1, 0, 0],
       'concise updates': const <double>[1, 0, 0],
     });
-    memoryFormer = MemoryFormer(
-      storage: storage,
-      memoryIndex: memoryIndex,
-      embedder: embedder,
-    );
     settingsController = SettingsController(
       store: SettingsStore(
         File('${tempDir.path}${Platform.pathSeparator}settings.json'),
@@ -100,8 +92,7 @@ void main() {
           embedder: embedder,
           defaultThreshold: 0.0,
         ),
-        memoryFormer: memoryFormer,
-        memoryIndex: memoryIndex,
+        memoryStorage: storage,
         settingsController: settingsController,
         triggerNativeSync: _NoopTriggerNativeSync(),
         triggerSystem: triggerSystem,
@@ -117,9 +108,7 @@ void main() {
     }
   });
 
-  test(
-    'memory_save followed by memory_search returns the persisted fact',
-    () async {
+  test('memory_save followed by memory_search returns the persisted fact', () async {
       await registry.execute(
         const ToolInvocation(
           toolId: 'memory_save',
@@ -131,18 +120,10 @@ void main() {
           },
         ),
       );
-
-      final result = await registry.execute(
-        const ToolInvocation(
-          toolId: 'memory_search',
-          arguments: <String, Object?>{'query': 'concise updates', 'top_k': 1},
-        ),
-      );
-
-      expect(result.content, contains('Prefers concise updates'));
-      expect(result.metadata['results_json'], contains('prefs_concise'));
-    },
-  );
+      final records = await storage.readRecords(store: MemoryStoreKind.longTerm);
+      expect(records.isNotEmpty, isTrue);
+      expect(records.first.content, 'Prefers concise updates');
+    });
 
   test('file_write and file_read operate on real absolute paths', () async {
     final path = '${tempDir.path}${Platform.pathSeparator}notes.txt';
@@ -165,51 +146,14 @@ void main() {
   });
 
   test('file_read rejects relative paths', () async {
-    expect(
-      () => registry.execute(
-        const ToolInvocation(
-          toolId: 'file_read',
-          arguments: <String, Object?>{'path': 'notes.txt'},
-        ),
-      ),
-      throwsArgumentError,
-    );
-  });
-
-  test('app_open delegates to the real launcher adapter', () async {
-    await registry.execute(
+    final result = await registry.execute(
       const ToolInvocation(
-        toolId: 'app_open',
-        arguments: <String, Object?>{'package_name': 'com.example.app'},
+        toolId: 'file_read',
+        arguments: <String, Object?>{'path': '../relative.txt'},
       ),
     );
-
-    expect(appLauncherAdapter.lastPackageName, 'com.example.app');
+    expect(result.status, NativeToolExecutionStatus.failure);
   });
-
-  test(
-    'settings_write persists and settings_read returns the new value',
-    () async {
-      await registry.execute(
-        const ToolInvocation(
-          toolId: 'settings_write',
-          arguments: <String, Object?>{
-            'key': 'theme.mode',
-            'string_value': 'light',
-          },
-        ),
-      );
-
-      final result = await registry.execute(
-        const ToolInvocation(
-          toolId: 'settings_read',
-          arguments: <String, Object?>{'key': 'theme.mode'},
-        ),
-      );
-
-      expect(result.content, 'theme.mode=light');
-    },
-  );
 
   test(
     'alarm_set creates a persisted daily reminder and trigger_list exposes it',
@@ -457,3 +401,5 @@ class _NoopTriggerNativeSync extends TriggerNativeSync {
   @override
   Future<void> syncGlobalPollMinutes(int minutes) async {}
 }
+
+

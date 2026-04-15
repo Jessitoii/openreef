@@ -1,6 +1,8 @@
 import 'package:flutter_gemma/flutter_gemma.dart' as gemma;
 import 'package:openreef/agent/tool_router.dart';
 import 'package:openreef/tools/tool_manifest.dart';
+import 'package:openreef/tools/tool_errors.dart';
+import 'package:openreef/tools/tool_execution_context.dart';
 
 class GemmaToolMapper {
   const GemmaToolMapper();

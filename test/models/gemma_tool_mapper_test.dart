@@ -3,6 +3,8 @@ import 'package:openreef/agent/agent_models.dart';
 import 'package:openreef/agent/tool_router.dart';
 import 'package:openreef/models/gemma_tool_mapper.dart';
 import 'package:openreef/tools/tool_manifest.dart';
+import 'package:openreef/tools/tool_errors.dart';
+import 'package:openreef/tools/tool_execution_context.dart';
 
 void main() {
   test('maps schema-bearing tool definitions to Gemma tool declarations', () {

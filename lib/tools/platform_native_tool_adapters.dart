@@ -1,9 +1,10 @@
+import 'package:openreef/tools/tool_execution_context.dart';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:openreef/tools/native_tool_adapters.dart';
-import 'package:openreef/tools/native_tool_errors.dart';
+import 'package:openreef/tools/tool_errors.dart';
 
 class PlatformVolumeAdapter implements DeviceVolumeAdapter {
   PlatformVolumeAdapter({MethodChannel? methodChannel})
@@ -291,9 +292,9 @@ class PlatformTtsAdapter implements TtsAdapter {
     required bool interrupt,
   }) async {
     if (!Platform.isAndroid) {
-      throw const NativeToolException(
-        NativeToolError(
-          code: NativeToolErrorCode.unsupported,
+      throw const ToolExecutionException(
+        ToolExecutionError(
+          code: ToolErrorCode.unsupported,
           message: 'Text-to-speech is only supported on Android in this pass.',
         ),
       );
@@ -314,11 +315,11 @@ class PlatformTtsAdapter implements TtsAdapter {
       if (result == null) {
         return;
       }
-      throw NativeToolException(
-        NativeToolError(
-          code: NativeToolErrorCode.operationFailed,
+      throw ToolExecutionException(
+        ToolExecutionError(
+          code: ToolErrorCode.operationFailed,
           message: 'The TTS engine did not accept the utterance.',
-          details: <String, Object?>{'result': result.toString()},
+          innerError: <String, Object?>{'result': result.toString()},
         ),
       );
     } on PlatformException catch (error) {
@@ -413,7 +414,7 @@ Future<Map<Object?, Object?>> _invokeToolMap(
   }
 }
 
-NativeToolException _mapPlatformException(PlatformException error) {
+ToolExecutionException _mapPlatformException(PlatformException error) {
   final details = error.details;
   if (details is Map) {
     final map = Map<Object?, Object?>.from(details);
@@ -421,11 +422,11 @@ NativeToolException _mapPlatformException(PlatformException error) {
     final message =
         map['message'] as String? ?? error.message ?? 'Native tool failed.';
     final rawDetails = map['details'];
-    return NativeToolException(
-      NativeToolError(
+    return ToolExecutionException(
+      ToolExecutionError(
         code: code,
         message: message,
-        details: rawDetails is Map
+        innerError: rawDetails is Map
             ? Map<String, Object?>.from(
                 rawDetails.map(
                   (key, value) => MapEntry(key.toString(), value),
@@ -436,30 +437,30 @@ NativeToolException _mapPlatformException(PlatformException error) {
     );
   }
 
-  return NativeToolException(
-    NativeToolError(
+  return ToolExecutionException(
+    ToolExecutionError(
       code: _parseErrorCode(error.code),
       message: error.message ?? 'Native tool failed.',
     ),
   );
 }
 
-NativeToolErrorCode _parseErrorCode(String value) {
+ToolErrorCode _parseErrorCode(String value) {
   switch (value) {
     case 'permission_denied':
-      return NativeToolErrorCode.permissionDenied;
+      return ToolErrorCode.permissionDenied;
     case 'permission_required':
-      return NativeToolErrorCode.permissionRequired;
+      return ToolErrorCode.permissionRequired;
     case 'feature_unavailable':
-      return NativeToolErrorCode.featureUnavailable;
+      return ToolErrorCode.featureUnavailable;
     case 'app_unavailable':
-      return NativeToolErrorCode.appUnavailable;
+      return ToolErrorCode.appUnavailable;
     case 'invalid_arguments':
-      return NativeToolErrorCode.invalidArguments;
+      return ToolErrorCode.invalidArguments;
     case 'unsupported':
-      return NativeToolErrorCode.unsupported;
+      return ToolErrorCode.unsupported;
     default:
-      return NativeToolErrorCode.operationFailed;
+      return ToolErrorCode.operationFailed;
   }
 }
 

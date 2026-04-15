@@ -31,6 +31,22 @@ class ContextRenderer {
         priority: 95,
       ),
       _section(
+        id: 'core_rules',
+        title: 'CORE OPERATING RULES',
+        content: _renderCoreRules(),
+        reason: 'Essential behavioral contract for on-device reasoning.',
+        critical: true,
+        priority: 94,
+      ),
+      _section(
+        id: 'decision_policy',
+        title: 'DECISION POLICY',
+        content: _renderDecisionPolicy(),
+        reason: 'Priority evaluation ladder for the current turn.',
+        critical: true,
+        priority: 93,
+      ),
+      _section(
         id: 'safety',
         title: 'SAFETY RULES',
         content: _renderSafety(plan.safetyEnvelope),
@@ -85,7 +101,7 @@ class ContextRenderer {
         ),
       _section(
         id: 'memory_index',
-        title: 'RELEVANT MEMORY',
+        title: 'MEMORY POINTERS',
         content: _renderMemoryIndex(sources),
         reason: _memoryIndexReason(sources),
         critical: true,
@@ -96,8 +112,8 @@ class ContextRenderer {
       if (sources.memoryMessages.isNotEmpty)
         _section(
           id: 'memory',
-          title: 'RELEVANT MEMORY',
-          content: _renderMessages('MEMORY CANDIDATES', sources.memoryMessages),
+          title: 'RETRIEVED MEMORY EVIDENCE',
+          content: _renderMessages('RETRIEVED MEMORY EVIDENCE', sources.memoryMessages),
           reason: 'Retrieved memory candidates selected by plan.',
           priority: 55,
           sourceCount: sources.memoryMessages.length,
@@ -130,7 +146,7 @@ class ContextRenderer {
       _section(
         id: 'user',
         title: 'USER MESSAGE',
-        content: '[USER MESSAGE]\n$userMessage\n[END USER MESSAGE]',
+        content: '[USER MESSAGE]\nResolve the user’s current request using the policy above. Be direct. Use tools only when needed.\n\n$userMessage\n[END USER MESSAGE]',
         reason: 'Current user request.',
         critical: true,
         priority: 100,
@@ -314,31 +330,62 @@ class ContextRenderer {
     );
   }
 
+  String _renderCoreRules() {
+    return '''[CORE OPERATING RULES]
+- Follow section priority.
+- Answer using available evidence only.
+- Use tools when external action or data is required.
+- If required info is missing and no tool can get it, ask a concise clarification.
+- NEVER fabricate tool results, permissions, or memory.
+- NEVER ask the user for permission or confirmation to use a tool. Emit the tool call directly. The UI handles confirmation.
+[END CORE OPERATING RULES]''';
+  }
+
+  String _renderDecisionPolicy() {
+    return '''[DECISION POLICY]
+Priority ladder:
+1. If WORKFLOW STATE defines active steps or blockers, address them or continue.
+2. Else if user asks an action requiring a tool, use the best matching AVAILABLE TOOL.
+3. Else if answer is fully supported by current context, answer directly.
+4. Else if memory/history hints are uncertain, state uncertainty briefly and ask or use a tool.
+5. Else ask a brief clarification.
+
+Evidence priority: USER MESSAGE > WORKFLOW STATE > PREVIOUS TOOL STATE (success) > RETRIEVED MEMORY > RECENT HISTORY.
+[END DECISION POLICY]''';
+  }
+
   String _renderSafety(SafetyEnvelope envelope) {
     final buffer = StringBuffer('[SAFETY RULES]\n')
-      ..writeln('confirmationRequired: ${envelope.confirmationRequired}');
+      ..writeln('- System Runtime Confirmation: ${envelope.confirmationRequired ? 'YES. These actions require runtime confirmation and may be blocked.' : 'NO.'}');
     if (envelope.riskyToolIds.isNotEmpty) {
-      buffer.writeln('riskyTools: ${envelope.riskyToolIds.join(', ')}');
+      buffer.writeln('- High-risk tools (use cautiously): ${envelope.riskyToolIds.join(', ')}');
     }
-    for (final constraint in envelope.hardConstraints) {
-      buffer.writeln('- $constraint');
+    if (envelope.hardConstraints.isNotEmpty) {
+      buffer.writeln('- Hard Constraints (MUST OBEY):');
+      for (final constraint in envelope.hardConstraints) {
+        buffer.writeln('  * $constraint');
+      }
     }
     buffer.write('[END SAFETY RULES]');
     return buffer.toString();
   }
 
   String _renderTools(ToolExposure exposure) {
-    final buffer = StringBuffer('[AVAILABLE TOOLS]\n');
+    final buffer = StringBuffer('[AVAILABLE TOOLS]\n')
+      ..writeln('ONLY the tools listed below exist for this turn.')
+      ..writeln('Do not assume or reference unavailable tools.')
+      ..writeln('===');
     for (final tool in exposure.primaryTools) {
       final suffix = tool.description.trim().isEmpty
           ? ''
-          : ': ${tool.description.trim()}';
+          : ' - ${tool.description.trim()}';
       buffer.writeln(
-        '- ${tool.id}${tool.requiresConfirmation ? ' (confirm)' : ''}$suffix',
+        '- [${tool.id}]${tool.requiresConfirmation ? ' (Requires Confirmation)' : ''}$suffix',
       );
     }
     if (exposure.exclusionReasons.isNotEmpty) {
-      buffer.writeln('[TOOL EXCLUSIONS]');
+      buffer.writeln('===');
+      buffer.writeln('Excluded (UNAVAILABLE):');
       for (final entry in exposure.exclusionReasons.entries) {
         buffer.writeln('- ${entry.key}: ${entry.value}');
       }
@@ -348,89 +395,93 @@ class ContextRenderer {
   }
 
   String _renderSkills(SkillPlan plan) {
-    final buffer = StringBuffer('[ACTIVE SKILLS]\n');
+    final buffer = StringBuffer('[ACTIVE SKILLS]\n')
+      ..writeln('Use skill instructions ONLY when relevant to the user request or active workflow.')
+      ..writeln('===');
     for (final skill in plan.activeSkills) {
       final decision = plan.decisions.where((item) => item.skillId == skill.id);
       final reason = decision.isEmpty
           ? 'policy match'
           : decision.first.activationReason;
       buffer
-        ..writeln('## ${skill.displayName}')
-        ..writeln('id: ${skill.id}')
-        ..writeln('activation: $reason');
+        ..writeln('Skill: ${skill.displayName} (${skill.id})')
+        ..writeln('Context: $reason');
       if (skill.toolsRequired.isNotEmpty) {
-        buffer.writeln('requiredTools: ${skill.toolsRequired.join(', ')}');
+        buffer.writeln('Requires Tools: ${skill.toolsRequired.join(', ')}');
       }
       buffer
-        ..writeln('instructions:')
-        ..writeln(skill.content.trim());
+        ..writeln('Instructions:')
+        ..writeln(skill.content.trim())
+        ..writeln('---');
     }
     buffer.write('[END SKILLS]');
     return buffer.toString();
   }
 
   String _renderWorkflow(WorkflowContext workflow) {
-    final buffer = StringBuffer('[WORKFLOW STATE]\n');
+    final buffer = StringBuffer('[WORKFLOW STATE]\n')
+      ..writeln('This is the CURRENT execution state. Not background info.')
+      ..writeln('===');
     if (workflow.workflowId != null) {
-      buffer.writeln('workflowId: ${workflow.workflowId}');
+      buffer.writeln('Active Workflow: ${workflow.workflowId}');
     }
     if (workflow.objective != null) {
-      buffer.writeln('objective: ${workflow.objective}');
-    }
-    if (workflow.completedSteps.isNotEmpty) {
-      buffer.writeln('completedSteps: ${workflow.completedSteps.join(' | ')}');
-    }
-    if (workflow.pendingSteps.isNotEmpty) {
-      buffer.writeln('pendingSteps: ${workflow.pendingSteps.join(' | ')}');
+      buffer.writeln('Objective: ${workflow.objective}');
+      buffer.writeln('-> Keep response aligned to this objective.');
     }
     if (workflow.blockers.isNotEmpty) {
-      buffer.writeln('blockers: ${workflow.blockers.join(' | ')}');
+      buffer.writeln('Blockers: ${workflow.blockers.join(' | ')}');
+      buffer.writeln('-> RESOLVE blockers: ask user for missing input, or use a tool to unblock.');
+    } else if (workflow.pendingSteps.isNotEmpty) {
+      buffer.writeln('Pending Steps: ${workflow.pendingSteps.join(' | ')}');
+      buffer.writeln('-> CONTINUE from the nearest unfinished step.');
+    }
+    if (workflow.completedSteps.isNotEmpty) {
+      buffer.writeln('Completed Steps: ${workflow.completedSteps.join(' | ')}');
     }
     if (workflow.resolvedEntities.isNotEmpty) {
-      buffer.writeln('resolvedEntities: ${workflow.resolvedEntities}');
+      buffer.writeln('Resolved Variables: ${workflow.resolvedEntities}');
     }
     if (workflow.currentHypothesis != null) {
-      buffer.writeln('currentHypothesis: ${workflow.currentHypothesis}');
+      buffer.writeln('Reasoning/Wait State: ${workflow.currentHypothesis}');
     }
     buffer.write('[END WORKFLOW STATE]');
     return buffer.toString();
   }
 
   String _renderMemoryIndex(ReducedContextSources sources) {
-    final buffer = StringBuffer('[RELEVANT MEMORY]\n');
+    final buffer = StringBuffer('[MEMORY POINTERS]\n');
     if (sources.memoryRetrievalStatus ==
         SemanticMemoryRetrievalStatus.unavailable) {
       buffer
-        ..writeln('[MEMORY RETRIEVAL UNAVAILABLE]')
-        ..writeln('status: unavailable')
+        ..writeln('STATUS: UNAVAILABLE')
+        ..writeln('-> Action: Do not rely on semantic memory for this turn.')
         ..writeln('reason: ${sources.memoryRetrievalReason}')
         ..writeln('embeddingModelId: ${sources.embeddingModelIdUsed}')
-        ..write('[END MEMORY RETRIEVAL UNAVAILABLE]');
+        ..write('[END MEMORY POINTERS UNAVAILABLE]');
       return buffer.toString();
     }
     if (sources.memoryRetrievalStatus ==
         SemanticMemoryRetrievalStatus.degraded) {
       buffer
-        ..writeln('[MEMORY RETRIEVAL DEGRADED]')
-        ..writeln('status: degraded')
+        ..writeln('STATUS: DEGRADED (partial/mismatched index)')
+        ..writeln('-> Action: Use cautiously; prefer current turn evidence and tool results.')
         ..writeln('reason: ${sources.memoryRetrievalReason}')
         ..writeln('embeddingModelId: ${sources.embeddingModelIdUsed}')
-        ..writeln(
-          'excludedCrossModelMatches: ${sources.skippedCrossModelCount}',
-        )
-        ..write('[END MEMORY RETRIEVAL DEGRADED]');
+        ..writeln('excludedMatches: ${sources.skippedCrossModelCount}')
+        ..write('[END MEMORY POINTERS DEGRADED]');
       return buffer.toString();
     }
     if (sources.memoryIndexBlock.trim().isEmpty) {
       buffer
-        ..writeln('[MEMORY INDEX EMPTY]')
-        ..writeln('status: no pointers')
-        ..write('[END MEMORY INDEX EMPTY]');
+        ..writeln('STATUS: NO POINTERS')
+        ..writeln('-> Action: Continue without memory assumptions.')
+        ..write('[END MEMORY POINTERS EMPTY]');
       return buffer.toString();
     }
     buffer
       ..writeln(sources.memoryIndexBlock)
-      ..write('[END RELEVANT MEMORY]');
+      ..write('[END MEMORY POINTERS]');
     return buffer.toString();
   }
 
@@ -451,6 +502,11 @@ class ContextRenderer {
 
   String _renderMessages(String title, List<AgentMessage> messages) {
     final buffer = StringBuffer('[$title]\n');
+    if (title == 'PREVIOUS TOOL STATE') {
+      buffer.writeln('Rule: Recent tool results are authoritative ONLY if successful and shown below.');
+    } else if (title == 'RECENT RELEVANT HISTORY') {
+      buffer.writeln('Rule: History is secondary evidence. Current message and explicit tool results take priority.');
+    }
     for (final message in messages) {
       buffer.writeln(message.toPromptSegment());
     }

@@ -686,7 +686,9 @@ class AgentLoop {
         buffer.write(chunk);
       }
       final rawOutput = buffer.toString();
+      debugPrint('DIAGNOSTIC: AgentLoop finished gathering stream. Raw output length: ${rawOutput.length}');
       final response = const AgentResponseParser().parse(rawOutput);
+      debugPrint('DIAGNOSTIC: AgentResponseParser finished. hasToolCall=${response.hasToolCall}, textLength=${response.text.length}');
       await _emitVisibleAssistantResponse(
         response,
         emitter: emitter,
@@ -728,12 +730,15 @@ class AgentLoop {
     required String messageId,
   }) async {
     if (response.hasToolCall) {
+      debugPrint('DIAGNOSTIC: _emitVisibleAssistantResponse skipping emission because hasToolCall=true');
       return;
     }
     final visibleText = response.text.trim();
     if (visibleText.isEmpty) {
+      debugPrint('DIAGNOSTIC: _emitVisibleAssistantResponse skipping emission because visibleText is empty');
       return;
     }
+    debugPrint('DIAGNOSTIC: _emitVisibleAssistantResponse IS EMITTING VISIBLE TEXT to transcript!');
     await emitter.emit(
       kind: RuntimeTranscriptEventKind.assistantMessageStarted,
       messageId: messageId,

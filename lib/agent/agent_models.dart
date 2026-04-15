@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'dart:convert';
 
 enum AgentMessageRole {
@@ -445,7 +446,46 @@ class AgentResponseParser {
       );
     }
 
+    // Diagnostic fallback: If the model generated pre-text before the json, standard tryDecodeObject will fail.
+    // We regex look for `{ "tool_call": ... }` or `{ "tool_calls": ... }` inside the text.
+    final embedded = _extractEmbeddedJson(trimmed);
+    if (embedded != null) {
+      debugPrint('DIAGNOSTIC: AgentResponseParser fallback extraction succeeded from markdown/prose.');
+      return AgentResponse(
+        text: embedded.text,
+        toolCall: _parseToolCall(embedded.payload),
+        toolCalls: _parseToolCalls(embedded.payload),
+        rawOutput: output,
+      );
+    }
+
     return AgentResponse(text: trimmed, rawOutput: output);
+  }
+
+  ({String text, Map<String, Object?> payload})? _extractEmbeddedJson(String content) {
+    // Regex matches the outer braces if they contain 'tool_call' or 'tool_calls'.
+    // `dotAll: true` handles multi-line pretty-printed JSON.
+    final match = RegExp(r'\{.*"tool_call(s)?".*\}', dotAll: true).firstMatch(content);
+    
+    if (match != null) {
+      final jsonString = match.group(0)!;
+      try {
+        final decoded = jsonDecode(jsonString);
+        if (decoded is Map<String, Object?>) {
+          // Strip the JSON footprint and any markdown blocks to leave the true conversational prose.
+          final textPart = content.substring(0, match.start).replaceAll(RegExp(r'```json\s*$'), '').trim();
+          return (text: textPart, payload: decoded);
+        }
+        if (decoded is Map) {
+          final textPart = content.substring(0, match.start).replaceAll(RegExp(r'```json\s*$'), '').trim();
+          return (text: textPart, payload: Map<String, Object?>.from(decoded));
+        }
+      } catch (_) {
+        // Ignored: JSON chunk was malformed visually
+      }
+    }
+    
+    return null;
   }
 
   ToolCall? _parseToolCall(Map<String, Object?> decoded) {

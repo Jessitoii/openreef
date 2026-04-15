@@ -10,8 +10,10 @@ import 'package:openreef/memory/semantic_memory_retriever.dart';
 import 'package:openreef/memory/semantic_text_embedder.dart';
 import 'package:openreef/tools/mvp_native_tools.dart';
 import 'package:openreef/tools/native_tool_adapters.dart';
-import 'package:openreef/tools/native_tool_errors.dart';
+import 'package:openreef/tools/tool_errors.dart';
 import 'package:openreef/tools/tool_manifest.dart';
+import 'package:openreef/tools/tool_errors.dart';
+import 'package:openreef/tools/tool_execution_context.dart';
 import 'package:openreef/tools/tool_manifest_registry.dart';
 
 void main() {
@@ -94,7 +96,7 @@ void main() {
         toolId: 'volume_set',
         arguments: <String, Object?>{'level': 0.35},
       ),
-      context: NativeToolContext(clock: () => DateTime.utc(2026, 4, 4, 12)),
+      context: const ToolExecutionContext(sessionKey: 'agent:test', clock: null),
     );
 
     expect(volumeAdapter.lastLevel, 0.35);
@@ -120,9 +122,9 @@ void main() {
   });
 
   test('contact_read returns structured permission errors', () async {
-    contactAdapter.error = const NativeToolException(
-      NativeToolError(
-        code: NativeToolErrorCode.permissionDenied,
+    contactAdapter.error = const ToolExecutionException(
+      ToolExecutionError(
+        code: ToolErrorCode.permissionDenied,
         message: 'Contacts permission denied.',
       ),
     );
@@ -132,7 +134,7 @@ void main() {
     );
 
     expect(result.isFailure, isTrue);
-    expect(result.error?.wireCode, 'permission_denied');
+    expect(result.error?.id, 'permission_denied');
   });
 
   test('regex_eval returns invalid argument failures for bad patterns', () async {
@@ -144,7 +146,7 @@ void main() {
     );
 
     expect(result.isFailure, isTrue);
-    expect(result.error?.wireCode, 'invalid_arguments');
+    expect(result.error?.id, 'invalid_arguments');
   });
 
   test('math_eval respects precedence and parentheses', () async {
@@ -316,7 +318,7 @@ class _RecordingBatteryAdapter implements BatteryAdapter {
 }
 
 class _RecordingContactAdapter implements ContactAdapter {
-  NativeToolException? error;
+  ToolExecutionException? error;
 
   @override
   Future<ContactRecord> createContact({

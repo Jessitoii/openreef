@@ -1,17 +1,19 @@
 import 'package:openreef/agent/agent_models.dart';
 import 'package:openreef/agent/tool_router.dart';
-import 'package:openreef/tools/native_tool_errors.dart';
+import 'package:openreef/tools/tool_errors.dart';
 import 'package:openreef/tools/tool_manifest.dart';
+import 'package:openreef/tools/tool_errors.dart';
+import 'package:openreef/tools/tool_execution_context.dart';
 import 'package:openreef/tools/tool_manifest_registry.dart';
 
 class ToolManifestBridge {
   ToolManifestBridge(
     this._registry, {
-    this.context = const NativeToolContext(),
+    this.context = const ToolExecutionContext(sessionKey: 'agent:main'),
   });
 
   final ToolManifestRegistry _registry;
-  final NativeToolContext context;
+  final ToolExecutionContext context;
 
   ToolDefinition toToolDefinition({
     required String toolId,
@@ -57,9 +59,9 @@ class ToolManifestBridge {
             metadata: <String, Object?>{
               'toolId': manifest.id,
               'category': manifest.category,
-              'errorCode': error.wireCode,
+              'errorCode': error.id,
               'errorMessage': error.message,
-              ...error.details,
+              if (error.innerError != null) 'innerError': error.innerError.toString(),
               ...result.metadata,
             },
           );
@@ -75,16 +77,20 @@ class ToolManifestBridge {
     );
   }
 
-  ToolResultStatus _statusForNativeError(NativeToolErrorCode code) {
+  ToolResultStatus _statusForNativeError(ToolErrorCode code) {
     return switch (code) {
-      NativeToolErrorCode.permissionDenied ||
-      NativeToolErrorCode.permissionRequired =>
+      ToolErrorCode.permissionDenied ||
+      ToolErrorCode.permissionRequired =>
         ToolResultStatus.permissionDenied,
-      NativeToolErrorCode.invalidArguments => ToolResultStatus.validationError,
-      NativeToolErrorCode.featureUnavailable ||
-      NativeToolErrorCode.appUnavailable ||
-      NativeToolErrorCode.unsupported => ToolResultStatus.unavailable,
-      NativeToolErrorCode.operationFailed => ToolResultStatus.executionError,
+      ToolErrorCode.invalidArguments => ToolResultStatus.validationError,
+      ToolErrorCode.featureUnavailable ||
+      ToolErrorCode.appUnavailable ||
+      ToolErrorCode.unsupported => ToolResultStatus.unavailable,
+      ToolErrorCode.operationFailed ||
+      ToolErrorCode.nativeError ||
+      ToolErrorCode.mcpError ||
+      ToolErrorCode.runtimeError => ToolResultStatus.executionError,
+      ToolErrorCode.semanticError => ToolResultStatus.executionError,
     };
   }
 }

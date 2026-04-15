@@ -1,4 +1,6 @@
 import 'package:openreef/tools/tool_manifest.dart';
+import 'package:openreef/tools/tool_errors.dart';
+import 'package:openreef/tools/tool_execution_context.dart';
 
 class ToolManifestRegistry {
   ToolManifestRegistry(List<NativeToolHandler> handlers)
@@ -56,37 +58,52 @@ class ToolManifestRegistry {
 
   Future<NativeToolExecutionResult> execute(
     ToolInvocation invocation, {
-    NativeToolContext context = const NativeToolContext(),
+    ToolExecutionContext context = const ToolExecutionContext(sessionKey: 'agent:main'),
   }) async {
-    final validation = validate(invocation);
-    if (!validation.isValid) {
-      throw StateError(validation.error!);
-    }
+    try {
+      final validation = validate(invocation);
+      if (!validation.isValid) {
+        return NativeToolExecutionResult.failure(
+          error: ToolExecutionError(
+            code: ToolErrorCode.invalidArguments,
+            message: validation.error!,
+          ),
+        );
+      }
 
-    final handler = _handlers[invocation.toolId]!;
-    final normalizedInvocation = ToolInvocation(
-      toolId: invocation.toolId,
-      arguments: validation.normalizedArguments,
-    );
-    final result = await handler.execute(normalizedInvocation, context);
-    return switch (result.status) {
-      NativeToolExecutionStatus.success => NativeToolExecutionResult.success(
-        content: result.content,
-        metadata: <String, Object?>{
-          'toolId': handler.manifest.id,
-          'category': handler.manifest.category,
-          ...result.metadata,
-        },
-      ),
-      NativeToolExecutionStatus.failure => NativeToolExecutionResult.failure(
-        error: result.error!,
-        metadata: <String, Object?>{
-          'toolId': handler.manifest.id,
-          'category': handler.manifest.category,
-          ...result.metadata,
-        },
-      ),
-    };
+      final handler = _handlers[invocation.toolId]!;
+      final normalizedInvocation = ToolInvocation(
+        toolId: invocation.toolId,
+        arguments: validation.normalizedArguments,
+      );
+      final result = await handler.execute(normalizedInvocation, context);
+      return switch (result.status) {
+        NativeToolExecutionStatus.success => NativeToolExecutionResult.success(
+          content: result.content,
+          metadata: <String, Object?>{
+            'toolId': handler.manifest.id,
+            'category': handler.manifest.category,
+            ...result.metadata,
+          },
+        ),
+        NativeToolExecutionStatus.failure => NativeToolExecutionResult.failure(
+          error: result.error!,
+          metadata: <String, Object?>{
+            'toolId': handler.manifest.id,
+            'category': handler.manifest.category,
+            ...result.metadata,
+          },
+        ),
+      };
+    } catch (e) {
+      return NativeToolExecutionResult.failure(
+        error: ToolExecutionError(
+          code: ToolErrorCode.nativeError,
+          message: 'Tool execution internal exception: $e',
+          innerError: e,
+        ),
+      );
+    }
   }
 
   Object _normalizeArgument(ToolArgumentSpec spec, Object value) {
