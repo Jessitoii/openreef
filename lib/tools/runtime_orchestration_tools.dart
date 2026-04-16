@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'package:openreef/agent/agent_orchestrator.dart';
 import 'package:openreef/tools/tool_errors.dart';
 import 'package:openreef/tools/tool_execution_context.dart';
@@ -23,7 +22,8 @@ class SessionStatusToolHandler implements NativeToolHandler {
   ) async {
     final activeCount = context.orchestrator?.activeSubAgentsCount ?? 0;
     return NativeToolExecutionResult.success(
-      content: 'Current session: ${context.sessionKey}. Active sub-agents: $activeCount.',
+      content:
+          'Current session: ${context.sessionKey}. Active sub-agents: $activeCount.',
       metadata: <String, Object?>{
         'sessionKey': context.sessionKey,
         'activeSubAgents': activeCount,
@@ -40,8 +40,8 @@ class AgentSpawnToolHandler implements NativeToolHandler {
     argumentSchema: <ToolArgumentSpec>[
       ToolArgumentSpec(name: 'task', type: ToolArgumentType.string),
       ToolArgumentSpec(
-        name: 'preferred_model', 
-        type: ToolArgumentType.string, 
+        name: 'preferred_model',
+        type: ToolArgumentType.string,
         isRequired: false,
       ),
     ],
@@ -82,7 +82,7 @@ class AgentSpawnToolHandler implements NativeToolHandler {
         parentSessionKey: context.sessionKey,
         task: task,
         preferredModel: invocation.arguments['preferred_model'] as String?,
-      )
+      ),
     );
 
     if (!result.accepted) {
@@ -96,9 +96,7 @@ class AgentSpawnToolHandler implements NativeToolHandler {
 
     return NativeToolExecutionResult.success(
       content: 'Sub-agent spawned with session: ${result.sessionKey}',
-      metadata: <String, Object?>{
-        'sessionKey': result.sessionKey,
-      },
+      metadata: <String, Object?>{'sessionKey': result.sessionKey},
     );
   }
 }
@@ -132,9 +130,7 @@ class ExtFileListToolHandler implements NativeToolHandler {
     }
     return NativeToolExecutionResult.success(
       content: '[]',
-      metadata: <String, Object?>{
-        'path': path,
-      },
+      metadata: <String, Object?>{'path': path},
     );
   }
 }
@@ -157,9 +153,7 @@ class ExtFileReadToolHandler implements NativeToolHandler {
     ToolInvocation invocation,
     ToolExecutionContext context,
   ) async {
-    return NativeToolExecutionResult.success(
-      content: '',
-    );
+    return NativeToolExecutionResult.success(content: '');
   }
 }
 
@@ -209,13 +203,11 @@ class LlmTaskToolHandler implements NativeToolHandler {
 
     final instruction = invocation.arguments['instruction'] as String;
     final input = invocation.arguments['input'] as String;
-    final result = await _service!.infer(instruction, input);
+    final result = await _service.infer(instruction, input);
 
     return NativeToolExecutionResult.success(
       content: result,
-      metadata: <String, Object?>{
-        'instruction': instruction,
-      },
+      metadata: <String, Object?>{'instruction': instruction},
     );
   }
 }

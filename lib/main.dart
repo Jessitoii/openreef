@@ -248,6 +248,7 @@ class OpenReefBootstrap {
       storage: modelStorage,
       downloader: modelDownloader,
       bridge: liteRtBridge,
+      settingsController: settingsController,
     );
     await modelDownloadController.initialize();
 
@@ -275,12 +276,21 @@ class OpenReefBootstrap {
     );
 
     var modelReady = false;
-    final installedModel = modelDownloadController.state.installedModel;
+    final generationModelId = settingsController.settings.generationModelId;
+    final installedModel = generationModelId == null
+        ? null
+        : await modelStorage.getInstalledModelByDescriptorId(
+            modelRegistry,
+            generationModelId,
+          );
     if (installedModel != null) {
       try {
+        final registeredModel = await modelDownloader.registerInstalledModel(
+          installedModel,
+        );
         await initializeLiteRtBridge(
           liteRtBridge,
-          path: installedModel.modelId,
+          path: registeredModel.modelId,
         );
         modelReady = true;
       } catch (error) {
@@ -562,10 +572,7 @@ class OpenReefBootstrap {
     );
     final mcpSecretStore = PlatformMcpSecretStore();
     final mcpConnectionsController = McpConnectionsController(
-      store: McpConnectionStore(
-        memoryStorage,
-        secretStore: mcpSecretStore,
-      ),
+      store: McpConnectionStore(memoryStorage, secretStore: mcpSecretStore),
       runtimeCoordinator: mcpRuntimeCoordinator,
       secretStore: mcpSecretStore,
     );

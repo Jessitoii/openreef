@@ -76,6 +76,7 @@ flutter:
   assets:
     - assets/skills/context_auditor/SKILL.md
     - assets/skills/memory_curator/SKILL.md
+    - assets/skills/skill-creator/SKILL.md
 
   # To add assets to your application, add an assets section, like this:
   # assets:

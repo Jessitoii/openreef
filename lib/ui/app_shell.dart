@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:openreef/memory/chat_session_record.dart';
 import 'package:openreef/memory/chat_session_repository.dart';
 import 'package:openreef/memory/memory_index.dart';
+import 'package:openreef/ui/app_theme.dart';
+import 'package:openreef/ui/components/app_components.dart';
 import 'package:openreef/memory/memory_storage.dart';
 import 'package:openreef/models/embedding_model_manager.dart';
 import 'package:openreef/models/model_download_controller.dart';
@@ -95,23 +97,22 @@ class _AppShellState extends State<AppShell> {
               child: Column(
                 children: [
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+                    padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.md, AppSpacing.md, AppSpacing.sm),
                     child: SizedBox(
                       width: double.infinity,
-                      child: FilledButton.icon(
-                        key: const Key('new-chat-button'),
+                      child: AppButton.primary(
                         onPressed: () async {
                           Navigator.of(context).pop();
                           await _workspaceController.createNewSession();
                         },
-                        icon: const Icon(Icons.add_comment_outlined),
-                        label: const Text('New Chat'),
+                        icon: Icons.add_comment_outlined,
+                        label: 'New Chat',
                       ),
                     ),
                   ),
                   Expanded(
                     child: ListView(
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
                       children: [
                         const _DrawerSectionLabel(label: 'Recent Chats'),
                         for (final session
@@ -126,7 +127,7 @@ class _AppShellState extends State<AppShell> {
                               );
                             },
                           ),
-                        const SizedBox(height: 12),
+                        const SizedBox(height: AppSpacing.sm),
                         const _DrawerSectionLabel(label: 'Navigate'),
                         ListTile(
                           key: const Key('drawer-models'),
@@ -204,19 +205,18 @@ class _AppShellState extends State<AppShell> {
                     ),
                   ),
                   Padding(
-                    padding: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.all(AppSpacing.sm),
                     child: SizedBox(
                       width: double.infinity,
-                      child: OutlinedButton.icon(
-                        key: const Key('drawer-settings'),
+                      child: AppButton.secondary(
                         onPressed: () {
                           Navigator.of(context).pop();
                           _workspaceController.showDestination(
                             AppShellDestination.settings,
                           );
                         },
-                        icon: const Icon(Icons.settings_outlined),
-                        label: const Text('Settings'),
+                        icon: Icons.settings_outlined,
+                        label: 'Settings',
                       ),
                     ),
                   ),
@@ -259,16 +259,16 @@ class _AppShellState extends State<AppShell> {
         );
       case AppShellDestination.settings:
         return SettingsScreen(
-          settingsController: widget.settingsController,
-          wakeWordController: widget.wakeWordController,
-          embeddingModelManager: widget.embeddingModelManager,
+          manager: widget.embeddingModelManager!,
         );
       case AppShellDestination.skills:
         return SkillsScreen(controller: widget.skillRegistryController);
       case AppShellDestination.automation:
         return widget.automationController == null
             ? const Center(child: Text('Automation unavailable'))
-            : AutomationScreen(controller: widget.automationController!);
+            : AutomationScreen(
+                controller: widget.automationController!,
+              );
       case AppShellDestination.mcp:
         return McpConnectionsScreen(
           controller: widget.mcpConnectionsController,
@@ -311,7 +311,7 @@ class _ShellTopBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 8, 12, 4),
+      padding: const EdgeInsets.fromLTRB(AppSpacing.sm, AppSpacing.sm, AppSpacing.sm, AppSpacing.xs),
       child: Row(
         children: [
           IconButton(
@@ -327,7 +327,7 @@ class _ShellTopBar extends StatelessWidget {
               ),
             ),
           ),
-          TextButton(onPressed: onChatPressed, child: const Text('Chat')),
+          AppButton.secondary(onPressed: onChatPressed, label: 'Chat'),
         ],
       ),
     );
@@ -342,7 +342,7 @@ class _DrawerSectionLabel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
+      padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.sm),
       child: Text(
         label.toUpperCase(),
         style: Theme.of(context).textTheme.labelLarge,

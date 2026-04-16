@@ -1,7 +1,5 @@
 import 'package:openreef/mcp/mcp_models.dart';
 import 'package:openreef/tools/tool_manifest.dart';
-import 'package:openreef/tools/tool_errors.dart';
-import 'package:openreef/tools/tool_execution_context.dart';
 
 class McpToolManifestAdapter {
   const McpToolManifestAdapter();
@@ -41,8 +39,8 @@ class McpToolManifestAdapter {
       McpJsonSchemaType.object ||
       McpJsonSchemaType.array ||
       McpJsonSchemaType.unknown => throw McpToolAdaptationException(
-          'unsupported_argument_type:${tool.name}:$name:${property.type.name}',
-        ),
+        'unsupported_argument_type:${tool.name}:$name:${property.type.name}',
+      ),
     };
 
     return ToolArgumentSpec(

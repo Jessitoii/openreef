@@ -12,7 +12,6 @@ import 'package:openreef/tools/mvp_native_tools.dart';
 import 'package:openreef/tools/native_tool_adapters.dart';
 import 'package:openreef/tools/tool_errors.dart';
 import 'package:openreef/tools/tool_manifest.dart';
-import 'package:openreef/tools/tool_errors.dart';
 import 'package:openreef/tools/tool_execution_context.dart';
 import 'package:openreef/tools/tool_manifest_registry.dart';
 
@@ -40,30 +39,28 @@ void main() {
     locationAdapter = _RecordingLocationAdapter();
     mapsAdapter = _RecordingMapsAdapter();
     ttsAdapter = _RecordingTtsAdapter();
-    registry = ToolManifestRegistry(
-      <NativeToolHandler>[
-        VolumeSetToolHandler(volumeAdapter),
-        ClipboardReadToolHandler(clipboardAdapter),
-        BatteryInfoToolHandler(batteryAdapter),
-        ContactReadToolHandler(contactAdapter),
-        ContactCreateToolHandler(contactAdapter),
-        SmsDraftToolHandler(draftMessageAdapter),
-        EmailDraftToolHandler(draftMessageAdapter),
-        FlashlightToggleToolHandler(flashlightAdapter),
-        DndSetToolHandler(dndAdapter),
-        LocationGetToolHandler(locationAdapter),
-        MapsNavigateToolHandler(mapsAdapter),
-        RegexEvalToolHandler(),
-        MathEvalToolHandler(),
-        TtsSpeakToolHandler(ttsAdapter),
-        MemorySearchToolHandler(
-          SemanticMemoryRetriever(
-            storage: MemoryStorage(_NoopMemoryStorageBackend()),
-            embedder: const _FixedSemanticEmbedder(<double>[1, 0, 0]),
-          ),
+    registry = ToolManifestRegistry(<NativeToolHandler>[
+      VolumeSetToolHandler(volumeAdapter),
+      ClipboardReadToolHandler(clipboardAdapter),
+      BatteryInfoToolHandler(batteryAdapter),
+      ContactReadToolHandler(contactAdapter),
+      ContactCreateToolHandler(contactAdapter),
+      SmsDraftToolHandler(draftMessageAdapter),
+      EmailDraftToolHandler(draftMessageAdapter),
+      FlashlightToggleToolHandler(flashlightAdapter),
+      DndSetToolHandler(dndAdapter),
+      LocationGetToolHandler(locationAdapter),
+      MapsNavigateToolHandler(mapsAdapter),
+      RegexEvalToolHandler(),
+      MathEvalToolHandler(),
+      TtsSpeakToolHandler(ttsAdapter),
+      MemorySearchToolHandler(
+        SemanticMemoryRetriever(
+          storage: MemoryStorage(_NoopMemoryStorageBackend()),
+          embedder: const _FixedSemanticEmbedder(<double>[1, 0, 0]),
         ),
-      ],
-    );
+      ),
+    ]);
   });
 
   test('lists manifests and looks them up by id', () {
@@ -76,7 +73,9 @@ void main() {
   });
 
   test('rejects missing and invalid arguments', () {
-    final missing = registry.validate(const ToolInvocation(toolId: 'volume_set'));
+    final missing = registry.validate(
+      const ToolInvocation(toolId: 'volume_set'),
+    );
     final invalid = registry.validate(
       const ToolInvocation(
         toolId: 'dnd_set',
@@ -96,7 +95,10 @@ void main() {
         toolId: 'volume_set',
         arguments: <String, Object?>{'level': 0.35},
       ),
-      context: const ToolExecutionContext(sessionKey: 'agent:test', clock: null),
+      context: const ToolExecutionContext(
+        sessionKey: 'agent:test',
+        clock: null,
+      ),
     );
 
     expect(volumeAdapter.lastLevel, 0.35);
@@ -137,17 +139,20 @@ void main() {
     expect(result.error?.id, 'permission_denied');
   });
 
-  test('regex_eval returns invalid argument failures for bad patterns', () async {
-    final result = await registry.execute(
-      const ToolInvocation(
-        toolId: 'regex_eval',
-        arguments: <String, Object?>{'pattern': '(', 'input': 'broken'},
-      ),
-    );
+  test(
+    'regex_eval returns invalid argument failures for bad patterns',
+    () async {
+      final result = await registry.execute(
+        const ToolInvocation(
+          toolId: 'regex_eval',
+          arguments: <String, Object?>{'pattern': '(', 'input': 'broken'},
+        ),
+      );
 
-    expect(result.isFailure, isTrue);
-    expect(result.error?.id, 'invalid_arguments');
-  });
+      expect(result.isFailure, isTrue);
+      expect(result.error?.id, 'invalid_arguments');
+    },
+  );
 
   test('math_eval respects precedence and parentheses', () async {
     final result = await registry.execute(
@@ -340,15 +345,17 @@ class _RecordingContactAdapter implements ContactAdapter {
     if (error != null) {
       throw error!;
     }
-    return const <ContactRecord>[
-      ContactRecord(displayName: 'Ali Veli'),
-    ];
+    return const <ContactRecord>[ContactRecord(displayName: 'Ali Veli')];
   }
 }
 
 class _RecordingDraftMessageAdapter implements DraftMessageAdapter {
   @override
-  Future<void> openEmailDraft({String? to, String? subject, String? body}) async {}
+  Future<void> openEmailDraft({
+    String? to,
+    String? subject,
+    String? body,
+  }) async {}
 
   @override
   Future<void> openSmsDraft({String? to, String? body}) async {}
@@ -366,7 +373,9 @@ class _RecordingDndAdapter implements DndAdapter {
 
 class _RecordingLocationAdapter implements LocationAdapter {
   @override
-  Future<LocationSnapshot> getCurrentLocation({required bool highAccuracy}) async {
+  Future<LocationSnapshot> getCurrentLocation({
+    required bool highAccuracy,
+  }) async {
     return LocationSnapshot(
       latitude: 41.0,
       longitude: 29.0,

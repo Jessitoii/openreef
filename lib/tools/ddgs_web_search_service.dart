@@ -37,14 +37,24 @@ class WebSearchToolHandler implements NativeToolHandler {
   ) async {
     final query = (invocation.arguments['query'] as String?)?.trim();
     if (query == null || query.isEmpty) {
-      return NativeToolExecutionResult.failure(error: const ToolExecutionError(code: ToolErrorCode.invalidArguments, message: 'invalid_arguments'));
-    }
-    
-    if (_service == null) {
-      return NativeToolExecutionResult.failure(error: const ToolExecutionError(code: ToolErrorCode.featureUnavailable, message: 'feature_unavailable'));
+      return NativeToolExecutionResult.failure(
+        error: const ToolExecutionError(
+          code: ToolErrorCode.invalidArguments,
+          message: 'invalid_arguments',
+        ),
+      );
     }
 
-    final results = await _service!.search(query);
+    if (_service == null) {
+      return NativeToolExecutionResult.failure(
+        error: const ToolExecutionError(
+          code: ToolErrorCode.featureUnavailable,
+          message: 'feature_unavailable',
+        ),
+      );
+    }
+
+    final results = await _service.search(query);
     return NativeToolExecutionResult.success(content: results);
   }
 }
@@ -74,14 +84,24 @@ class WebFetchToolHandler implements NativeToolHandler {
   ) async {
     final url = (invocation.arguments['url'] as String?)?.trim();
     if (url == null || url.isEmpty) {
-      return NativeToolExecutionResult.failure(error: const ToolExecutionError(code: ToolErrorCode.invalidArguments, message: 'invalid_arguments'));
-    }
-    
-    if (_service == null) {
-      return NativeToolExecutionResult.failure(error: const ToolExecutionError(code: ToolErrorCode.featureUnavailable, message: 'feature_unavailable'));
+      return NativeToolExecutionResult.failure(
+        error: const ToolExecutionError(
+          code: ToolErrorCode.invalidArguments,
+          message: 'invalid_arguments',
+        ),
+      );
     }
 
-    final text = await _service!.fetch(url);
+    if (_service == null) {
+      return NativeToolExecutionResult.failure(
+        error: const ToolExecutionError(
+          code: ToolErrorCode.featureUnavailable,
+          message: 'feature_unavailable',
+        ),
+      );
+    }
+
+    final text = await _service.fetch(url);
     return NativeToolExecutionResult.success(content: text);
   }
 }

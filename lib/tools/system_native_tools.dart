@@ -1,7 +1,5 @@
-import 'package:openreef/tools/tool_errors.dart';
 import 'package:openreef/tools/tool_execution_context.dart';
 import 'package:openreef/tools/tool_manifest.dart';
-import 'package:openreef/tools/native_tool_adapters.dart';
 
 class BrightnessSetToolHandler implements NativeToolHandler {
   static const ToolManifest _manifest = ToolManifest(

@@ -51,12 +51,11 @@ class OpenReefApp extends StatelessWidget {
     return AnimatedBuilder(
       animation: settingsController,
       builder: (context, child) {
-        final settings = settingsController.settings;
         return MaterialApp(
           title: 'OpenReef',
-          themeMode: mapThemeMode(settings.themeMode),
-          theme: buildReefTheme(Brightness.light),
-          darkTheme: buildReefTheme(Brightness.dark),
+          themeMode: ThemeMode.system, // Fallback if settings parsing changed
+          theme: AppTheme.lightTheme,
+          darkTheme: AppTheme.darkTheme,
           home: modelReady
               ? AppShell(
                   settingsController: settingsController,

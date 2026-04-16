@@ -1,223 +1,327 @@
-import 'dart:io';
-
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:openreef/agent/tool_router.dart';
 import 'package:openreef/skills/skill.dart';
-import 'package:openreef/skills/skill_package_repository.dart';
-import 'package:openreef/skills/skill_package_service.dart';
-import 'package:openreef/skills/skill_registry.dart';
+import 'package:openreef/skills/skill_package_models.dart';
 import 'package:openreef/skills/skill_registry_controller.dart';
-import 'package:openreef/skills/skill_runtime_catalog.dart';
+import 'package:openreef/skills/skill_runtime_snapshot.dart';
 import 'package:openreef/ui/screens/skills_screen.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('skills workspace renders detail file tree and validation', (
+  testWidgets('user skill opens in guided mode and saves SKILL.md', (
     tester,
   ) async {
-    final tempRoot = await Directory.systemTemp.createTemp('skills-ui-');
-    final localRoot = Directory('${tempRoot.path}${Platform.pathSeparator}skills');
-    await localRoot.create(recursive: true);
-    final builtinRoot =
-        Directory('${tempRoot.path}${Platform.pathSeparator}builtin_skills');
-    await builtinRoot.create(recursive: true);
-    final packageDir =
-        Directory('${localRoot.path}${Platform.pathSeparator}sleep_tracker');
-    await packageDir.create(recursive: true);
-    await File('${packageDir.path}${Platform.pathSeparator}SKILL.md').writeAsString(
-      '---\nname: Sleep Tracker\ntools_required: []\n---\n# Sleep Tracker\n',
-    );
-    await File('${packageDir.path}${Platform.pathSeparator}notes.txt')
-        .writeAsString('support note');
-
-    final registry = SkillRegistry(
-      rootPaths: const <String>[],
-      roots: <SkillRegistryRoot>[
-        SkillRegistryRoot(path: builtinRoot.path, sourceType: SkillSourceType.builtin),
-        SkillRegistryRoot(path: localRoot.path, sourceType: SkillSourceType.user),
+    final controller = _FakeSkillRegistryController(
+      packages: <SkillPackageDetail>[
+        _detail(
+          id: 'sleep_tracker',
+          displayName: 'sleep_tracker',
+          isWritable: true,
+          markdown:
+              '---\nname: Sleep Tracker\ndescription: Track rest\n---\n# Sleep Tracker\n',
+        ),
       ],
     );
-    final catalog = SkillRuntimeCatalog(
-      registry: registry,
-      toolCatalog: InMemoryToolCatalog(const <ToolDefinition>[]),
-      stateFile: File(
-        '${tempRoot.path}${Platform.pathSeparator}runtime_state.json',
-      ),
-    );
-    await catalog.reload();
-    final service = SkillPackageService(
-      registry: registry,
-      toolCatalog: InMemoryToolCatalog(const <ToolDefinition>[]),
-      repository: SkillPackageRepository(
-        localRootDirectory: localRoot,
-        builtinRootDirectory: builtinRoot,
-      ),
-      isEnabled: (skillId) => catalog.enabledById[skillId] ?? true,
-    );
-    final controller = SkillRegistryController(
-      catalog: catalog,
-      packageService: service,
-    );
-    await controller.reload();
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(body: SkillsScreen(controller: controller)),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    expect(find.text('sleep_tracker'), findsOneWidget);
-    expect(find.text('notes.txt'), findsOneWidget);
-
-    await tester.tap(find.text('notes.txt'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('support note'), findsOneWidget);
-  });
-
-  testWidgets('mobile portrait opens detail as full-width flow', (tester) async {
-    tester.view.physicalSize = const Size(390, 844);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
-
-    final tempRoot = await Directory.systemTemp.createTemp('skills-ui-mobile-');
-    final localRoot = Directory('${tempRoot.path}${Platform.pathSeparator}skills');
-    await localRoot.create(recursive: true);
-    final builtinRoot =
-        Directory('${tempRoot.path}${Platform.pathSeparator}builtin_skills');
-    await builtinRoot.create(recursive: true);
-    final packageDir =
-        Directory('${localRoot.path}${Platform.pathSeparator}sleep_tracker');
-    await packageDir.create(recursive: true);
-    await File('${packageDir.path}${Platform.pathSeparator}SKILL.md').writeAsString(
-      '---\nname: Sleep Tracker\ntools_required: []\n---\n# Sleep Tracker\n',
-    );
-
-    final registry = SkillRegistry(
-      rootPaths: const <String>[],
-      roots: <SkillRegistryRoot>[
-        SkillRegistryRoot(path: builtinRoot.path, sourceType: SkillSourceType.builtin),
-        SkillRegistryRoot(path: localRoot.path, sourceType: SkillSourceType.user),
-      ],
-    );
-    final catalog = SkillRuntimeCatalog(
-      registry: registry,
-      toolCatalog: InMemoryToolCatalog(const <ToolDefinition>[]),
-      stateFile: File(
-        '${tempRoot.path}${Platform.pathSeparator}runtime_state.json',
-      ),
-    );
-    await catalog.reload();
-    final service = SkillPackageService(
-      registry: registry,
-      toolCatalog: InMemoryToolCatalog(const <ToolDefinition>[]),
-      repository: SkillPackageRepository(
-        localRootDirectory: localRoot,
-        builtinRootDirectory: builtinRoot,
-      ),
-      isEnabled: (skillId) => catalog.enabledById[skillId] ?? true,
-    );
-    final controller = SkillRegistryController(
-      catalog: catalog,
-      packageService: service,
-    );
-    await controller.reload();
 
     await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(body: SkillsScreen(controller: controller)),
-      ),
+      MaterialApp(home: SkillsScreen(controller: controller)),
     );
-    await tester.pumpAndSettle();
-    expect(tester.takeException(), isNull);
-
-    expect(find.text('Skills'), findsOneWidget);
-    expect(find.text('sleep_tracker'), findsOneWidget);
+    await tester.pump();
 
     await tester.tap(find.text('sleep_tracker'));
-    await tester.pumpAndSettle();
-    expect(tester.takeException(), isNull);
+    await tester.pump();
 
-    expect(find.text('Back to skills'), findsOneWidget);
-    expect(find.text('Validation'), findsOneWidget);
-    expect(find.text('Editor'), findsOneWidget);
+    expect(find.text('Skill Name'), findsOneWidget);
+    expect(find.text('Agent Instructions (Prompt)'), findsOneWidget);
+    expect(find.text('Raw markdown...'), findsNothing);
+
+    await tester.enterText(find.byType(TextField).at(0), 'Sleep Coach');
+    await tester.enterText(find.byType(TextField).at(1), 'Gentle sleep help');
+    await tester.enterText(
+      find.byType(TextField).at(2),
+      'Help the user review sleep patterns.',
+    );
+    await tester.tap(find.text('Save'));
+    await tester.pump();
+
+    expect(controller.savedSkillId, 'sleep_tracker');
+    expect(controller.savedRelativePath, 'SKILL.md');
+    expect(controller.savedContent, contains('name: Sleep Coach'));
+    expect(controller.savedContent, contains('Gentle sleep help'));
+    expect(
+      controller.savedContent,
+      contains('Help the user review sleep patterns.'),
+    );
+    expect(find.text('Skills'), findsOneWidget);
   });
 
-  testWidgets('built-in detail actions are disabled on narrow width', (
+  testWidgets('advanced raw SKILL.md editor requires explicit toggle', (
     tester,
   ) async {
-    tester.view.physicalSize = const Size(390, 844);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
-
-    final tempRoot = await Directory.systemTemp.createTemp('skills-ui-builtin-');
-    final localRoot = Directory('${tempRoot.path}${Platform.pathSeparator}skills');
-    await localRoot.create(recursive: true);
-    final builtinRoot =
-        Directory('${tempRoot.path}${Platform.pathSeparator}builtin_skills');
-    await builtinRoot.create(recursive: true);
-    final builtinDir = Directory(
-      '${builtinRoot.path}${Platform.pathSeparator}context_auditor',
-    );
-    await builtinDir.create(recursive: true);
-    await File('${builtinDir.path}${Platform.pathSeparator}SKILL.md').writeAsString(
-      '---\nname: Context Auditor\ntools_required: []\n---\n# Context Auditor\n',
-    );
-
-    final registry = SkillRegistry(
-      rootPaths: const <String>[],
-      roots: <SkillRegistryRoot>[
-        SkillRegistryRoot(path: builtinRoot.path, sourceType: SkillSourceType.builtin),
-        SkillRegistryRoot(path: localRoot.path, sourceType: SkillSourceType.user),
+    final controller = _FakeSkillRegistryController(
+      packages: <SkillPackageDetail>[
+        _detail(
+          id: 'sleep_tracker',
+          displayName: 'sleep_tracker',
+          isWritable: true,
+          markdown:
+              '---\nname: Sleep Tracker\ndescription: Track rest\n---\n# Sleep Tracker\n',
+        ),
       ],
     );
-    final catalog = SkillRuntimeCatalog(
-      registry: registry,
-      toolCatalog: InMemoryToolCatalog(const <ToolDefinition>[]),
-      stateFile: File(
-        '${tempRoot.path}${Platform.pathSeparator}runtime_state.json',
-      ),
-    );
-    await catalog.reload();
-    final service = SkillPackageService(
-      registry: registry,
-      toolCatalog: InMemoryToolCatalog(const <ToolDefinition>[]),
-      repository: SkillPackageRepository(
-        localRootDirectory: localRoot,
-        builtinRootDirectory: builtinRoot,
-      ),
-      isEnabled: (skillId) => catalog.enabledById[skillId] ?? true,
-    );
-    final controller = SkillRegistryController(
-      catalog: catalog,
-      packageService: service,
-    );
-    await controller.reload();
 
     await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(body: SkillsScreen(controller: controller)),
-      ),
+      MaterialApp(home: SkillsScreen(controller: controller)),
     );
-    await tester.pumpAndSettle();
-    expect(tester.takeException(), isNull);
+    await tester.pump();
+
+    await tester.tap(find.text('sleep_tracker'));
+    await tester.pump();
+
+    expect(find.text('Raw markdown...'), findsNothing);
+    await tester.tap(find.byType(Switch).last);
+    await tester.pump();
+
+    expect(find.text('Raw markdown...'), findsOneWidget);
+  });
+
+  testWidgets('built-in skills show read-only state and disable mutation', (
+    tester,
+  ) async {
+    final controller = _FakeSkillRegistryController(
+      packages: <SkillPackageDetail>[
+        _detail(
+          id: 'context_auditor',
+          displayName: 'context_auditor',
+          isWritable: false,
+          markdown:
+              '---\nname: Context Auditor\ndescription: Audit context\n---\n# Context Auditor\n',
+        ),
+      ],
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(home: SkillsScreen(controller: controller)),
+    );
+    await tester.pump();
+
+    final deleteIcon = tester.widget<IconButton>(
+      find
+          .ancestor(
+            of: find.byIcon(Icons.delete_outline),
+            matching: find.byType(IconButton),
+          )
+          .first,
+    );
+    expect(deleteIcon.onPressed, isNull);
 
     await tester.tap(find.text('context_auditor'));
-    await tester.pumpAndSettle();
-    expect(tester.takeException(), isNull);
+    await tester.pump();
 
-    final saveButton = tester.widget<OutlinedButton>(
-      find.widgetWithText(OutlinedButton, 'Save'),
+    expect(
+      find.text(
+        'Built-in skills are read-only. You can review this skill, but Save and Delete are disabled.',
+      ),
+      findsOneWidget,
     );
-    final deleteButton = tester.widget<OutlinedButton>(
-      find.widgetWithText(OutlinedButton, 'Delete'),
+    final saveButton = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Save'),
     );
-
     expect(saveButton.onPressed, isNull);
-    expect(deleteButton.onPressed, isNull);
   });
+
+  testWidgets('new skill creates a user package and opens guided editor', (
+    tester,
+  ) async {
+    final controller = _FakeSkillRegistryController();
+
+    await tester.pumpWidget(
+      MaterialApp(home: SkillsScreen(controller: controller)),
+    );
+    await tester.pump();
+
+    await tester.tap(find.text('New Skill'));
+    await tester.pump();
+
+    expect(controller.createdIds.single, startsWith('new_skill_'));
+    expect(find.text('Skill Name'), findsOneWidget);
+    expect(find.text('Agent Instructions (Prompt)'), findsOneWidget);
+  });
+}
+
+SkillPackageDetail _detail({
+  required String id,
+  required String displayName,
+  required bool isWritable,
+  required String markdown,
+}) {
+  final ref = SkillPackageRef(
+    id: id,
+    displayName: displayName,
+    sourceType: isWritable ? SkillSourceType.user : SkillSourceType.builtin,
+    rootPath: '/skills/$id',
+    isWritable: isWritable,
+    isEnabled: true,
+    validationSummary: SkillValidationSummary.empty(),
+    lastModified: null,
+  );
+  return SkillPackageDetail(
+    ref: ref,
+    fileTree: const <SkillFileNode>[],
+    rawSkillMarkdown: markdown,
+    parsedSkill: null,
+    validationSummary: SkillValidationSummary.empty(),
+    permissionsAndToolsSummary: '',
+    lastModified: null,
+    isMalformed: false,
+  );
+}
+
+class _FakeSkillRegistryController implements SkillRegistryController {
+  _FakeSkillRegistryController({
+    List<SkillPackageDetail> packages = const <SkillPackageDetail>[],
+  }) : _details = <String, SkillPackageDetail>{
+         for (final detail in packages) detail.ref.id: detail,
+       } {
+    _syncPackages();
+  }
+
+  final Map<String, SkillPackageDetail> _details;
+  final ValueNotifier<List<SkillRuntimeSnapshot>> _skills =
+      ValueNotifier<List<SkillRuntimeSnapshot>>(const <SkillRuntimeSnapshot>[]);
+  final ValueNotifier<List<SkillPackageRef>> _packages =
+      ValueNotifier<List<SkillPackageRef>>(const <SkillPackageRef>[]);
+  final ValueNotifier<SkillPackageDetail?> _selectedPackage =
+      ValueNotifier<SkillPackageDetail?>(null);
+
+  String? savedSkillId;
+  String? savedRelativePath;
+  String? savedContent;
+  final List<String> createdIds = <String>[];
+  final List<String> deletedIds = <String>[];
+
+  @override
+  ValueListenable<List<SkillRuntimeSnapshot>> get skills => _skills;
+
+  @override
+  ValueListenable<List<SkillPackageRef>> get packages => _packages;
+
+  @override
+  ValueListenable<SkillPackageDetail?> get selectedPackage => _selectedPackage;
+
+  @override
+  Future<void> reload() async {
+    _syncPackages();
+  }
+
+  @override
+  Future<void> setSkillEnabled(String skillId, bool enabled) async {
+    final detail = _details[skillId];
+    if (detail == null) {
+      return;
+    }
+    _details[skillId] = _copyDetail(
+      detail,
+      ref: _copyRef(detail.ref, isEnabled: enabled),
+    );
+    _syncPackages();
+  }
+
+  @override
+  Future<void> selectPackage(String skillId) async {
+    _selectedPackage.value = _details[skillId];
+  }
+
+  @override
+  Future<SkillPackageDetail?> createPackage({
+    required String id,
+    required String markdown,
+    Map<String, String>? supportFiles,
+  }) async {
+    createdIds.add(id);
+    final detail = _detail(
+      id: id,
+      displayName: 'New Skill',
+      isWritable: true,
+      markdown: markdown,
+    );
+    _details[id] = detail;
+    _selectedPackage.value = detail;
+    _syncPackages();
+    return detail;
+  }
+
+  @override
+  Future<SkillPackageDetail?> saveFile({
+    required String skillId,
+    required String relativePath,
+    required String content,
+  }) async {
+    savedSkillId = skillId;
+    savedRelativePath = relativePath;
+    savedContent = content;
+    final current = _details[skillId];
+    if (current == null) {
+      return null;
+    }
+    final detail = _copyDetail(current, rawSkillMarkdown: content);
+    _details[skillId] = detail;
+    _selectedPackage.value = detail;
+    _syncPackages();
+    return detail;
+  }
+
+  @override
+  Future<String?> loadFileContent({
+    required String skillId,
+    required String relativePath,
+  }) async {
+    return _details[skillId]?.rawSkillMarkdown;
+  }
+
+  @override
+  Future<SkillPackageDetail?> deletePackage(String skillId) async {
+    deletedIds.add(skillId);
+    final removed = _details.remove(skillId);
+    _syncPackages();
+    return removed;
+  }
+
+  void _syncPackages() {
+    _packages.value = List<SkillPackageRef>.unmodifiable(
+      _details.values.map((detail) => detail.ref),
+    );
+  }
+}
+
+SkillPackageRef _copyRef(SkillPackageRef ref, {bool? isEnabled}) {
+  return SkillPackageRef(
+    id: ref.id,
+    displayName: ref.displayName,
+    sourceType: ref.sourceType,
+    rootPath: ref.rootPath,
+    isWritable: ref.isWritable,
+    isEnabled: isEnabled ?? ref.isEnabled,
+    validationSummary: ref.validationSummary,
+    lastModified: ref.lastModified,
+  );
+}
+
+SkillPackageDetail _copyDetail(
+  SkillPackageDetail detail, {
+  SkillPackageRef? ref,
+  String? rawSkillMarkdown,
+}) {
+  return SkillPackageDetail(
+    ref: ref ?? detail.ref,
+    fileTree: detail.fileTree,
+    rawSkillMarkdown: rawSkillMarkdown ?? detail.rawSkillMarkdown,
+    parsedSkill: detail.parsedSkill,
+    validationSummary: detail.validationSummary,
+    permissionsAndToolsSummary: detail.permissionsAndToolsSummary,
+    lastModified: detail.lastModified,
+    isMalformed: detail.isMalformed,
+  );
 }

@@ -11,4 +11,17 @@ void main() {
     final updated = settings.writeValue('trigger.mailPollMinutes', 18);
     expect(updated.triggerMailPollMinutes, 18);
   });
+
+  test('persists generation model id outside LLM writable settings', () {
+    const settings = AppSettings(generationModelId: 'gemma-4-e2b-it');
+
+    expect(settings.toJson()['generation.modelId'], 'gemma-4-e2b-it');
+
+    final rehydrated = AppSettings.fromJson(settings.toJson());
+    expect(rehydrated.generationModelId, 'gemma-4-e2b-it');
+    expect(
+      () => rehydrated.readValue('generation.modelId'),
+      throwsArgumentError,
+    );
+  });
 }

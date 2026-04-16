@@ -296,7 +296,7 @@ class EmbeddingModelManager extends ChangeNotifier
               : EmbeddingModelReadinessStatus.downloadable,
           model: model,
           message: installed
-              ? 'Activate ${model.name} for semantic retrieval.'
+              ? '${model.name} is installed for semantic retrieval.'
               : 'Install ${model.name} for semantic retrieval.',
           hasToken: hasToken,
         ),

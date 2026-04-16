@@ -76,4 +76,21 @@ void main() {
       );
     },
   );
+
+  test('persists generation model selection outside LLM writes', () async {
+    final controller = SettingsController(store: SettingsStore(settingsFile));
+    await controller.initialize();
+
+    controller.updateGenerationModelId('function-gemma-270m-it');
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    final rehydrated = SettingsController(store: SettingsStore(settingsFile));
+    await rehydrated.initialize();
+
+    expect(rehydrated.settings.generationModelId, 'function-gemma-270m-it');
+    expect(
+      () => rehydrated.readToolValue('generation.modelId'),
+      throwsArgumentError,
+    );
+  });
 }

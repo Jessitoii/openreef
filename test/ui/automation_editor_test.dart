@@ -25,13 +25,17 @@ void main() {
     }
   });
 
-  testWidgets('builder keeps advanced fields hidden by default', (tester) async {
+  testWidgets('builder keeps advanced fields hidden by default', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       MaterialApp(
         home: AutomationBuilderScreen(
           controller: AutomationController(
             repository: TriggerRepository(
-              file: File('${tempDir.path}${Platform.pathSeparator}triggers.json'),
+              file: File(
+                '${tempDir.path}${Platform.pathSeparator}triggers.json',
+              ),
             ),
             triggerSystem: TriggerSystem(
               scheduleBackend: _NoopScheduleBackend(),
@@ -62,6 +66,11 @@ void main() {
 
     expect(find.text('Cron expression'), findsOneWidget);
     expect(find.text('Source id'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('Event id'),
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
     expect(find.text('Event id'), findsOneWidget);
   });
 }

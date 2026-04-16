@@ -23,6 +23,16 @@ class ModelRegistry {
       .where((model) => model.task == ReefModelTask.embedding)
       .toList(growable: false);
 
+  ModelDescriptor? get defaultGenerationModel {
+    final generation = generationModels;
+    for (final model in generation) {
+      if (model.recommended) {
+        return model;
+      }
+    }
+    return generation.isEmpty ? null : generation.first;
+  }
+
   ModelDescriptor? get defaultEmbeddingModel {
     final embeddings = embeddingModels;
     for (final model in embeddings) {
@@ -40,9 +50,9 @@ class ModelRegistry {
       downloadUrl:
           'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm?download=true',
       modelType: ModelType.gemmaIt,
-      fileType: ModelFileType.task,
-      storageFileName: 'gemma_4_e2b_it.task',
-      expectedFileSizeBytes: 2583 * 1024 * 1024,
+      fileType: ModelFileType.litertlm,
+      storageFileName: 'gemma-4-E2B-it.litertlm',
+      expectedFileSizeBytes: 2583085056,
       contextWindow: 32000,
       minRamGb: 3,
       bestFor: 'Default assistant with strong speed, coding, and reasoning.',
@@ -55,9 +65,9 @@ class ModelRegistry {
       downloadUrl:
           'https://huggingface.co/JackJ1/functiongemma-270m-it-mobile-actions-litertlm/resolve/main/mobile-actions_q8_ekv1024.litertlm?download=true',
       modelType: ModelType.functionGemma,
-      fileType: ModelFileType.task,
-      storageFileName: 'function_gemma_270m_it.task',
-      expectedFileSizeBytes: 262 * 1024 * 1024,
+      fileType: ModelFileType.litertlm,
+      storageFileName: 'mobile-actions_q8_ekv1024.litertlm',
+      expectedFileSizeBytes: 284426240,
       contextWindow: 8192,
       minRamGb: 2,
       bestFor: 'Function-calling focused assistant for tool execution.',

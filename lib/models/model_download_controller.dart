@@ -8,6 +8,7 @@ import 'package:openreef/models/model_downloader.dart';
 import 'package:openreef/models/model_download_state.dart';
 import 'package:openreef/models/model_registry.dart';
 import 'package:openreef/models/model_storage.dart';
+import 'package:openreef/settings/settings_controller.dart';
 
 class ModelDownloadController extends ChangeNotifier {
   ModelDownloadController({
@@ -15,16 +16,19 @@ class ModelDownloadController extends ChangeNotifier {
     required ModelStorage storage,
     required ModelDownloader downloader,
     required LiteRtBridge bridge,
+    required SettingsController settingsController,
   }) : _registry = registry,
        _storage = storage,
        _downloader = downloader,
        _bridge = bridge,
+       _settingsController = settingsController,
        _state = const ModelDownloadState.idle();
 
   final ModelRegistry _registry;
   final ModelStorage _storage;
   final ModelDownloader _downloader;
   final LiteRtBridge _bridge;
+  final SettingsController _settingsController;
 
   ModelDownloadState _state;
   DateTime? _lastTickAt;
@@ -47,12 +51,13 @@ class ModelDownloadController extends ChangeNotifier {
       deviceStats = null;
     }
 
-    final installedModel = await _storage.getActiveInstalledModel(_registry);
-    final defaultSelection =
-        installedModel?.descriptor ?? _pickRecommendedModel(deviceStats);
+    final installedModels = await _storage.reconcileInstalledModels(_registry);
+    final selectedModel = await _ensureSelectedModel(installedModels);
+    final installedModel = _recordFor(installedModels, selectedModel);
     _state = _state.copyWith(
-      selectedModel: defaultSelection,
+      selectedModel: selectedModel,
       installedModel: installedModel,
+      installedModels: installedModels,
       deviceStats: deviceStats,
       status: installedModel == null
           ? ModelDownloadStatus.idle
@@ -66,11 +71,65 @@ class ModelDownloadController extends ChangeNotifier {
   }
 
   void selectModel(ModelDescriptor descriptor) {
+    final installedModel = _recordFor(_state.installedModels, descriptor);
     _state = _state.copyWith(
       selectedModel: descriptor,
+      installedModel: installedModel,
+      status: installedModel == null
+          ? ModelDownloadStatus.idle
+          : ModelDownloadStatus.completed,
+      downloadedBytes: installedModel?.fileSizeBytes ?? 0,
+      totalBytes: installedModel?.fileSizeBytes ?? 0,
+      bytesPerSecond: 0,
       clearErrorMessage: true,
     );
     notifyListeners();
+  }
+
+  bool isActive(ModelDescriptor model) {
+    return _settingsController.settings.generationModelId == model.id &&
+        _state.installedRecordFor(model) != null;
+  }
+
+  bool isInstalled(ModelDescriptor model) {
+    return _state.installedRecordFor(model) != null;
+  }
+
+  Future<InstalledModelRecord?> activateSelectedModel() async {
+    final descriptor = _state.selectedModel;
+    if (descriptor == null) {
+      return null;
+    }
+    final recovered = await _storage.reconcileDescriptor(descriptor);
+    final installedModel = recovered == null
+        ? null
+        : await _downloader.registerInstalledModel(recovered);
+    final installedModels = await _storage.listInstalledModels(_registry);
+    if (installedModel == null) {
+      _state = _state.copyWith(
+        installedModels: installedModels,
+        installedModel: null,
+        status: ModelDownloadStatus.idle,
+        downloadedBytes: 0,
+        totalBytes: descriptor.expectedFileSizeBytes,
+        bytesPerSecond: 0,
+        clearErrorMessage: true,
+      );
+      notifyListeners();
+      return null;
+    }
+    _settingsController.updateGenerationModelId(descriptor.id);
+    _state = _state.copyWith(
+      installedModel: installedModel,
+      installedModels: installedModels,
+      status: ModelDownloadStatus.completed,
+      downloadedBytes: installedModel.fileSizeBytes,
+      totalBytes: installedModel.fileSizeBytes,
+      bytesPerSecond: 0,
+      clearErrorMessage: true,
+    );
+    notifyListeners();
+    return installedModel;
   }
 
   Future<InstalledModelRecord?> startDownload() async {
@@ -83,16 +142,31 @@ class ModelDownloadController extends ChangeNotifier {
       _downloader.resetStuckDownload();
     }
 
-    final existingInstalled = _state.installedModel;
-    if (existingInstalled != null) {
-      await _storage.clearInstalled(existingInstalled.descriptor);
+    final recovered = await _storage.reconcileDescriptor(descriptor);
+    if (recovered != null) {
+      final installedModel = await _downloader.registerInstalledModel(
+        recovered,
+      );
+      _settingsController.updateGenerationModelId(descriptor.id);
+      final installedModels = await _storage.listInstalledModels(_registry);
+      _state = _state.copyWith(
+        status: ModelDownloadStatus.completed,
+        installedModel: installedModel,
+        installedModels: installedModels,
+        downloadedBytes: installedModel.fileSizeBytes,
+        totalBytes: installedModel.fileSizeBytes,
+        bytesPerSecond: 0,
+        clearErrorMessage: true,
+      );
+      notifyListeners();
+      return installedModel;
     }
 
     _lastTickAt = null;
     _lastTickBytes = 0;
     _state = _state.copyWith(
       status: ModelDownloadStatus.preparing,
-      installedModel: null,
+      clearInstalledModel: true,
       downloadedBytes: await _storage.getPartialBytes(descriptor),
       totalBytes: descriptor.expectedFileSizeBytes,
       bytesPerSecond: 0,
@@ -109,15 +183,22 @@ class ModelDownloadController extends ChangeNotifier {
       switch (result.status) {
         case ModelDownloadResultStatus.completed:
           final installedModel = result.installedModel;
+          final installedModels = await _storage.listInstalledModels(_registry);
           _state = _state.copyWith(
             status: ModelDownloadStatus.completed,
             installedModel: installedModel,
+            installedModels: installedModels,
             downloadedBytes:
                 installedModel?.fileSizeBytes ?? _state.downloadedBytes,
             totalBytes: installedModel?.fileSizeBytes ?? _state.totalBytes,
             bytesPerSecond: 0,
             clearErrorMessage: true,
           );
+          if (installedModel != null) {
+            _settingsController.updateGenerationModelId(
+              installedModel.descriptor.id,
+            );
+          }
           notifyListeners();
           return installedModel;
         case ModelDownloadResultStatus.paused:
@@ -175,9 +256,14 @@ class ModelDownloadController extends ChangeNotifier {
   }
 
   Future<InstalledModelRecord?> refreshInstalledModel() async {
-    final installedModel = await _storage.getActiveInstalledModel(_registry);
+    final installedModels = await _storage.reconcileInstalledModels(_registry);
+    final selectedId = _settingsController.settings.generationModelId;
+    final installedModel = selectedId == null
+        ? null
+        : _recordFor(installedModels, _registry.findById(selectedId));
     _state = _state.copyWith(
       installedModel: installedModel,
+      installedModels: installedModels,
       status: installedModel == null
           ? ModelDownloadStatus.idle
           : ModelDownloadStatus.completed,
@@ -221,16 +307,40 @@ class ModelDownloadController extends ChangeNotifier {
     await refreshInstalledModel();
   }
 
-  ModelDescriptor _pickRecommendedModel(LiteRtDeviceStats? stats) {
-    if (stats == null) {
-      return _registry.models.first;
+  InstalledModelRecord? _recordFor(
+    List<InstalledModelRecord> records,
+    ModelDescriptor? descriptor,
+  ) {
+    if (descriptor == null) {
+      return null;
     }
-    for (final descriptor in _registry.generationModels) {
-      if (stats.freeRam >= descriptor.minRamGb) {
-        return descriptor;
+    for (final record in records) {
+      if (record.descriptor.id == descriptor.id) {
+        return record;
       }
     }
-    return _registry.generationModels.last;
+    return null;
+  }
+
+  Future<ModelDescriptor?> _ensureSelectedModel(
+    List<InstalledModelRecord> installedModels,
+  ) async {
+    final persistedId = _settingsController.settings.generationModelId;
+    final persistedModel = persistedId == null
+        ? null
+        : _registry.findById(persistedId);
+    if (persistedModel != null &&
+        persistedModel.task == ReefModelTask.generation) {
+      return persistedModel;
+    }
+
+    final migratedModel = installedModels.length == 1
+        ? installedModels.single.descriptor
+        : _registry.defaultGenerationModel;
+    if (migratedModel != null) {
+      _settingsController.updateGenerationModelId(migratedModel.id);
+    }
+    return migratedModel;
   }
 
   void _updateProgress(int downloadedBytes, int totalBytes) {

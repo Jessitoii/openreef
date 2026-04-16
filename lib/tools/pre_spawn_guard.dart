@@ -1,6 +1,5 @@
 import 'package:openreef/memory/memory_storage.dart';
 import 'package:openreef/settings/settings_controller.dart';
-import 'package:openreef/agent/agent_models.dart';
 
 enum PreSpawnDecisionKind {
   allow,
@@ -11,9 +10,12 @@ enum PreSpawnDecisionKind {
 }
 
 class PreSpawnDecision {
-  const PreSpawnDecision.allow() : kind = PreSpawnDecisionKind.allow, reason = null;
+  const PreSpawnDecision.allow()
+    : kind = PreSpawnDecisionKind.allow,
+      reason = null;
   const PreSpawnDecision.deny(this.kind, this.reason);
-  const PreSpawnDecision.reuse(this.reason) : kind = PreSpawnDecisionKind.reuseExisting;
+  const PreSpawnDecision.reuse(this.reason)
+    : kind = PreSpawnDecisionKind.reuseExisting;
 
   final PreSpawnDecisionKind kind;
   final String? reason;

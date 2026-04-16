@@ -7,12 +7,14 @@ class BuiltInSkillSource {
     this.assetPaths = const <String>[
       'assets/skills/context_auditor/SKILL.md',
       'assets/skills/memory_curator/SKILL.md',
+      'assets/skills/skill-creator/SKILL.md',
     ],
   });
 
   static const List<String> defaultAssetPaths = <String>[
     'assets/skills/context_auditor/SKILL.md',
     'assets/skills/memory_curator/SKILL.md',
+    'assets/skills/skill-creator/SKILL.md',
   ];
 
   final List<String> assetPaths;

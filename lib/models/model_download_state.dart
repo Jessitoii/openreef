@@ -17,6 +17,7 @@ class ModelDownloadState {
     required this.status,
     this.selectedModel,
     this.installedModel,
+    this.installedModels = const <InstalledModelRecord>[],
     this.deviceStats,
     this.downloadedBytes = 0,
     this.totalBytes = 0,
@@ -28,6 +29,7 @@ class ModelDownloadState {
     : status = ModelDownloadStatus.idle,
       selectedModel = null,
       installedModel = null,
+      installedModels = const <InstalledModelRecord>[],
       deviceStats = null,
       downloadedBytes = 0,
       totalBytes = 0,
@@ -37,6 +39,7 @@ class ModelDownloadState {
   final ModelDownloadStatus status;
   final ModelDescriptor? selectedModel;
   final InstalledModelRecord? installedModel;
+  final List<InstalledModelRecord> installedModels;
   final LiteRtDeviceStats? deviceStats;
   final int downloadedBytes;
   final int totalBytes;
@@ -71,12 +74,28 @@ class ModelDownloadState {
     return stats.freeRam >= model.minRamGb;
   }
 
+  InstalledModelRecord? installedRecordFor(ModelDescriptor? model) {
+    if (model == null) {
+      return null;
+    }
+    for (final record in installedModels) {
+      if (record.descriptor.id == model.id) {
+        return record;
+      }
+    }
+    if (installedModel?.descriptor.id == model.id) {
+      return installedModel;
+    }
+    return null;
+  }
+
   ModelDownloadState copyWith({
     ModelDownloadStatus? status,
     ModelDescriptor? selectedModel,
     bool clearSelectedModel = false,
     InstalledModelRecord? installedModel,
     bool clearInstalledModel = false,
+    List<InstalledModelRecord>? installedModels,
     LiteRtDeviceStats? deviceStats,
     bool clearDeviceStats = false,
     int? downloadedBytes,
@@ -93,6 +112,7 @@ class ModelDownloadState {
       installedModel: clearInstalledModel
           ? null
           : (installedModel ?? this.installedModel),
+      installedModels: installedModels ?? this.installedModels,
       deviceStats: clearDeviceStats ? null : (deviceStats ?? this.deviceStats),
       downloadedBytes: downloadedBytes ?? this.downloadedBytes,
       totalBytes: totalBytes ?? this.totalBytes,

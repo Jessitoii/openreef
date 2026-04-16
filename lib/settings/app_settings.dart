@@ -9,6 +9,7 @@ class AppSettings {
     this.wakeWordEnabled = false,
     this.voiceSensitivity = 0.7,
     this.triggerMailPollMinutes = 15,
+    this.generationModelId,
     this.semanticEmbeddingModelId,
   });
 
@@ -25,6 +26,7 @@ class AppSettings {
   final bool wakeWordEnabled;
   final double voiceSensitivity;
   final int triggerMailPollMinutes;
+  final String? generationModelId;
   final String? semanticEmbeddingModelId;
 
   AppSettings copyWith({
@@ -33,6 +35,8 @@ class AppSettings {
     bool? wakeWordEnabled,
     double? voiceSensitivity,
     int? triggerMailPollMinutes,
+    String? generationModelId,
+    bool clearGenerationModelId = false,
     String? semanticEmbeddingModelId,
     bool clearSemanticEmbeddingModelId = false,
   }) {
@@ -43,6 +47,9 @@ class AppSettings {
       voiceSensitivity: voiceSensitivity ?? this.voiceSensitivity,
       triggerMailPollMinutes:
           triggerMailPollMinutes ?? this.triggerMailPollMinutes,
+      generationModelId: clearGenerationModelId
+          ? null
+          : (generationModelId ?? this.generationModelId),
       semanticEmbeddingModelId: clearSemanticEmbeddingModelId
           ? null
           : (semanticEmbeddingModelId ?? this.semanticEmbeddingModelId),
@@ -56,6 +63,7 @@ class AppSettings {
       'voice.wakeWordEnabled': wakeWordEnabled,
       'voice.sensitivity': voiceSensitivity,
       'trigger.mailPollMinutes': triggerMailPollMinutes,
+      if (generationModelId != null) 'generation.modelId': generationModelId,
       if (semanticEmbeddingModelId != null)
         'semantic.embeddingModelId': semanticEmbeddingModelId,
     };
@@ -73,6 +81,7 @@ class AppSettings {
       ),
       triggerMailPollMinutes:
           (json['trigger.mailPollMinutes'] as num?)?.toInt() ?? 15,
+      generationModelId: json['generation.modelId'] as String?,
       semanticEmbeddingModelId: json['semantic.embeddingModelId'] as String?,
     );
   }

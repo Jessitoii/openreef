@@ -1,10 +1,8 @@
-import 'package:openreef/tools/tool_errors.dart';
 import 'package:openreef/tools/tool_execution_context.dart';
 import 'package:openreef/tools/tool_manifest.dart';
-import 'package:openreef/tools/native_tool_adapters.dart';
 
 class CalendarReadToolHandler implements NativeToolHandler {
-  CalendarReadToolHandler([this._dummy]);
+  CalendarReadToolHandler([Object? _]);
 
   static const ToolManifest _manifest = ToolManifest(
     id: 'calendar_read',
@@ -14,8 +12,6 @@ class CalendarReadToolHandler implements NativeToolHandler {
       ToolArgumentSpec(name: 'lookbackDays', type: ToolArgumentType.integer),
     ],
   );
-
-  final Object? _dummy;
 
   @override
   ToolManifest get manifest => _manifest;
@@ -33,7 +29,7 @@ class CalendarReadToolHandler implements NativeToolHandler {
 }
 
 class CalendarWriteToolHandler implements NativeToolHandler {
-  CalendarWriteToolHandler([this._dummy]);
+  CalendarWriteToolHandler([Object? _]);
 
   static const ToolManifest _manifest = ToolManifest(
     id: 'calendar_write',
@@ -45,8 +41,6 @@ class CalendarWriteToolHandler implements NativeToolHandler {
       ToolArgumentSpec(name: 'start', type: ToolArgumentType.string),
     ],
   );
-
-  final Object? _dummy;
 
   @override
   ToolManifest get manifest => _manifest;

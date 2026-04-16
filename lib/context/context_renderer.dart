@@ -16,7 +16,7 @@ class ContextRenderer {
         id: 'identity',
         title: 'SYSTEM IDENTITY',
         content:
-            '[SYSTEM IDENTITY]\nOpenReef agent core\n[END SYSTEM IDENTITY]',
+            '[SYSTEM IDENTITY]\nYou are OpenReef, an on-device AI agent.\nYou operate only using the provided context and tools.\nYou must not assume capabilities outside the provided context.\n[END SYSTEM IDENTITY]',
         reason: 'Base runtime identity.',
         critical: true,
         priority: 100,
@@ -113,7 +113,10 @@ class ContextRenderer {
         _section(
           id: 'memory',
           title: 'RETRIEVED MEMORY EVIDENCE',
-          content: _renderMessages('RETRIEVED MEMORY EVIDENCE', sources.memoryMessages),
+          content: _renderMessages(
+            'RETRIEVED MEMORY EVIDENCE',
+            sources.memoryMessages,
+          ),
           reason: 'Retrieved memory candidates selected by plan.',
           priority: 55,
           sourceCount: sources.memoryMessages.length,
@@ -146,7 +149,8 @@ class ContextRenderer {
       _section(
         id: 'user',
         title: 'USER MESSAGE',
-        content: '[USER MESSAGE]\nResolve the user’s current request using the policy above. Be direct. Use tools only when needed.\n\n$userMessage\n[END USER MESSAGE]',
+        content:
+            '[USER MESSAGE]\nResolve the user’s current request using the policy above. Be direct. Use tools only when needed.\n\n$userMessage\n[END USER MESSAGE]',
         reason: 'Current user request.',
         critical: true,
         priority: 100,
@@ -337,7 +341,7 @@ class ContextRenderer {
 - Use tools when external action or data is required.
 - If required info is missing and no tool can get it, ask a concise clarification.
 - NEVER fabricate tool results, permissions, or memory.
-- NEVER ask the user for permission or confirmation to use a tool. Emit the tool call directly. The UI handles confirmation.
+- Never ask for tool permission or confirmation in chat.
 [END CORE OPERATING RULES]''';
   }
 
@@ -356,9 +360,13 @@ Evidence priority: USER MESSAGE > WORKFLOW STATE > PREVIOUS TOOL STATE (success)
 
   String _renderSafety(SafetyEnvelope envelope) {
     final buffer = StringBuffer('[SAFETY RULES]\n')
-      ..writeln('- System Runtime Confirmation: ${envelope.confirmationRequired ? 'YES. These actions require runtime confirmation and may be blocked.' : 'NO.'}');
+      ..writeln(
+        '- Runtime gating: ${envelope.confirmationRequired ? 'present' : 'none'}',
+      );
     if (envelope.riskyToolIds.isNotEmpty) {
-      buffer.writeln('- High-risk tools (use cautiously): ${envelope.riskyToolIds.join(', ')}');
+      buffer.writeln(
+        '- High-risk tools (use cautiously): ${envelope.riskyToolIds.join(', ')}',
+      );
     }
     if (envelope.hardConstraints.isNotEmpty) {
       buffer.writeln('- Hard Constraints (MUST OBEY):');
@@ -396,7 +404,9 @@ Evidence priority: USER MESSAGE > WORKFLOW STATE > PREVIOUS TOOL STATE (success)
 
   String _renderSkills(SkillPlan plan) {
     final buffer = StringBuffer('[ACTIVE SKILLS]\n')
-      ..writeln('Use skill instructions ONLY when relevant to the user request or active workflow.')
+      ..writeln(
+        'Use skill instructions ONLY when relevant to the user request or active workflow.',
+      )
       ..writeln('===');
     for (final skill in plan.activeSkills) {
       final decision = plan.decisions.where((item) => item.skillId == skill.id);
@@ -431,7 +441,9 @@ Evidence priority: USER MESSAGE > WORKFLOW STATE > PREVIOUS TOOL STATE (success)
     }
     if (workflow.blockers.isNotEmpty) {
       buffer.writeln('Blockers: ${workflow.blockers.join(' | ')}');
-      buffer.writeln('-> RESOLVE blockers: ask user for missing input, or use a tool to unblock.');
+      buffer.writeln(
+        '-> RESOLVE blockers: ask user for missing input, or use a tool to unblock.',
+      );
     } else if (workflow.pendingSteps.isNotEmpty) {
       buffer.writeln('Pending Steps: ${workflow.pendingSteps.join(' | ')}');
       buffer.writeln('-> CONTINUE from the nearest unfinished step.');
@@ -458,25 +470,27 @@ Evidence priority: USER MESSAGE > WORKFLOW STATE > PREVIOUS TOOL STATE (success)
         ..writeln('-> Action: Do not rely on semantic memory for this turn.')
         ..writeln('reason: ${sources.memoryRetrievalReason}')
         ..writeln('embeddingModelId: ${sources.embeddingModelIdUsed}')
-        ..write('[END MEMORY POINTERS UNAVAILABLE]');
+        ..write('[END MEMORY POINTERS]');
       return buffer.toString();
     }
     if (sources.memoryRetrievalStatus ==
         SemanticMemoryRetrievalStatus.degraded) {
       buffer
         ..writeln('STATUS: DEGRADED (partial/mismatched index)')
-        ..writeln('-> Action: Use cautiously; prefer current turn evidence and tool results.')
+        ..writeln(
+          '-> Action: Use cautiously; prefer current turn evidence and tool results.',
+        )
         ..writeln('reason: ${sources.memoryRetrievalReason}')
         ..writeln('embeddingModelId: ${sources.embeddingModelIdUsed}')
         ..writeln('excludedMatches: ${sources.skippedCrossModelCount}')
-        ..write('[END MEMORY POINTERS DEGRADED]');
+        ..write('[END MEMORY POINTERS]');
       return buffer.toString();
     }
     if (sources.memoryIndexBlock.trim().isEmpty) {
       buffer
         ..writeln('STATUS: NO POINTERS')
         ..writeln('-> Action: Continue without memory assumptions.')
-        ..write('[END MEMORY POINTERS EMPTY]');
+        ..write('[END MEMORY POINTERS]');
       return buffer.toString();
     }
     buffer
@@ -503,9 +517,13 @@ Evidence priority: USER MESSAGE > WORKFLOW STATE > PREVIOUS TOOL STATE (success)
   String _renderMessages(String title, List<AgentMessage> messages) {
     final buffer = StringBuffer('[$title]\n');
     if (title == 'PREVIOUS TOOL STATE') {
-      buffer.writeln('Rule: Recent tool results are authoritative ONLY if successful and shown below.');
+      buffer.writeln(
+        'Rule: Recent tool results are authoritative ONLY if successful and shown below.',
+      );
     } else if (title == 'RECENT RELEVANT HISTORY') {
-      buffer.writeln('Rule: History is secondary evidence. Current message and explicit tool results take priority.');
+      buffer.writeln(
+        'Rule: History is secondary evidence. Current message and explicit tool results take priority.',
+      );
     }
     for (final message in messages) {
       buffer.writeln(message.toPromptSegment());

@@ -1,273 +1,223 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:openreef/mcp/mcp_models.dart';
+import 'package:openreef/agent/tool_router.dart';
 import 'package:openreef/mcp/mcp_connection_store.dart';
 import 'package:openreef/mcp/mcp_connections_controller.dart';
+import 'package:openreef/mcp/mcp_models.dart';
+import 'package:openreef/mcp/mcp_persisted_endpoint.dart';
 import 'package:openreef/mcp/mcp_runtime_coordinator.dart';
 import 'package:openreef/mcp/mcp_secret_store.dart';
 import 'package:openreef/mcp/mcp_transport.dart';
 import 'package:openreef/ui/screens/mcp_connections_screen.dart';
-import 'package:openreef/agent/tool_router.dart';
-import 'package:openreef/memory/memory_storage.dart';
-import 'package:openreef/memory/sqlite_memory_storage_backend.dart';
-import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
-  setUpAll(sqfliteFfiInit);
-
-  testWidgets('only one custom MCP entry surface exists and stays above presets', (tester) async {
-    final controller = await _createController();
+  testWidgets('custom MCP is the primary active add path', (tester) async {
+    final env = await _McpTestEnvironment.create();
     await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: McpConnectionsScreen(controller: controller))),
+      MaterialApp(home: McpConnectionsScreen(controller: env.controller)),
     );
-    await tester.pumpAndSettle();
+    await tester.pump();
 
     expect(find.text('Custom MCP Server'), findsOneWidget);
-    expect(find.text('Available connectors'), findsOneWidget);
-    expect(find.text('Connected connectors'), findsOneWidget);
-    expect(find.text('Add custom server'), findsNothing);
-
+    expect(find.text('MCP server URL'), findsOneWidget);
+    expect(find.text('Connect custom server'), findsOneWidget);
+    expect(find.text('Coming soon'), findsOneWidget);
     expect(
       tester.getTopLeft(find.text('Custom MCP Server')).dy,
-      lessThan(tester.getTopLeft(find.text('Available connectors')).dy),
+      lessThan(tester.getTopLeft(find.text('Coming soon')).dy),
     );
   });
 
-  testWidgets('custom MCP card appears before available connectors', (tester) async {
-    final controller = await _createController();
+  testWidgets('unsupported presets are passive and explanatory', (
+    tester,
+  ) async {
+    final env = await _McpTestEnvironment.create();
     await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: McpConnectionsScreen(controller: controller))),
+      MaterialApp(home: McpConnectionsScreen(controller: env.controller)),
     );
-    await tester.pumpAndSettle();
+    await tester.pump();
+
+    expect(find.text('Gmail'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('GitHub'),
+      240,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('GitHub'), findsOneWidget);
+    expect(
+      find.text('Requires OAuth configuration, not yet available.'),
+      findsWidgets,
+    );
+    expect(find.text('Connect Gmail'), findsNothing);
+    expect(find.text('Connect GitHub'), findsNothing);
+    expect(find.text('Offline'), findsNothing);
+    expect(find.text('Connected'), findsNothing);
+    expect(find.byType(Switch), findsNothing);
+    expect(find.byIcon(Icons.delete_outline), findsNothing);
+  });
+
+  testWidgets('manual endpoint submit attempts real custom connection', (
+    tester,
+  ) async {
+    final env = await _McpTestEnvironment.create();
+    await tester.pumpWidget(
+      MaterialApp(home: McpConnectionsScreen(controller: env.controller)),
+    );
+    await tester.pump();
+
+    await tester.enterText(
+      find.byType(TextField).first,
+      'https://example.com/sse',
+    );
+    await tester.tap(find.text('Connect custom server'));
+    await tester.pump(const Duration(milliseconds: 100));
 
     expect(
-      tester.getTopLeft(find.text('Custom MCP Server')).dy,
-      lessThan(tester.getTopLeft(find.text('Available connectors')).dy),
+      env.transportEndpoints,
+      contains(Uri.parse('https://example.com/sse')),
     );
+    expect(env.runtimeCatalog.listTools().single.id, endsWith('/ping'));
+    expect(find.text('Connected endpoints'), findsOneWidget);
+    expect(find.text('1 tools imported into runtime.'), findsOneWidget);
   });
 
-  testWidgets('preset connector tap routes by setup type', (tester) async {
-    final controller = await _createFakeActionController();
+  testWidgets('invalid custom endpoint shows inline error', (tester) async {
+    final env = await _McpTestEnvironment.create();
     await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: McpConnectionsScreen(controller: controller))),
+      MaterialApp(home: McpConnectionsScreen(controller: env.controller)),
     );
-    await tester.pumpAndSettle();
+    await tester.pump();
 
-    await tester.tap(find.text('Connect Home Assistant'));
-    await tester.pumpAndSettle();
-    expect(controller.baseUrlTokenCalls, 1);
-    expect(find.text('Base URL'), findsOneWidget);
+    await tester.enterText(find.byType(TextField).first, 'not-a-url');
+    await tester.tap(find.text('Connect custom server'));
+    await tester.pump();
+
+    expect(find.text('Use a full URL like https://host/sse.'), findsOneWidget);
+    expect(env.transportEndpoints, isEmpty);
   });
 
-  testWidgets('OAuth presets do not open manual endpoint form and are disabled', (tester) async {
-    final controller = await _createFakeActionController();
-    await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: McpConnectionsScreen(controller: controller))),
-    );
-    await tester.pumpAndSettle();
-
-    final oauthButton = find.widgetWithText(FilledButton, 'OAuth flow not implemented yet');
-    expect(oauthButton, findsWidgets);
-    final button = tester.widget<FilledButton>(oauthButton.first);
-    expect(button.onPressed, isNull);
-    expect(controller.oAuthCalls, 0);
-    expect(find.text('MCP server URL'), findsNothing);
-  });
-
-  testWidgets('GitHub preset opens real OAuth and token actions', (tester) async {
-    final controller = await _createFakeActionController();
-    const launcherChannel = MethodChannel('plugins.flutter.io/url_launcher');
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(launcherChannel, (call) async => true);
-    addTearDown(
-      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(launcherChannel, null),
-    );
-    await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: McpConnectionsScreen(controller: controller))),
-    );
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('Connect GitHub'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Launch OAuth'), findsOneWidget);
-    expect(find.text('Connect with token'), findsOneWidget);
-    await tester.tap(find.text('Launch OAuth'));
-    await tester.pumpAndSettle();
-    expect(controller.oAuthCalls, 1);
-  });
-
-  testWidgets('connected empty state has no duplicate add-custom CTA', (tester) async {
-    final controller = await _createController();
-    await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: McpConnectionsScreen(controller: controller))),
-    );
-    await tester.pumpAndSettle();
-
-    expect(find.text('No connectors are connected yet'), findsOneWidget);
-    expect(find.text('Add custom server'), findsNothing);
-  });
-
-  testWidgets('manual endpoint submit is not a no-op', (tester) async {
-    final controller = await _createFakeActionController();
-    await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: McpConnectionsScreen(controller: controller))),
-    );
-    await tester.pumpAndSettle();
-
-    await tester.enterText(find.byType(TextField).first, 'https://example.com/sse');
-    await tester.tap(find.widgetWithText(FilledButton, 'Connect custom server'));
-    await tester.pumpAndSettle();
-
-    expect(controller.manualConnectCalls, 1);
-  });
-
-  testWidgets('base URL + token submit is not a no-op', (tester) async {
-    final controller = await _createFakeActionController();
-    await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: McpConnectionsScreen(controller: controller))),
-    );
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('Connect Home Assistant'));
-    await tester.pumpAndSettle();
-    await tester.enterText(find.byType(TextField).at(0), 'https://ha.example.com');
-    await tester.enterText(find.byType(TextField).at(1), 'token-123');
-    await tester.tap(find.widgetWithText(FilledButton, 'Connect Home Assistant'));
-    await tester.pumpAndSettle();
-
-    expect(controller.baseUrlTokenCalls, 1);
-  });
-
-  testWidgets('GitHub token submit is not a no-op', (tester) async {
-    final controller = await _createFakeActionController();
-    await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: McpConnectionsScreen(controller: controller))),
-    );
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('Connect GitHub'));
-    await tester.pumpAndSettle();
-    await tester.enterText(find.byType(TextField).at(0), 'token-456');
-    await tester.tap(find.widgetWithText(FilledButton, 'Connect with token'));
-    await tester.pumpAndSettle();
-
-    expect(controller.tokenCalls, 1);
-  });
-
-  testWidgets('screen lays out on a narrow mobile width without overflow', (tester) async {
-    final controller = await _createController();
+  testWidgets('screen lays out on a narrow mobile width without overflow', (
+    tester,
+  ) async {
+    final env = await _McpTestEnvironment.create();
     await tester.binding.setSurfaceSize(const Size(360, 800));
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
     await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: McpConnectionsScreen(controller: controller))),
+      MaterialApp(home: McpConnectionsScreen(controller: env.controller)),
     );
-    await tester.pumpAndSettle();
+    await tester.pump();
 
     expect(tester.takeException(), isNull);
     expect(find.text('Custom MCP Server'), findsOneWidget);
-    expect(find.text('Available connectors'), findsOneWidget);
+    expect(find.text('Coming soon'), findsOneWidget);
   });
 }
 
-Future<McpConnectionsController> _createController() async {
-  final storage = MemoryStorage(
-    SqliteMemoryStorageBackend(
-      path: inMemoryDatabasePath,
-      databaseFactory: databaseFactoryFfi,
-    ),
-  );
-  await storage.initialize();
-  addTearDown(storage.close);
+class _McpTestEnvironment {
+  const _McpTestEnvironment({
+    required this.controller,
+    required this.runtimeCatalog,
+    required this.transportEndpoints,
+  });
 
-  final runtimeToolCatalog = RuntimeToolCatalog();
-  final runtimeCoordinator = McpRuntimeCoordinator(
-    toolCatalog: runtimeToolCatalog,
-    embedText: (text) async => const <double>[0, 0, 0, 1, 0, 0, 0],
-  );
-  final secretStore = InMemoryMcpSecretStore();
-  return McpConnectionsController(
-    store: McpConnectionStore(storage, secretStore: secretStore),
-    runtimeCoordinator: runtimeCoordinator,
-    autoConnectPersisted: false,
-    secretStore: secretStore,
-    transportFactory: (endpoint, {headers = const <String, String>{}, headersProvider}) =>
-        _FakeMcpTransport(endpoint),
-  );
+  final McpConnectionsController controller;
+  final RuntimeToolCatalog runtimeCatalog;
+  final List<Uri> transportEndpoints;
+
+  static Future<_McpTestEnvironment> create() async {
+    final runtimeCatalog = RuntimeToolCatalog();
+    final runtimeCoordinator = McpRuntimeCoordinator(
+      toolCatalog: runtimeCatalog,
+      embedText: (text) async => const <double>[0, 0, 0, 1, 0, 0, 0],
+    );
+    final secretStore = InMemoryMcpSecretStore();
+    final endpoints = <Uri>[];
+    final store = _InMemoryMcpConnectionStore();
+    final controller = McpConnectionsController(
+      store: store,
+      runtimeCoordinator: runtimeCoordinator,
+      autoConnectPersisted: false,
+      secretStore: secretStore,
+      transportFactory:
+          (endpoint, {headers = const <String, String>{}, headersProvider}) {
+            endpoints.add(endpoint);
+            return _FakeMcpTransport(endpoint);
+          },
+    );
+    addTearDown(controller.dispose);
+    return _McpTestEnvironment(
+      controller: controller,
+      runtimeCatalog: runtimeCatalog,
+      transportEndpoints: endpoints,
+    );
+  }
 }
 
-Future<_FakeActionController> _createFakeActionController() async {
-  final storage = MemoryStorage(
-    SqliteMemoryStorageBackend(
-      path: inMemoryDatabasePath,
-      databaseFactory: databaseFactoryFfi,
-    ),
-  );
-  await storage.initialize();
-  addTearDown(storage.close);
+class _InMemoryMcpConnectionStore implements McpConnectionStore {
+  _InMemoryMcpConnectionStore();
 
-  final runtimeToolCatalog = RuntimeToolCatalog();
-  final runtimeCoordinator = McpRuntimeCoordinator(
-    toolCatalog: runtimeToolCatalog,
-    embedText: (text) async => const <double>[0, 0, 0, 1, 0, 0, 0],
-  );
-  final secretStore = InMemoryMcpSecretStore();
-  final controller = _FakeActionController(
-    store: McpConnectionStore(storage, secretStore: secretStore),
-    runtimeCoordinator: runtimeCoordinator,
-    secretStore: secretStore,
-    transportFactory: (endpoint, {headers = const <String, String>{}, headersProvider}) =>
-        _FakeMcpTransport(endpoint),
-  );
-  return controller;
-}
-
-class _FakeActionController extends McpConnectionsController {
-  _FakeActionController({
-    required super.store,
-    required super.runtimeCoordinator,
-    required super.secretStore,
-    required super.transportFactory,
-  }) : super(autoConnectPersisted: false);
-
-  int manualConnectCalls = 0;
-  int baseUrlTokenCalls = 0;
-  int oAuthCalls = 0;
-  int tokenCalls = 0;
+  final Map<String, McpPersistedEndpoint> _endpoints =
+      <String, McpPersistedEndpoint>{};
+  int _nextId = 0;
 
   @override
-  Future<void> connectManualEndpoint(String url, {bool persist = true}) async {
-    manualConnectCalls += 1;
-  }
-
-  @override
-  Future<void> connectWithBaseUrlToken({
-    required String connectorId,
-    required String baseUrl,
-    required String token,
-    bool persist = true,
+  Future<McpPersistedEndpoint> save(
+    String rawUrl, {
+    required bool trusted,
   }) async {
-    baseUrlTokenCalls += 1;
+    _nextId += 1;
+    final uri = Uri.parse(rawUrl);
+    final now = DateTime(2026, 1, 1).toUtc();
+    final endpoint = McpPersistedEndpoint(
+      id: 'custom-$_nextId',
+      scheme: uri.scheme,
+      host: uri.host,
+      port: uri.hasPort ? uri.port : null,
+      path: uri.path,
+      publicQuerySegments: uri.queryParameters.entries
+          .map(
+            (entry) =>
+                McpQuerySegment(index: 0, key: entry.key, value: entry.value),
+          )
+          .toList(growable: false),
+      trusted: trusted,
+      migrationState: McpPersistedEndpointMigrationState.nativeTrusted,
+      createdAt: now,
+      persistedAt: now,
+    );
+    _endpoints[endpoint.id] = endpoint;
+    return endpoint;
   }
 
   @override
-  Future<String?> startOAuth(String connectorId) async {
-    oAuthCalls += 1;
-    return 'https://auth.example.com/$connectorId';
-  }
-
-  @override
-  Future<void> connectWithToken({
+  Future<McpPersistedEndpoint> saveConnectorEndpoint({
     required String connectorId,
-    required String token,
-    bool persist = true,
-  }) async {
-    tokenCalls += 1;
+    required String runtimeUrl,
+    required bool trusted,
+    required String credentialRef,
+    required String credentialType,
+  }) {
+    throw UnsupportedError('preset connectors are not used in this test');
+  }
+
+  @override
+  Future<void> deleteById(String endpointId) async {
+    _endpoints.remove(endpointId);
+  }
+
+  @override
+  Future<McpConnectionStoreLoadResult> loadAll() async {
+    return McpConnectionStoreLoadResult(
+      endpoints: List<McpPersistedEndpoint>.unmodifiable(_endpoints.values),
+    );
+  }
+
+  @override
+  Future<String?> resolveRuntimeUrl(McpPersistedEndpoint endpoint) async {
+    return endpoint.buildRuntimeUri();
   }
 }
 
@@ -283,7 +233,12 @@ class _FakeMcpTransport implements McpTransport {
 
   @override
   Future<void> connect() async {
-    _messages.add(McpTransportMessage(event: 'endpoint', data: endpoint.toString()));
+    Timer(
+      const Duration(milliseconds: 10),
+      () => _messages.add(
+        McpTransportMessage(event: 'endpoint', data: endpoint.toString()),
+      ),
+    );
   }
 
   @override
@@ -296,7 +251,10 @@ class _FakeMcpTransport implements McpTransport {
         id: 1,
         result: <String, Object?>{
           'protocolVersion': '2024-11-05',
-          'serverInfo': <String, Object?>{'name': 'secure-server', 'version': '1.0.0'},
+          'serverInfo': <String, Object?>{
+            'name': 'secure-server',
+            'version': '1.0.0',
+          },
         },
       );
     }

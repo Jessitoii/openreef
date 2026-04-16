@@ -5,8 +5,6 @@ import 'package:openreef/agent/mailbox.dart';
 import 'package:openreef/agent/subagent_runner.dart';
 import 'package:openreef/tools/tool_errors.dart';
 import 'package:openreef/tools/tool_manifest.dart';
-import 'package:openreef/tools/tool_errors.dart';
-import 'package:openreef/tools/tool_execution_context.dart';
 
 class ToolDefinition {
   const ToolDefinition({
@@ -279,13 +277,15 @@ class ToolRouter {
   ToolResultStatus _statusForNativeErrorCode(ToolErrorCode code) {
     return switch (code) {
       ToolErrorCode.permissionDenied ||
-      ToolErrorCode.permissionRequired =>
-        ToolResultStatus.permissionDenied,
+      ToolErrorCode.permissionRequired => ToolResultStatus.permissionDenied,
       ToolErrorCode.invalidArguments => ToolResultStatus.validationError,
       ToolErrorCode.featureUnavailable ||
       ToolErrorCode.appUnavailable ||
       ToolErrorCode.unsupported => ToolResultStatus.unavailable,
-      ToolErrorCode.operationFailed || ToolErrorCode.nativeError || ToolErrorCode.mcpError || ToolErrorCode.runtimeError => ToolResultStatus.executionError,
+      ToolErrorCode.operationFailed ||
+      ToolErrorCode.nativeError ||
+      ToolErrorCode.mcpError ||
+      ToolErrorCode.runtimeError => ToolResultStatus.executionError,
       ToolErrorCode.semanticError => ToolResultStatus.executionError,
     };
   }

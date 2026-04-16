@@ -2,7 +2,6 @@ import 'package:openreef/agent/agent_models.dart';
 import 'package:openreef/agent/tool_router.dart';
 import 'package:openreef/tools/tool_errors.dart';
 import 'package:openreef/tools/tool_manifest.dart';
-import 'package:openreef/tools/tool_errors.dart';
 import 'package:openreef/tools/tool_execution_context.dart';
 import 'package:openreef/tools/tool_manifest_registry.dart';
 
@@ -61,7 +60,8 @@ class ToolManifestBridge {
               'category': manifest.category,
               'errorCode': error.id,
               'errorMessage': error.message,
-              if (error.innerError != null) 'innerError': error.innerError.toString(),
+              if (error.innerError != null)
+                'innerError': error.innerError.toString(),
               ...result.metadata,
             },
           );
@@ -80,8 +80,7 @@ class ToolManifestBridge {
   ToolResultStatus _statusForNativeError(ToolErrorCode code) {
     return switch (code) {
       ToolErrorCode.permissionDenied ||
-      ToolErrorCode.permissionRequired =>
-        ToolResultStatus.permissionDenied,
+      ToolErrorCode.permissionRequired => ToolResultStatus.permissionDenied,
       ToolErrorCode.invalidArguments => ToolResultStatus.validationError,
       ToolErrorCode.featureUnavailable ||
       ToolErrorCode.appUnavailable ||

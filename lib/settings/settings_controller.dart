@@ -50,6 +50,10 @@ class SettingsController extends ChangeNotifier {
     _update(_settings.copyWith(semanticEmbeddingModelId: modelId));
   }
 
+  void updateGenerationModelId(String modelId) {
+    _update(_settings.copyWith(generationModelId: modelId));
+  }
+
   void _update(AppSettings nextSettings) {
     _settings = nextSettings;
     notifyListeners();

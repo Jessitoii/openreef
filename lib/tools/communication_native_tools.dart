@@ -1,7 +1,5 @@
-import 'package:openreef/tools/tool_errors.dart';
 import 'package:openreef/tools/tool_execution_context.dart';
 import 'package:openreef/tools/tool_manifest.dart';
-import 'package:openreef/tools/native_tool_adapters.dart';
 
 class PhoneCallToolHandler implements NativeToolHandler {
   static const ToolManifest _manifest = ToolManifest(
@@ -81,7 +79,11 @@ class WhatsappDraftToolHandler implements NativeToolHandler {
     requiresConfirmation: true,
     argumentSchema: <ToolArgumentSpec>[
       ToolArgumentSpec(name: 'message', type: ToolArgumentType.string),
-      ToolArgumentSpec(name: 'number', type: ToolArgumentType.string, isRequired: false),
+      ToolArgumentSpec(
+        name: 'number',
+        type: ToolArgumentType.string,
+        isRequired: false,
+      ),
     ],
   );
 

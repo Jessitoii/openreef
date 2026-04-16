@@ -8,8 +8,6 @@ import 'package:openreef/mcp/mcp_client.dart';
 import 'package:openreef/mcp/mcp_models.dart';
 import 'package:openreef/mcp/mcp_tool_manifest_adapter.dart';
 import 'package:openreef/tools/tool_manifest.dart';
-import 'package:openreef/tools/tool_errors.dart';
-import 'package:openreef/tools/tool_execution_context.dart';
 
 class McpRuntimeSourceBinding {
   const McpRuntimeSourceBinding({

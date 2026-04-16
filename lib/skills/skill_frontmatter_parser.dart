@@ -40,19 +40,17 @@ class SkillFrontmatterParser {
     }
 
     final toolsRequiredNode = parsedYaml['tools_required'];
-    if (toolsRequiredNode == null) {
-      throw const SkillParseException('missing_tools_required');
-    }
-    if (toolsRequiredNode is! YamlList) {
-      throw const SkillParseException('invalid_tools_required');
-    }
-
     final toolsRequired = <String>[];
-    for (final entry in toolsRequiredNode) {
-      if (entry is! String) {
+    if (toolsRequiredNode != null) {
+      if (toolsRequiredNode is! YamlList) {
         throw const SkillParseException('invalid_tools_required');
       }
-      toolsRequired.add(entry);
+      for (final entry in toolsRequiredNode) {
+        if (entry is! String) {
+          throw const SkillParseException('invalid_tools_required');
+        }
+        toolsRequired.add(entry);
+      }
     }
 
     final descriptionNode = parsedYaml['description'];
@@ -134,14 +132,26 @@ class SkillFrontmatterParser {
   }
 
   int? _findClosingDelimiter(String markdown) {
-    const delimiter = '\n---\n';
-    final delimiterIndex = markdown.indexOf(delimiter, 4);
-    if (delimiterIndex != -1) {
+    var delimiterIndex = markdown.indexOf('\n---\n', 4);
+    if (delimiterIndex == -1) {
+      delimiterIndex = markdown.indexOf('\r\n---\r\n', 4);
+      if (delimiterIndex != -1) {
+        return delimiterIndex + 2; // \r\n length is 2
+      }
+      delimiterIndex = markdown.indexOf('\n---\r\n', 4);
+      if (delimiterIndex != -1) {
+        return delimiterIndex + 1;
+      }
+      delimiterIndex = markdown.indexOf('\r\n---\n', 4);
+      if (delimiterIndex != -1) {
+        return delimiterIndex + 2;
+      }
+    } else {
       return delimiterIndex + 1;
     }
 
-    if (markdown.endsWith('\n---')) {
-      return markdown.length - 4;
+    if (markdown.endsWith('\n---') || markdown.endsWith('\r\n---')) {
+      return markdown.lastIndexOf('---');
     }
 
     return null;

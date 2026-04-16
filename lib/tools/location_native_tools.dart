@@ -4,7 +4,7 @@ import 'package:openreef/tools/tool_manifest.dart';
 import 'package:openreef/tools/native_tool_adapters.dart';
 
 class LocationGetToolHandler implements NativeToolHandler {
-  LocationGetToolHandler([this._adapter]);
+  LocationGetToolHandler([LocationAdapter? _]);
 
   static const ToolManifest _manifest = ToolManifest(
     id: 'location_get',
@@ -14,8 +14,6 @@ class LocationGetToolHandler implements NativeToolHandler {
       ToolArgumentSpec(name: 'highAccuracy', type: ToolArgumentType.boolean),
     ],
   );
-
-  final LocationAdapter? _adapter;
 
   @override
   ToolManifest get manifest => _manifest;
@@ -97,7 +95,10 @@ class LocationDistanceToolHandler implements NativeToolHandler {
     ToolExecutionContext context,
   ) async {
     // Stub calculation
-    return NativeToolExecutionResult.success(content: 'Distance mocked.', metadata: <String, Object?>{'distanceKm': 350.0});
+    return NativeToolExecutionResult.success(
+      content: 'Distance mocked.',
+      metadata: <String, Object?>{'distanceKm': 350.0},
+    );
   }
 }
 
@@ -118,6 +119,11 @@ class LocationReverseGeocodeToolHandler implements NativeToolHandler {
     ToolInvocation invocation,
     ToolExecutionContext context,
   ) async {
-    return NativeToolExecutionResult.failure(error: const ToolExecutionError(code: ToolErrorCode.featureUnavailable, message: 'feature_unavailable'));
+    return NativeToolExecutionResult.failure(
+      error: const ToolExecutionError(
+        code: ToolErrorCode.featureUnavailable,
+        message: 'feature_unavailable',
+      ),
+    );
   }
 }

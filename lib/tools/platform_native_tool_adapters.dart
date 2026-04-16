@@ -1,4 +1,3 @@
-import 'package:openreef/tools/tool_execution_context.dart';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
@@ -108,10 +107,7 @@ class PlatformContactAdapter implements ContactAdapter {
     final map = await _invokeToolMap(
       _methodChannel,
       method: 'queryContacts',
-      arguments: <String, Object?>{
-        'query': query,
-        'limit': limit,
-      },
+      arguments: <String, Object?>{'query': query, 'limit': limit},
     );
     final rawResults = map['results'];
     if (rawResults is! List) {
@@ -149,26 +145,16 @@ class PlatformDraftMessageAdapter implements DraftMessageAdapter {
     await _invokeToolMap(
       _methodChannel,
       method: 'openEmailDraft',
-      arguments: <String, Object?>{
-        'to': to,
-        'subject': subject,
-        'body': body,
-      },
+      arguments: <String, Object?>{'to': to, 'subject': subject, 'body': body},
     );
   }
 
   @override
-  Future<void> openSmsDraft({
-    String? to,
-    String? body,
-  }) async {
+  Future<void> openSmsDraft({String? to, String? body}) async {
     await _invokeToolMap(
       _methodChannel,
       method: 'openSmsDraft',
-      arguments: <String, Object?>{
-        'to': to,
-        'body': body,
-      },
+      arguments: <String, Object?>{'to': to, 'body': body},
     );
   }
 }
@@ -269,9 +255,7 @@ class PlatformMapsAdapter implements MapsAdapter {
   final MethodChannel _methodChannel;
 
   @override
-  Future<void> openNavigation({
-    required String query,
-  }) async {
+  Future<void> openNavigation({required String query}) async {
     await _invokeToolMap(
       _methodChannel,
       method: 'openMapsNavigate',
@@ -287,10 +271,7 @@ class PlatformTtsAdapter implements TtsAdapter {
   bool _initialized = false;
 
   @override
-  Future<void> speak({
-    required String text,
-    required bool interrupt,
-  }) async {
+  Future<void> speak({required String text, required bool interrupt}) async {
     if (!Platform.isAndroid) {
       throw const ToolExecutionException(
         ToolExecutionError(
@@ -343,10 +324,7 @@ class PlatformNotificationAdapter implements NotificationAdapter {
   }) async {
     final response = await _methodChannel.invokeMapMethod<Object?, Object?>(
       'showNotification',
-      <String, Object?>{
-        'title': title,
-        'body': body,
-      },
+      <String, Object?>{'title': title, 'body': body},
     );
     final map = response ?? const <Object?, Object?>{};
     return NotificationDispatch(
@@ -368,10 +346,9 @@ class PlatformAppLauncherAdapter implements AppLauncherAdapter {
 
   @override
   Future<void> openApp(String packageName) {
-    return _methodChannel.invokeMethod<void>(
-      'openApp',
-      <String, Object?>{'packageName': packageName},
-    );
+    return _methodChannel.invokeMethod<void>('openApp', <String, Object?>{
+      'packageName': packageName,
+    });
   }
 }
 
@@ -384,17 +361,11 @@ class PlatformShareAdapter implements ShareAdapter {
   final MethodChannel _methodChannel;
 
   @override
-  Future<void> shareText({
-    required String text,
-    String? subject,
-  }) {
-    return _methodChannel.invokeMethod<void>(
-      'shareText',
-      <String, Object?>{
-        'text': text,
-        'subject': subject,
-      },
-    );
+  Future<void> shareText({required String text, String? subject}) {
+    return _methodChannel.invokeMethod<void>('shareText', <String, Object?>{
+      'text': text,
+      'subject': subject,
+    });
   }
 }
 
@@ -428,9 +399,7 @@ ToolExecutionException _mapPlatformException(PlatformException error) {
         message: message,
         innerError: rawDetails is Map
             ? Map<String, Object?>.from(
-                rawDetails.map(
-                  (key, value) => MapEntry(key.toString(), value),
-                ),
+                rawDetails.map((key, value) => MapEntry(key.toString(), value)),
               )
             : const <String, Object?>{},
       ),
