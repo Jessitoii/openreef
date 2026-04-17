@@ -11,7 +11,9 @@ void main() {
 
   setUp(() async {
     tempDir = await Directory.systemTemp.createTemp('openreef_polling_policy');
-    settingsFile = File('${tempDir.path}${Platform.pathSeparator}settings.json');
+    settingsFile = File(
+      '${tempDir.path}${Platform.pathSeparator}settings.json',
+    );
   });
 
   tearDown(() async {
@@ -38,17 +40,17 @@ void main() {
     final policy = TriggerPollingPolicy();
     expect(policy.resolvePollMinutes(trigger, controller), 7);
 
-    final withoutOverride = trigger.copyWith(clearIntervalSpec: false, pollIntervalMinutes: null);
+    final withoutOverride = trigger.copyWith(clearPollIntervalMinutes: true);
     expect(policy.resolvePollMinutes(withoutOverride, controller), 25);
   });
 
-  test('rejects intervals under fifteen minutes for Android app-closed polling', () {
-    const policy = TriggerPollingPolicy();
-    expect(
-      policy.validateResolvedMinutes(4).isValid,
-      isFalse,
-    );
-    expect(policy.validateResolvedMinutes(10).isValid, isFalse);
-    expect(policy.validateResolvedMinutes(15).isValid, isTrue);
-  });
+  test(
+    'rejects intervals under fifteen minutes for Android app-closed polling',
+    () {
+      const policy = TriggerPollingPolicy();
+      expect(policy.validateResolvedMinutes(4).isValid, isFalse);
+      expect(policy.validateResolvedMinutes(10).isValid, isFalse);
+      expect(policy.validateResolvedMinutes(15).isValid, isTrue);
+    },
+  );
 }

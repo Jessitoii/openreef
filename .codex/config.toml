@@ -17,7 +17,3 @@ network_access = true               # Güvenlik için kapalı tut (gerekirse tru
 # ====================== PROJE DOKÜMANLARI ======================
 project_doc_max_bytes = 65536        # AGENTS.md + docs klasörü için yeterli alan
 project_doc_fallback_filenames = ["AGENTS.md", "README.md"]
-
-# ====================== CONTEXT & HISTORY YÖNETİMİ ======================
-model_auto_compact_token_limit = 32000   # Context dolunca otomatik sıkıştırma (çok önemli!)
-tool_output_token_limit = 8000           # Tool çıktılarını sınırlı tut

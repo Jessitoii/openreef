@@ -153,6 +153,7 @@ class TriggerConfig {
     bool? isExpensive,
     Map<String, Object?>? payload,
     int? pollIntervalMinutes,
+    bool clearPollIntervalMinutes = false,
   }) {
     return TriggerConfig(
       id: id ?? this.id,
@@ -161,11 +162,17 @@ class TriggerConfig {
       type: type ?? this.type,
       priority: priority ?? this.priority,
       enabled: enabled ?? this.enabled,
-      scheduleSpec: clearScheduleSpec ? null : scheduleSpec ?? this.scheduleSpec,
-      intervalSpec: clearIntervalSpec ? null : intervalSpec ?? this.intervalSpec,
+      scheduleSpec: clearScheduleSpec
+          ? null
+          : scheduleSpec ?? this.scheduleSpec,
+      intervalSpec: clearIntervalSpec
+          ? null
+          : intervalSpec ?? this.intervalSpec,
       cronSpec: clearCronSpec ? null : cronSpec ?? this.cronSpec,
       batterySpec: clearBatterySpec ? null : batterySpec ?? this.batterySpec,
-      mcpEventSpec: clearMcpEventSpec ? null : mcpEventSpec ?? this.mcpEventSpec,
+      mcpEventSpec: clearMcpEventSpec
+          ? null
+          : mcpEventSpec ?? this.mcpEventSpec,
       standingOrderSpec: clearStandingOrderSpec
           ? null
           : standingOrderSpec ?? this.standingOrderSpec,
@@ -173,7 +180,9 @@ class TriggerConfig {
           requiresUserAttention ?? this.requiresUserAttention,
       isExpensive: isExpensive ?? this.isExpensive,
       payload: payload ?? this.payload,
-      pollIntervalMinutes: pollIntervalMinutes ?? this.pollIntervalMinutes,
+      pollIntervalMinutes: clearPollIntervalMinutes
+          ? null
+          : pollIntervalMinutes ?? this.pollIntervalMinutes,
     );
   }
 }
@@ -307,7 +316,9 @@ class TriggerState {
       lastEvaluatedAt: clearLastEvaluatedAt
           ? null
           : lastEvaluatedAt ?? this.lastEvaluatedAt,
-      lastDecision: clearLastDecision ? null : lastDecision ?? this.lastDecision,
+      lastDecision: clearLastDecision
+          ? null
+          : lastDecision ?? this.lastDecision,
       lastDecisionReason: clearLastDecisionReason
           ? null
           : lastDecisionReason ?? this.lastDecisionReason,

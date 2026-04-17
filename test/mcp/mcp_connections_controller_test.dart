@@ -15,6 +15,7 @@ import 'package:openreef/memory/sqlite_memory_storage_backend.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(sqfliteFfiInit);
 
   late MemoryStorage storage;
@@ -74,10 +75,11 @@ void main() {
         store: store,
         runtimeCoordinator: runtimeCoordinator,
         secretStore: secretStore,
-        transportFactory: (endpoint, {headers = const <String, String>{}, headersProvider}) {
-          connectedEndpoints.add(endpoint);
-          return _FakeMcpTransport(endpoint);
-        },
+        transportFactory:
+            (endpoint, {headers = const <String, String>{}, headersProvider}) {
+              connectedEndpoints.add(endpoint);
+              return _FakeMcpTransport(endpoint);
+            },
       );
 
       await controller.initialize();
@@ -125,8 +127,9 @@ void main() {
         store: store,
         runtimeCoordinator: runtimeCoordinator,
         secretStore: secretStore,
-        transportFactory: (endpoint, {headers = const <String, String>{}, headersProvider}) =>
-            _FakeMcpTransport(endpoint),
+        transportFactory:
+            (endpoint, {headers = const <String, String>{}, headersProvider}) =>
+                _FakeMcpTransport(endpoint),
       );
 
       await controller.initialize();
@@ -146,8 +149,9 @@ void main() {
       store: store,
       runtimeCoordinator: runtimeCoordinator,
       secretStore: secretStore,
-      transportFactory: (endpoint, {headers = const <String, String>{}, headersProvider}) =>
-          _FakeMcpTransport(endpoint),
+      transportFactory:
+          (endpoint, {headers = const <String, String>{}, headersProvider}) =>
+              _FakeMcpTransport(endpoint),
     );
 
     await controller.connect('http://example.com/sse', persist: false);
@@ -162,8 +166,9 @@ void main() {
       store: store,
       runtimeCoordinator: runtimeCoordinator,
       secretStore: secretStore,
-      transportFactory: (endpoint, {headers = const <String, String>{}, headersProvider}) =>
-          _FakeMcpTransport(endpoint),
+      transportFactory:
+          (endpoint, {headers = const <String, String>{}, headersProvider}) =>
+              _FakeMcpTransport(endpoint),
     );
 
     await controller.connect('https://example.com/sse', persist: false);
@@ -175,7 +180,10 @@ void main() {
     await controller.disconnect(state.url);
 
     expect(runtimeToolCatalog.listTools(), isEmpty);
-    expect(controller.connections.value.single.toolsImportedIntoRuntime, isFalse);
+    expect(
+      controller.connections.value.single.toolsImportedIntoRuntime,
+      isFalse,
+    );
   });
 
   test('surfaces non-endpoint SSE messages as runtime events', () async {
@@ -184,10 +192,11 @@ void main() {
       store: store,
       runtimeCoordinator: runtimeCoordinator,
       secretStore: secretStore,
-      transportFactory: (endpoint, {headers = const <String, String>{}, headersProvider}) {
-        transport = _FakeMcpTransport(endpoint);
-        return transport;
-      },
+      transportFactory:
+          (endpoint, {headers = const <String, String>{}, headersProvider}) {
+            transport = _FakeMcpTransport(endpoint);
+            return transport;
+          },
     );
 
     await controller.connect('https://example.com/sse', persist: false);
@@ -206,37 +215,43 @@ void main() {
     expect(event.payload['method'], 'notifications/github.pr_merged');
   });
 
-  test('disabled connectors are excluded from runtime tool injection', () async {
-    final controller = McpConnectionsController(
-      store: store,
-      runtimeCoordinator: runtimeCoordinator,
-      secretStore: secretStore,
-      transportFactory: (endpoint, {headers = const <String, String>{}, headersProvider}) =>
-          _FakeMcpTransport(endpoint),
-    );
+  test(
+    'disabled connectors are excluded from runtime tool injection',
+    () async {
+      final controller = McpConnectionsController(
+        store: store,
+        runtimeCoordinator: runtimeCoordinator,
+        secretStore: secretStore,
+        transportFactory:
+            (endpoint, {headers = const <String, String>{}, headersProvider}) =>
+                _FakeMcpTransport(endpoint),
+      );
 
-    await controller.connect('https://example.com/sse', persist: false);
-    final state = controller.connections.value.single;
+      await controller.connect('https://example.com/sse', persist: false);
+      final state = controller.connections.value.single;
 
-    expect(runtimeToolCatalog.listTools(), isNotEmpty);
+      expect(runtimeToolCatalog.listTools(), isNotEmpty);
 
-    await controller.setEnabled(state.url, false);
+      await controller.setEnabled(state.url, false);
 
-    expect(runtimeToolCatalog.listTools(), isEmpty);
-    final disabledState = controller.connections.value.single;
-    expect(disabledState.enabled, isFalse);
-    expect(disabledState.importedToolCount, 0);
-  });
+      expect(runtimeToolCatalog.listTools(), isEmpty);
+      final disabledState = controller.connections.value.single;
+      expect(disabledState.enabled, isFalse);
+      expect(disabledState.importedToolCount, 0);
+    },
+  );
 
   test('missing discovery never fabricates tools or events', () async {
     final controller = McpConnectionsController(
       store: store,
       runtimeCoordinator: runtimeCoordinator,
       secretStore: secretStore,
-      transportFactory: (endpoint, {headers = const <String, String>{}, headersProvider}) => _FakeMcpTransport(
-        endpoint,
-        tools: const <Map<String, Object?>>[],
-      ),
+      transportFactory:
+          (endpoint, {headers = const <String, String>{}, headersProvider}) =>
+              _FakeMcpTransport(
+                endpoint,
+                tools: const <Map<String, Object?>>[],
+              ),
     );
 
     await controller.connect('https://example.com/sse', persist: false);

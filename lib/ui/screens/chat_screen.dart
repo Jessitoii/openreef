@@ -54,12 +54,17 @@ class _ChatScreenState extends State<ChatScreen> {
           _lastContentFootprint = footprint;
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (_scrollController.hasClients) {
-              _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+              _scrollController.jumpTo(
+                _scrollController.position.maxScrollExtent,
+              );
             }
           });
         }
 
-        final combinedCount = messages.length + activities.length + (widget.chatSession.pendingApprovalOrNull != null ? 1 : 0);
+        final combinedCount =
+            messages.length +
+            activities.length +
+            (widget.chatSession.pendingApprovalOrNull != null ? 1 : 0);
 
         return Column(
           children: [
@@ -67,7 +72,10 @@ class _ChatScreenState extends State<ChatScreen> {
             Expanded(
               child: ListView.builder(
                 controller: _scrollController,
-                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.md,
+                  vertical: AppSpacing.sm,
+                ),
                 itemCount: combinedCount,
                 itemBuilder: (context, index) {
                   if (index < activities.length) {
@@ -83,17 +91,26 @@ class _ChatScreenState extends State<ChatScreen> {
                       viewModel: MessageViewModel.fromDomain(message),
                     );
                   }
-                  
+
                   if (widget.chatSession.pendingApprovalOrNull != null) {
                     return Padding(
-                      padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
+                      padding: const EdgeInsets.symmetric(
+                        vertical: AppSpacing.sm,
+                      ),
                       child: _ApprovalCard(
                         chatSession: widget.chatSession,
-                        approval: ApprovalViewModel.fromDomain(widget.chatSession.pendingApprovalOrNull!),
-                        expanded: _expandedActivityIds.contains(widget.chatSession.pendingApprovalOrNull!.toolId),
+                        approval: ApprovalViewModel.fromDomain(
+                          widget.chatSession.pendingApprovalOrNull!,
+                        ),
+                        expanded: _expandedActivityIds.contains(
+                          widget.chatSession.pendingApprovalOrNull!.toolId,
+                        ),
                         onToggleExpand: () {
                           setState(() {
-                            final id = widget.chatSession.pendingApprovalOrNull!.toolId;
+                            final id = widget
+                                .chatSession
+                                .pendingApprovalOrNull!
+                                .toolId;
                             if (_expandedActivityIds.contains(id)) {
                               _expandedActivityIds.remove(id);
                             } else {
@@ -109,7 +126,10 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.md),
+              padding: const EdgeInsets.symmetric(
+                horizontal: AppSpacing.md,
+                vertical: AppSpacing.md,
+              ),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
@@ -123,7 +143,9 @@ class _ChatScreenState extends State<ChatScreen> {
                       onSubmitted: (_) => _submitMessage(),
                       decoration: const InputDecoration(
                         hintText: 'Message OpenReef...',
-                        border: OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(16))),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.all(Radius.circular(16)),
+                        ),
                       ),
                     ),
                   ),
@@ -171,11 +193,13 @@ class _MessageBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isUser = viewModel.isUser;
-    
+
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
       child: Row(
-        mainAxisAlignment: isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
+        mainAxisAlignment: isUser
+            ? MainAxisAlignment.end
+            : MainAxisAlignment.start,
         children: [
           Flexible(
             child: AppCard(
@@ -183,14 +207,13 @@ class _MessageBubble extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    viewModel.text,
-                    style: theme.textTheme.bodyMedium,
-                  ),
+                  Text(viewModel.text, style: theme.textTheme.bodyMedium),
                   const SizedBox(height: AppSpacing.xs),
                   Text(
                     viewModel.timeLabel,
-                    style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
                   ),
                 ],
               ),
@@ -218,7 +241,7 @@ class _ApprovalCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    
+
     return AppCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -228,9 +251,21 @@ class _ApprovalCard extends StatelessWidget {
               Icon(Icons.warning_amber_rounded, color: ReefPalette.coral),
               const SizedBox(width: AppSpacing.sm),
               Expanded(
-                child: Text(
-                  approval.humanSummary,
-                  style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Approval required',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: AppSpacing.xs),
+                    Text(
+                      approval.humanSummary,
+                      style: theme.textTheme.bodyMedium,
+                    ),
+                  ],
                 ),
               ),
               IconButton(
@@ -249,10 +284,16 @@ class _ApprovalCard extends StatelessWidget {
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: approval.technicalDetails.entries.map((e) => Text(
-                  '${e.key}: ${e.value}',
-                  style: theme.textTheme.bodySmall?.copyWith(fontFamily: 'JetBrainsMono'),
-                )).toList(),
+                children: approval.technicalDetails.entries
+                    .map(
+                      (e) => Text(
+                        '${e.key}: ${e.value}',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          fontFamily: 'JetBrainsMono',
+                        ),
+                      ),
+                    )
+                    .toList(),
               ),
             ),
           ],
@@ -261,11 +302,13 @@ class _ApprovalCard extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.end,
             children: [
               AppButton.secondary(
+                key: const Key('approval-reject-button'),
                 onPressed: chatSession.rejectPendingApprovalIfSupported,
                 label: 'Reject',
               ),
               const SizedBox(width: AppSpacing.sm),
               AppButton.primary(
+                key: const Key('approval-approve-button'),
                 onPressed: chatSession.approvePendingApprovalIfSupported,
                 label: 'Approve',
               ),

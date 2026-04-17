@@ -24,11 +24,14 @@ trigger_patterns:
 
     expect(parsed.manifest.name, 'Sleep Tracker');
     expect(parsed.manifest.description, 'Track daily sleep reminders.');
-    expect(parsed.manifest.toolsRequired, <String>['alarm_set', 'memory_search']);
-    expect(
-      parsed.manifest.triggerPatterns,
-      <String>['sleep reminder', 'bedtime check'],
-    );
+    expect(parsed.manifest.toolsRequired, <String>[
+      'alarm_set',
+      'memory_search',
+    ]);
+    expect(parsed.manifest.triggerPatterns, <String>[
+      'sleep reminder',
+      'bedtime check',
+    ]);
   });
 
   test('preserves markdown body after frontmatter', () {
@@ -51,29 +54,19 @@ tools_required: [notify
 # Reminder
 ''';
 
-    expect(
-      () => parser.parse(markdown),
-      throwsA(isA<SkillParseException>()),
-    );
+    expect(() => parser.parse(markdown), throwsA(isA<SkillParseException>()));
   });
 
-  test('rejects missing tools_required', () {
+  test('defaults missing tools_required to an empty list', () {
     const markdown = '''---
 memory_access: read_only
 ---
 # Reminder
 ''';
 
-    expect(
-      () => parser.parse(markdown),
-      throwsA(
-        isA<SkillParseException>().having(
-          (error) => error.message,
-          'message',
-          'missing_tools_required',
-        ),
-      ),
-    );
+    final parsed = parser.parse(markdown);
+
+    expect(parsed.manifest.toolsRequired, isEmpty);
   });
 
   test('rejects tools_required values that are not a list of strings', () {

@@ -115,10 +115,12 @@ trigger_patterns: [remember this]
 Curate memory.
 ''',
     });
-    final builtInRoot = await const BuiltInSkillSource().materialize(
-      parentDirectory: tempRoot,
-      bundle: bundle,
-    );
+    final builtInRoot = await const BuiltInSkillSource(
+      assetPaths: <String>[
+        'assets/skills/context_auditor/SKILL.md',
+        'assets/skills/memory_curator/SKILL.md',
+      ],
+    ).materialize(parentDirectory: tempRoot, bundle: bundle);
     final catalog = SkillRuntimeCatalog(
       registry: SkillRegistry(
         rootPaths: const <String>[],

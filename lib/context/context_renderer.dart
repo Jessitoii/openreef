@@ -235,7 +235,7 @@ class ContextRenderer {
         if (section.id != 'user') {
           continue;
         }
-        final targetTokens = (budget * 0.20).floor().clamp(16, 256).toInt();
+        final targetTokens = (budget * 0.12).floor().clamp(8, 128).toInt();
         final trimmed = ContextAssembler.trimToTokens(
           section.content,
           targetTokens,
@@ -269,10 +269,10 @@ class ContextRenderer {
           break;
         }
         final section = selected[index];
-        if (!section.critical || section.id == 'identity') {
+        if (!section.critical) {
           continue;
         }
-        final trimmed = ContextAssembler.trimToTokens(section.content, 40);
+        final trimmed = ContextAssembler.trimToTokens(section.content, 8);
         selected[index] = _section(
           id: section.id,
           title: section.title,
