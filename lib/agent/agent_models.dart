@@ -1,5 +1,10 @@
-import 'package:flutter/foundation.dart';
 import 'dart:convert';
+
+import 'package:flutter/foundation.dart';
+
+enum ToolCallSource { textParsed, flutterGemmaTyped }
+
+enum AgentResponseParserStatus { visibleText, toolCall, protocolFailure }
 
 enum AgentMessageRole {
   system,
@@ -67,22 +72,57 @@ class ToolCall {
     required this.id,
     required this.toolId,
     this.arguments = const <String, Object?>{},
+    this.rawArguments,
+    this.hasRawArguments = false,
+    this.source = ToolCallSource.textParsed,
   });
 
   final String id;
   final String toolId;
   final Map<String, Object?> arguments;
+  final Object? rawArguments;
+  final bool hasRawArguments;
+  final ToolCallSource source;
 
   factory ToolCall.fromMap(Map<String, Object?> map) {
-    final rawArguments = map['arguments'] ?? map['args'];
+    final hasArguments =
+        map.containsKey('arguments') || map.containsKey('args');
+    final rawArguments = map.containsKey('arguments')
+        ? map['arguments']
+        : map.containsKey('args')
+        ? map['args']
+        : map.containsKey('parameters')
+        ? <String, Object?>{'parameters': map['parameters']}
+        : null;
     return ToolCall(
       id: map['id'] as String? ?? 'tool_call',
-      toolId: map['toolId'] as String? ?? map['tool_id'] as String? ?? '',
+      toolId:
+          map['toolId'] as String? ??
+          map['tool_id'] as String? ??
+          map['name'] as String? ??
+          '',
       arguments: rawArguments is Map<String, Object?>
           ? rawArguments
           : rawArguments is Map
           ? Map<String, Object?>.from(rawArguments)
           : const <String, Object?>{},
+      rawArguments: rawArguments,
+      hasRawArguments: hasArguments || map.containsKey('parameters'),
+      source: ToolCallSource.textParsed,
+    );
+  }
+
+  ToolCall withSource(ToolCallSource source) {
+    if (this.source == source) {
+      return this;
+    }
+    return ToolCall(
+      id: id,
+      toolId: toolId,
+      arguments: arguments,
+      rawArguments: rawArguments,
+      hasRawArguments: hasRawArguments,
+      source: source,
     );
   }
 
@@ -92,6 +132,35 @@ class ToolCall {
       'tool_id': toolId,
       'arguments': arguments,
     };
+  }
+}
+
+class NormalizedToolRequest {
+  const NormalizedToolRequest({
+    required this.callId,
+    required this.toolId,
+    required this.normalizedArgs,
+    required this.requiresConfirmation,
+    required this.sessionKey,
+    required this.source,
+  });
+
+  final String callId;
+  final String toolId;
+  final Map<String, Object?> normalizedArgs;
+  final bool requiresConfirmation;
+  final String sessionKey;
+  final ToolCallSource source;
+
+  ToolCall toToolCall() {
+    return ToolCall(
+      id: callId,
+      toolId: toolId,
+      arguments: normalizedArgs,
+      rawArguments: normalizedArgs,
+      hasRawArguments: true,
+      source: source,
+    );
   }
 }
 
@@ -317,28 +386,45 @@ class AgentResponse {
     required this.text,
     this.toolCall,
     this.toolCalls = const <ToolCall>[],
+    this.toolCallSource = ToolCallSource.textParsed,
     this.rawOutput,
+    this.parserStatus = AgentResponseParserStatus.visibleText,
+    this.parserError,
   });
 
   final String text;
   final ToolCall? toolCall;
   final List<ToolCall> toolCalls;
+  final ToolCallSource toolCallSource;
   final String? rawOutput;
+  final AgentResponseParserStatus parserStatus;
+  final String? parserError;
 
   bool get hasToolCall => effectiveToolCalls.isNotEmpty;
+  bool get hasTypedToolCall =>
+      toolCallSource == ToolCallSource.flutterGemmaTyped;
+  bool get hasParserFailure =>
+      parserStatus == AgentResponseParserStatus.protocolFailure;
 
   List<ToolCall> get effectiveToolCalls {
     final first = toolCall;
+    late final List<ToolCall> calls;
     if (first == null) {
-      return toolCalls;
+      calls = toolCalls;
+    } else if (toolCalls.isEmpty) {
+      calls = <ToolCall>[first];
+    } else if (identical(toolCalls.first, first) ||
+        toolCalls.first.id == first.id) {
+      calls = toolCalls;
+    } else {
+      calls = <ToolCall>[first, ...toolCalls];
     }
-    if (toolCalls.isEmpty) {
-      return <ToolCall>[first];
+    if (toolCallSource == ToolCallSource.textParsed) {
+      return calls;
     }
-    if (identical(toolCalls.first, first) || toolCalls.first.id == first.id) {
-      return toolCalls;
-    }
-    return <ToolCall>[first, ...toolCalls];
+    return calls
+        .map((call) => call.withSource(toolCallSource))
+        .toList(growable: false);
   }
 }
 
@@ -436,55 +522,169 @@ class AgentResponseParser {
 
   AgentResponse parse(String output) {
     final trimmed = output.trim();
-    final decoded = _tryDecodeObject(trimmed);
-    if (decoded != null) {
+    if (trimmed.isEmpty) {
+      return AgentResponse(text: '', rawOutput: output);
+    }
+
+    if (_containsProtocolToken(trimmed)) {
+      final markerToolCall = _parseToolCallMarker(trimmed);
+      if (markerToolCall == null) {
+        return _protocolFailure(output, 'malformed_tool_call');
+      }
       return AgentResponse(
-        text: decoded['text'] as String? ?? '',
-        toolCall: _parseToolCall(decoded),
-        toolCalls: _parseToolCalls(decoded),
+        text: '',
+        toolCall: markerToolCall,
         rawOutput: output,
+        parserStatus: AgentResponseParserStatus.toolCall,
       );
     }
 
+    final decoded = _tryDecodeObject(trimmed);
+    if (decoded != null) {
+      if (_hasStructuredToolFields(decoded)) {
+        final toolCall = _parseToolCall(decoded);
+        final toolCalls = _parseToolCalls(decoded);
+        if (toolCall == null && toolCalls.isEmpty) {
+          return _protocolFailure(output, 'malformed_tool_call');
+        }
+        return AgentResponse(
+          text: '',
+          toolCall: toolCall,
+          toolCalls: toolCalls,
+          rawOutput: output,
+          parserStatus: AgentResponseParserStatus.toolCall,
+        );
+      }
+      return AgentResponse(
+        text: decoded['text'] as String? ?? '',
+        rawOutput: output,
+      );
+    }
     // Diagnostic fallback: If the model generated pre-text before the json, standard tryDecodeObject will fail.
     // We regex look for `{ "tool_call": ... }` or `{ "tool_calls": ... }` inside the text.
     final embedded = _extractEmbeddedJson(trimmed);
     if (embedded != null) {
-      debugPrint('DIAGNOSTIC: AgentResponseParser fallback extraction succeeded from markdown/prose.');
-      return AgentResponse(
-        text: embedded.text,
-        toolCall: _parseToolCall(embedded.payload),
-        toolCalls: _parseToolCalls(embedded.payload),
-        rawOutput: output,
+      debugPrint(
+        'DIAGNOSTIC: AgentResponseParser fallback extraction succeeded from markdown/prose.',
       );
+      final toolCall = _parseToolCall(embedded.payload);
+      final toolCalls = _parseToolCalls(embedded.payload);
+      if (toolCall == null && toolCalls.isEmpty) {
+        return _protocolFailure(output, 'malformed_tool_call');
+      }
+      return AgentResponse(
+        text: '',
+        toolCall: toolCall,
+        toolCalls: toolCalls,
+        rawOutput: output,
+        parserStatus: AgentResponseParserStatus.toolCall,
+      );
+    }
+    if (_looksLikeStructuredToolOutput(trimmed)) {
+      return _protocolFailure(output, 'malformed_tool_call');
     }
 
     return AgentResponse(text: trimmed, rawOutput: output);
   }
 
-  ({String text, Map<String, Object?> payload})? _extractEmbeddedJson(String content) {
+  ToolCall? _parseToolCallMarker(String content) {
+    final match = RegExp(
+      r'^<\|tool_call\>call:([A-Za-z0-9_.-]+)(.*)<tool_call\|>$',
+      dotAll: true,
+    ).firstMatch(content);
+    if (match == null) {
+      return null;
+    }
+    final toolId = match.group(1) ?? '';
+    final rawArgs = (match.group(2) ?? '').trim();
+    Object? decodedArgs;
+    try {
+      decodedArgs = rawArgs.isEmpty ? <String, Object?>{} : jsonDecode(rawArgs);
+    } on FormatException {
+      return null;
+    }
+    if (decodedArgs is! Map<String, Object?> && decodedArgs is! Map) {
+      return null;
+    }
+    return ToolCall(
+      id: 'tool_call_marker',
+      toolId: toolId,
+      arguments: decodedArgs is Map<String, Object?>
+          ? decodedArgs
+          : decodedArgs is Map
+          ? Map<String, Object?>.from(decodedArgs)
+          : const <String, Object?>{},
+      rawArguments: decodedArgs,
+      hasRawArguments: true,
+    );
+  }
+
+  bool _containsProtocolToken(String content) {
+    return content.contains('<|tool_call>') ||
+        content.contains('<tool_call|>') ||
+        content.contains('<|assistant|>') ||
+        content.contains('<|user|>') ||
+        content.contains('<|system|>') ||
+        content.contains('<|tool|>');
+  }
+
+  bool _looksLikeStructuredToolOutput(String content) {
+    return content.contains('"tool_call"') ||
+        content.contains('"tool_calls"') ||
+        content.contains('"toolCall"') ||
+        content.contains('"toolCalls"');
+  }
+
+  bool _hasStructuredToolFields(Map<String, Object?> decoded) {
+    return decoded.containsKey('toolCall') ||
+        decoded.containsKey('tool_call') ||
+        decoded.containsKey('toolCalls') ||
+        decoded.containsKey('tool_calls');
+  }
+
+  AgentResponse _protocolFailure(String output, String reason) {
+    return AgentResponse(
+      text: '',
+      rawOutput: output,
+      parserStatus: AgentResponseParserStatus.protocolFailure,
+      parserError: reason,
+    );
+  }
+
+  ({String text, Map<String, Object?> payload})? _extractEmbeddedJson(
+    String content,
+  ) {
     // Regex matches the outer braces if they contain 'tool_call' or 'tool_calls'.
     // `dotAll: true` handles multi-line pretty-printed JSON.
-    final match = RegExp(r'\{.*"tool_call(s)?".*\}', dotAll: true).firstMatch(content);
-    
+    final match = RegExp(
+      r'\{.*"tool_call(s)?".*\}',
+      dotAll: true,
+    ).firstMatch(content);
+
     if (match != null) {
       final jsonString = match.group(0)!;
       try {
         final decoded = jsonDecode(jsonString);
         if (decoded is Map<String, Object?>) {
           // Strip the JSON footprint and any markdown blocks to leave the true conversational prose.
-          final textPart = content.substring(0, match.start).replaceAll(RegExp(r'```json\s*$'), '').trim();
+          final textPart = content
+              .substring(0, match.start)
+              .replaceAll(RegExp(r'```json\s*$'), '')
+              .trim();
           return (text: textPart, payload: decoded);
         }
         if (decoded is Map) {
-          final textPart = content.substring(0, match.start).replaceAll(RegExp(r'```json\s*$'), '').trim();
+          final textPart = content
+              .substring(0, match.start)
+              .replaceAll(RegExp(r'```json\s*$'), '')
+              .trim();
           return (text: textPart, payload: Map<String, Object?>.from(decoded));
         }
       } catch (_) {
         // Ignored: JSON chunk was malformed visually
       }
     }
-    
+
     return null;
   }
 

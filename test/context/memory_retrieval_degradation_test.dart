@@ -22,49 +22,54 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 void main() {
   setUpAll(sqfliteFfiInit);
 
-  test('context assembly succeeds and marks memory unavailable when model is not ready', () async {
-    final storage = MemoryStorage(
-      SqliteMemoryStorageBackend(
-        path: inMemoryDatabasePath,
-        databaseFactory: databaseFactoryFfi,
-      ),
-    );
-    await storage.initialize();
-    final manager = await _ManagerHarness.create(runtime: _FakeEmbeddingRuntime());
-    final assembler = ContextAssembler(
-      memoryIndex: MemoryIndex(storage),
-      embedder: const _FixedEmbedder(<double>[1, 0, 0, 0, 0, 0, 0]),
-      toolCatalog: _EmptyToolCatalog(),
-      skillCatalog: _EmptySkillCatalog(),
-      memoryContextProvider: ManagedSemanticMemoryContextProvider(
-        retriever: SemanticMemoryRetriever(
-          storage: storage,
-          embeddingModelManager: manager.manager,
+  test(
+    'context assembly succeeds and marks memory unavailable when model is not ready',
+    () async {
+      final storage = MemoryStorage(
+        SqliteMemoryStorageBackend(
+          path: inMemoryDatabasePath,
+          databaseFactory: databaseFactoryFfi,
         ),
-        readinessProvider: manager.manager,
-      ),
-      capabilityIndex: CapabilityEmbeddingIndex(
-        embedder: const _FixedSemanticTextEmbedder(),
-      ),
-      embeddingReadinessProvider: manager.manager,
-    );
+      );
+      await storage.initialize();
+      final manager = await _ManagerHarness.create(
+        runtime: _FakeEmbeddingRuntime(),
+      );
+      final assembler = ContextAssembler(
+        memoryIndex: MemoryIndex(storage),
+        embedder: const _FixedEmbedder(<double>[1, 0, 0, 0, 0, 0, 0]),
+        toolCatalog: _EmptyToolCatalog(),
+        skillCatalog: _EmptySkillCatalog(),
+        memoryContextProvider: ManagedSemanticMemoryContextProvider(
+          retriever: SemanticMemoryRetriever(
+            storage: storage,
+            embeddingModelManager: manager.manager,
+          ),
+          readinessProvider: manager.manager,
+        ),
+        capabilityIndex: CapabilityEmbeddingIndex(
+          embedder: const _FixedSemanticTextEmbedder(),
+        ),
+        embeddingReadinessProvider: manager.manager,
+      );
 
-    final result = await assembler.assemble(
-      sessionKey: 'session-1',
-      userMessage: 'remember this please',
-      conversationHistory: const <AgentMessage>[],
-      modelContextWindow: 4096,
-    );
+      final result = await assembler.assemble(
+        sessionKey: 'session-1',
+        userMessage: 'remember this please',
+        conversationHistory: const <AgentMessage>[],
+        modelContextWindow: 4096,
+      );
 
-    expect(result.compiledPackage, isNotNull);
-    expect(result.compiledPackage!.memorySelection.degraded, isTrue);
-    expect(
-      result.compiledPackage!.prompt.toPrompt(),
-      contains('[MEMORY RETRIEVAL UNAVAILABLE]'),
-    );
+      expect(result.compiledPackage, isNotNull);
+      expect(result.compiledPackage!.memorySelection.degraded, isTrue);
+      expect(
+        result.compiledPackage!.prompt.toPrompt(),
+        contains('[MEMORY RETRIEVAL UNAVAILABLE]'),
+      );
 
-    await storage.close();
-  });
+      await storage.close();
+    },
+  );
 }
 
 class _ManagerHarness {
@@ -129,6 +134,9 @@ class _FakeEmbeddingRuntime implements EmbeddingModelRuntime {
   }) async {}
 
   @override
+  Future<void> activateInstalled(ModelDescriptor descriptor) async {}
+
+  @override
   Future<bool> isInstalled(ModelDescriptor descriptor) async => false;
 }
 
@@ -172,7 +180,11 @@ class _FixedSemanticTextEmbedder implements SemanticTextEmbedder {
   String get modelId => 'test-embedder';
 
   @override
-  Future<List<double>> embedDocument(String text) async => const <double>[1, 0, 0];
+  Future<List<double>> embedDocument(String text) async => const <double>[
+    1,
+    0,
+    0,
+  ];
 
   @override
   Future<List<double>> embedQuery(String text) async => const <double>[1, 0, 0];

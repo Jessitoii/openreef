@@ -1,4 +1,5 @@
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_gemma/flutter_gemma.dart';
 import 'package:openreef/agent/agent_models.dart';
@@ -88,8 +89,27 @@ void main() {
       expect(withTools.tools.single.name, 'mcp_source/search_docs');
       expect(withTools.supportsFunctionCalls, isTrue);
       expect(withTools.toolChoice, ToolChoice.auto);
+      debugPrint(
+        'TEST_STRUCTURED_TOOL_CONFIG: tools=${withTools.tools.map((tool) => tool.name).join(',')} '
+        'supportsFunctionCalls=${withTools.supportsFunctionCalls} '
+        'toolChoice=${withTools.toolChoice.runtimeType}',
+      );
     },
   );
+
+  test('tool call config can honestly disable typed function calls', () {
+    final disabled = bridge.buildToolCallConfig(<ToolDefinition>[
+      ToolDefinition(
+        id: 'battery_info',
+        embedding: const <double>[1, 0, 0],
+        execute: (call) async => const ToolResult.success('ok'),
+      ),
+    ], supportsTypedFunctionCalls: false);
+
+    expect(disabled.tools, isEmpty);
+    expect(disabled.supportsFunctionCalls, isFalse);
+    expect(disabled.toolChoice, ToolChoice.none);
+  });
 
   test('crash shield exception prints user-facing message', () {
     const error = LiteRtCrashShieldException('Low RAM');

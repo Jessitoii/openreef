@@ -7,6 +7,7 @@ import 'package:openreef/agent/mailbox.dart';
 import 'package:openreef/agent/agent_models.dart';
 import 'package:openreef/agent/execution_request.dart';
 import 'package:openreef/agent/runtime_transcript_event.dart';
+import 'package:openreef/ui/chat/composer_models.dart';
 import 'package:openreef/ui/chat_session_port.dart';
 
 class MainAgentApprovalController extends ChangeNotifier {
@@ -335,9 +336,30 @@ class AgentLoopChatSession extends ChangeNotifier
     }
   }
 
+  @override
+  Future<void> sendComposerSubmission(ComposerSubmission submission) async {
+    if (submission.attachments.isEmpty) {
+      return sendMessage(submission.text);
+    }
+
+    if (submission.text.trim().isNotEmpty) {
+      _appendMessage(
+        ChatMessageSender.system,
+        'Attachments are not available in this chat yet. Sending the text only.',
+      );
+      return sendMessage(submission.text);
+    }
+
+    _appendMessage(
+      ChatMessageSender.system,
+      'Attachments are not available in this chat yet.',
+    );
+  }
+
   String _normalizeResponse(AgentLoopResult result) {
-    if (result.text.trim().isNotEmpty) {
-      return result.text.trim();
+    final trimmedText = result.text.trim();
+    if (trimmedText.isNotEmpty && !_isProtocolOnlyAssistantText(trimmedText)) {
+      return trimmedText;
     }
     if (result.sessionResult == SessionResult.frozen) {
       return switch (result.reason) {
@@ -405,8 +427,32 @@ class AgentLoopChatSession extends ChangeNotifier
   }
 
   bool _shouldTrackAssistantTurn(AgentLoopResult result) {
+    final responseText = _normalizeResponse(result);
+    if (_isProtocolOnlyAssistantText(responseText)) {
+      return false;
+    }
+    if (_hasUnstableToolProtocolFailure(result)) {
+      return false;
+    }
+    if (result.reason == 'post_tool_completion_missing') {
+      return false;
+    }
     return result.sessionResult != SessionResult.completed ||
-        result.text.trim().isNotEmpty;
+        responseText.trim().isNotEmpty;
+  }
+
+  bool _isProtocolOnlyAssistantText(String text) {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) {
+      return false;
+    }
+    if (trimmed.startsWith('<|tool_call>') &&
+        trimmed.endsWith('<tool_call|>')) {
+      return true;
+    }
+    final parsed = const AgentResponseParser().parse(trimmed);
+    return parsed.hasParserFailure ||
+        (parsed.hasToolCall && parsed.text.trim().isEmpty);
   }
 
   bool _isProtectivePauseMessage(String text) {
@@ -428,6 +474,10 @@ class AgentLoopChatSession extends ChangeNotifier
 
   void _appendMessage(ChatMessageSender sender, String text) {
     if (_isDisposed) {
+      return;
+    }
+    if (sender == ChatMessageSender.assistant &&
+        _isProtocolOnlyAssistantText(text)) {
       return;
     }
 
@@ -524,8 +574,17 @@ class AgentLoopChatSession extends ChangeNotifier
     if (!_isVisibleInChat(result.visibility)) {
       return;
     }
-    final responseText = _normalizeResponse(result.toAgentLoopResult());
-    if (responseText.trim().isEmpty) {
+    final loopResult = result.toAgentLoopResult();
+    final responseText = _normalizeResponse(loopResult);
+    if (_hasUnstableToolProtocolFailure(loopResult)) {
+      await _emitTerminalStatus(
+        requestId: result.requestId,
+        status: _statusForLifecycle(result.terminalStatus),
+      );
+      return;
+    }
+    if (responseText.trim().isEmpty ||
+        _isProtocolOnlyAssistantText(responseText)) {
       return;
     }
     final messageId = '${result.requestId}-assistant-final';
@@ -621,6 +680,11 @@ class AgentLoopChatSession extends ChangeNotifier
     final projection = _projectionsByRequestId[event.requestId]!;
     final messageId = event.messageId ?? '${event.requestId}-assistant';
     final normalizedText = (event.finalText ?? '').trim();
+    if (_isProtocolOnlyAssistantText(normalizedText)) {
+      projection.isFinalized = true;
+      projection.hasVisibleAssistantText = false;
+      return;
+    }
     final text = normalizedText.isEmpty
         ? _fallbackTextForEvent(event, failed: failed)
         : normalizedText;
@@ -812,6 +876,30 @@ class AgentLoopChatSession extends ChangeNotifier
         visibility == ExecutionVisibility.chatAndBackground;
   }
 
+  bool _hasUnstableToolProtocolFailure(AgentLoopResult result) {
+    if (result.reason == 'malformed_tool_call' ||
+        result.reason == 'post_tool_completion_missing') {
+      return true;
+    }
+    for (final toolResult in result.toolResults) {
+      if (toolResult.status != ToolResultStatus.validationError) {
+        continue;
+      }
+      if (toolResult.metadata['visibleSuppressed'] == true) {
+        return true;
+      }
+      final reason =
+          toolResult.metadata['reason'] as String? ??
+          toolResult.metadata['errorCode'] as String?;
+      if (reason == 'malformed_tool_call' ||
+          reason == 'schema_passed_as_args' ||
+          reason == 'typed_tool_call_without_dispatch') {
+        return true;
+      }
+    }
+    return false;
+  }
+
   @override
   ChatSessionPort createSession({
     required String sessionId,
@@ -852,6 +940,9 @@ class AgentLoopChatSession extends ChangeNotifier
       }
 
       if (message.sender == ChatMessageSender.assistant) {
+        if (_isProtocolOnlyAssistantText(message.text)) {
+          continue;
+        }
         final assistantTurn = turnNumber == 0 ? 1 : turnNumber;
         history.add(
           AgentMessage(

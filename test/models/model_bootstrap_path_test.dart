@@ -8,11 +8,12 @@ void main() {
   test('bootstrap initializes LiteRT with the local downloaded path', () async {
     final bridge = _FakeLiteRtBridge();
 
-    await initializeLiteRtModelAtPath(
+    final initialized = await initializeLiteRtModelAtPath(
       bridge,
       path: '/data/user/0/com.openreef.app/files/models/gemma.task',
     );
 
+    expect(initialized, isTrue);
     expect(bridge.initModelPath, '/data/user/0/com.openreef.app/files/models/gemma.task');
     expect(bridge.initModelUseNpu, isFalse);
   });

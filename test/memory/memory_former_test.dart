@@ -47,76 +47,82 @@ void main() {
     await storage.close();
   });
 
-  test('writes durable memory and updates pointers for successful turns', () async {
-    final occurredAt = DateTime.now().toUtc();
-    await former.process(
-      MemoryTurn(
-        facts: const <MemoryFact>[
-          MemoryFact(
-            key: 'prefs_2026',
-            fact: 'Prefers short responses.',
-            category: 'user_prefs',
-            importance: 4,
-          ),
-          MemoryFact(
-            key: 'recent_topic',
-            fact: 'Discussed memory architecture.',
-            category: 'fact',
-            importance: 2,
-          ),
-        ],
-        hasFailedToolCalls: false,
-        isAmbiguous: false,
-        occurredAt: occurredAt,
-      ),
-    );
+  test(
+    'writes durable memory and updates pointers for successful turns',
+    () async {
+      final occurredAt = DateTime.now().toUtc();
+      await former.process(
+        MemoryTurn(
+          facts: const <MemoryFact>[
+            MemoryFact(
+              key: 'prefs_2026',
+              fact: 'Prefers short responses.',
+              category: 'user_prefs',
+              importance: 4,
+            ),
+            MemoryFact(
+              key: 'recent_topic',
+              fact: 'Discussed memory architecture.',
+              category: 'fact',
+              importance: 2,
+            ),
+          ],
+          hasFailedToolCalls: false,
+          isAmbiguous: false,
+          occurredAt: occurredAt,
+        ),
+      );
 
-    final longTerm = await storage.readRecord(
-      'prefs_2026',
-      store: MemoryStoreKind.longTerm,
-    );
-    final shortTerm = await storage.readRecord(
-      'recent_topic',
-      store: MemoryStoreKind.shortTerm,
-    );
-    final pointerBlock = await index.toContextBlock();
+      final longTerm = await storage.readRecord(
+        'prefs_2026',
+        store: MemoryStoreKind.longTerm,
+      );
+      final shortTerm = await storage.readRecord(
+        'recent_topic',
+        store: MemoryStoreKind.shortTerm,
+      );
+      final pointerBlock = await index.toContextBlock();
 
-    expect(longTerm?.content, 'Prefers short responses.');
-    expect(shortTerm?.content, 'Discussed memory architecture.');
-    expect(pointerBlock, contains('user_prefs       -> memory:prefs_2026'));
-  });
+      expect(longTerm?.content, 'Prefers short responses.');
+      expect(shortTerm?.content, 'Discussed memory architecture.');
+      expect(pointerBlock, contains('user_prefs       -> memory:prefs_2026'));
+    },
+  );
 
-  test('strict write discipline skips durable writes after failed tool calls', () async {
-    final occurredAt = DateTime.now().toUtc();
-    await former.process(
-      MemoryTurn(
-        facts: const <MemoryFact>[
-          MemoryFact(
-            key: 'prefs_failed',
-            fact: 'Should never be stored long term.',
-            category: 'user_prefs',
-            importance: 5,
-          ),
-        ],
-        hasFailedToolCalls: true,
-        isAmbiguous: false,
-        sessionKey: 'agent:main',
-        occurredAt: occurredAt,
-      ),
-    );
+  test(
+    'strict write discipline skips durable writes after failed tool calls',
+    () async {
+      final occurredAt = DateTime.now().toUtc();
+      await former.process(
+        MemoryTurn(
+          facts: const <MemoryFact>[
+            MemoryFact(
+              key: 'prefs_failed',
+              fact: 'Should never be stored long term.',
+              category: 'user_prefs',
+              importance: 5,
+            ),
+          ],
+          hasFailedToolCalls: true,
+          isAmbiguous: false,
+          sessionKey: 'agent:main',
+          occurredAt: occurredAt,
+        ),
+      );
 
-    final durableRecord = await storage.readRecord(
-      'prefs_failed',
-      store: MemoryStoreKind.longTerm,
-    );
-    final guardRecord = await storage.readRecord(
-      'agent:main_last_turn_status',
-      store: MemoryStoreKind.shortTerm,
-    );
+      final durableRecord = await storage.readRecord(
+        'prefs_failed',
+        store: MemoryStoreKind.longTerm,
+      );
+      final guardRecord = await storage.readRecord(
+        'agent:main_last_turn_status',
+        store: MemoryStoreKind.shortTerm,
+      );
 
-    expect(durableRecord, isNull);
-    expect(guardRecord?.content, 'error');
-  });
+      expect(durableRecord, isNull);
+      expect(guardRecord?.content, 'error');
+    },
+  );
 
   test('ambiguous turns are downgraded to short-term only', () async {
     final occurredAt = DateTime.now().toUtc();
@@ -220,6 +226,11 @@ class _FakeEmbeddingRuntime implements EmbeddingModelRuntime {
       0,
       descriptor.storageFileName.lastIndexOf('.'),
     );
+  }
+
+  @override
+  Future<void> activateInstalled(ModelDescriptor descriptor) async {
+    await install(descriptor: descriptor, hfToken: null, onProgress: (_) {});
   }
 
   @override

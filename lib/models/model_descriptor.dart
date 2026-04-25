@@ -1,4 +1,5 @@
 import 'package:flutter_gemma/flutter_gemma.dart';
+import 'package:openreef/models/model_capabilities.dart';
 
 enum ReefModelTask { generation, embedding }
 
@@ -22,6 +23,7 @@ class ModelDescriptor {
     this.defaultEnabled = true,
     this.tokenizerUrl,
     this.iosTokenizerUrl,
+    this.inputCapabilities = ModelInputCapabilities.textOnly,
   });
 
   final String id;
@@ -42,6 +44,7 @@ class ModelDescriptor {
   final bool defaultEnabled;
   final String? tokenizerUrl;
   final String? iosTokenizerUrl;
+  final ModelInputCapabilities inputCapabilities;
 }
 
 class InstalledModelRecord {

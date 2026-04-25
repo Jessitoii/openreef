@@ -59,9 +59,10 @@ class EmbeddingModelNotReadyException implements Exception {
             'Choose a semantic retrieval embedding model in Settings.',
           EmbeddingModelReadinessStatus.requiresAuth =>
             'This semantic retrieval model requires a Hugging Face token.',
-          EmbeddingModelReadinessStatus.downloadable ||
+          EmbeddingModelReadinessStatus.downloadable =>
+            'Install the semantic retrieval embedding model in Settings.',
           EmbeddingModelReadinessStatus.installed =>
-            'Install or activate the semantic retrieval embedding model in Settings.',
+            'The semantic retrieval embedding model is installed but still preparing.',
           EmbeddingModelReadinessStatus.downloading =>
             'The semantic retrieval embedding model is still downloading.',
           EmbeddingModelReadinessStatus.activating =>
@@ -87,6 +88,8 @@ abstract class EmbeddingModelRuntime {
   Future<EmbeddingModel> getActiveEmbedder();
 
   Future<bool> isInstalled(ModelDescriptor descriptor);
+
+  Future<void> activateInstalled(ModelDescriptor descriptor);
 
   Future<void> install({
     required ModelDescriptor descriptor,
@@ -153,6 +156,14 @@ class FlutterGemmaEmbeddingModelRuntime implements EmbeddingModelRuntime {
       tokenizerUrl: tokenizerUrl,
     );
     return FlutterGemmaPlugin.instance.modelManager.isModelInstalled(spec);
+  }
+
+  @override
+  Future<void> activateInstalled(ModelDescriptor descriptor) async {
+    if (!await isInstalled(descriptor)) {
+      throw StateError('Embedding model ${descriptor.id} is not installed.');
+    }
+    await install(descriptor: descriptor, hfToken: null, onProgress: (_) {});
   }
 
   static String _modelName(ModelDescriptor descriptor) {
@@ -222,7 +233,7 @@ class EmbeddingModelManager extends ChangeNotifier
     if (selected == null && defaultModel != null) {
       _settingsController.updateSemanticEmbeddingModelId(defaultModel.id);
     }
-    await refreshReadiness();
+    await prepareSelectedModelIfInstalled();
   }
 
   Future<void> selectModel(String modelId) async {
@@ -263,18 +274,6 @@ class EmbeddingModelManager extends ChangeNotifier
     }
     final hasToken =
         !model.requiresHfToken || await _tokenStore.hasTokenForModel(model.id);
-    if (model.requiresHfToken && !hasToken) {
-      return _setReadiness(
-        EmbeddingModelReadiness(
-          status: EmbeddingModelReadinessStatus.requiresAuth,
-          model: model,
-          message:
-              '${model.name} requires a Hugging Face token before download.',
-          hasToken: false,
-        ),
-        notify: notify,
-      );
-    }
     try {
       if (_runtime.hasActiveEmbedder() &&
           _runtime.activeEmbedderId() == _activationId(model)) {
@@ -289,6 +288,18 @@ class EmbeddingModelManager extends ChangeNotifier
         );
       }
       final installed = await _runtime.isInstalled(model);
+      if (!installed && model.requiresHfToken && !hasToken) {
+        return _setReadiness(
+          EmbeddingModelReadiness(
+            status: EmbeddingModelReadinessStatus.requiresAuth,
+            model: model,
+            message:
+                '${model.name} requires a Hugging Face token before download.',
+            hasToken: false,
+          ),
+          notify: notify,
+        );
+      }
       return _setReadiness(
         EmbeddingModelReadiness(
           status: installed
@@ -314,6 +325,14 @@ class EmbeddingModelManager extends ChangeNotifier
         notify: notify,
       );
     }
+  }
+
+  Future<void> prepareSelectedModelIfInstalled() async {
+    final readiness = await refreshReadiness();
+    if (readiness.status != EmbeddingModelReadinessStatus.installed) {
+      return;
+    }
+    await _activateSelectedModel(readiness.model!, readiness.hasToken);
   }
 
   Future<void> installSelectedModel() async {
@@ -363,7 +382,7 @@ class EmbeddingModelManager extends ChangeNotifier
       );
       _embedder = null;
       _onModelChanged?.call();
-      await refreshReadiness();
+      await prepareSelectedModelIfInstalled();
     } catch (error) {
       _setReadiness(
         EmbeddingModelReadiness(
@@ -384,10 +403,51 @@ class EmbeddingModelManager extends ChangeNotifier
     if (!current.isReady) {
       throw EmbeddingModelNotReadyException(current);
     }
-    return _embedder ??= OnDeviceSemanticTextEmbedder(
-      model: await _runtime.getActiveEmbedder(),
-      modelId: selectedModelId,
+    try {
+      return _embedder ??= OnDeviceSemanticTextEmbedder(
+        model: await _runtime.getActiveEmbedder(),
+        modelId: selectedModelId,
+      );
+    } catch (error) {
+      final failed = EmbeddingModelReadiness(
+        status: EmbeddingModelReadinessStatus.failed,
+        model: selectedModel,
+        message: 'Semantic retrieval model runtime is not ready.',
+        debugMessage: error.toString(),
+      );
+      _setReadiness(failed);
+      throw EmbeddingModelNotReadyException(failed);
+    }
+  }
+
+  Future<void> _activateSelectedModel(
+    ModelDescriptor model,
+    bool hasToken,
+  ) async {
+    _setReadiness(
+      EmbeddingModelReadiness(
+        status: EmbeddingModelReadinessStatus.activating,
+        model: model,
+        message: 'Preparing ${model.name} for semantic retrieval.',
+        hasToken: hasToken,
+      ),
     );
+    try {
+      await _runtime.activateInstalled(model);
+      _embedder = null;
+      _onModelChanged?.call();
+      await refreshReadiness();
+    } catch (error) {
+      _setReadiness(
+        EmbeddingModelReadiness(
+          status: EmbeddingModelReadinessStatus.failed,
+          model: model,
+          message: 'Semantic retrieval model preparation failed.',
+          debugMessage: error.toString(),
+          hasToken: hasToken,
+        ),
+      );
+    }
   }
 
   EmbeddingModelReadiness _setReadiness(

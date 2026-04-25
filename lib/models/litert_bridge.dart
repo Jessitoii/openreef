@@ -1,10 +1,10 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_gemma/flutter_gemma.dart';
+import 'package:openreef/agent/agent_models.dart';
 import 'package:openreef/agent/tool_router.dart';
 import 'package:openreef/models/gemma_tool_mapper.dart';
 
@@ -35,6 +35,9 @@ class LiteRtBridge {
   int _initTokenBudget = _defaultMaxTokens;
   int _runtimeTargetTokenBudget = _defaultMaxTokens;
   DateTime? _memoryPressureBlockedUntil;
+  int _activeChatToolCount = 0;
+  bool _activeChatSupportsFunctionCalls = false;
+  bool _activeChatToolCapableTurn = false;
   final Future<LiteRtDeviceStats?> Function()? _deviceStatsProvider;
   final Future<bool> Function()? _memoryPressureRecovery;
   final GemmaToolMapper _toolMapper;
@@ -46,6 +49,8 @@ class LiteRtBridge {
     'gemma-4-e2b',
     'gemma_4_e2b',
   ];
+
+  String? get activeModelId => _activeModelId;
 
   Future<bool> initModel({required String path, required bool useNpu}) async {
     try {
@@ -89,7 +94,6 @@ class LiteRtBridge {
       for (final attempt in attempts) {
         _preferredBackend = attempt.backend;
         _maxTokens = attempt.initTokenBudget;
-        _activeModelId = path;
         debugPrint(
           'LiteRtBridge.initModel: attempt backend=$_preferredBackend maxTokens=$_maxTokens note=${attempt.note}',
         );
@@ -98,6 +102,7 @@ class LiteRtBridge {
             preferredBackend: _preferredBackend,
             maxTokens: _maxTokens,
           );
+          _activeModelId = path;
           debugPrint('LiteRtBridge.initModel: active model ready');
           debugPrint(
             'LiteRtBridge.initModel: end modelId=$path backend=$_preferredBackend maxTokens=$_maxTokens',
@@ -109,13 +114,16 @@ class LiteRtBridge {
           );
           await _activeModel?.close();
           _activeModel = null;
+          _activeModelId = null;
         }
       }
 
       debugPrint('LiteRtBridge.initModel: failed after all fallbacks');
+      _activeModelId = null;
       throw StateError('Model initialization failed after fallbacks.');
     } catch (error) {
       debugPrint('LiteRtBridge.initModel: failed $error');
+      _activeModelId = null;
       rethrow;
     }
   }
@@ -159,8 +167,6 @@ class LiteRtBridge {
     }
 
     final controller = StreamController<LiteRtGenerationEvent>();
-    var emittedVisibleText = false;
-    var emittedToolCall = false;
 
     () async {
       try {
@@ -181,114 +187,44 @@ class LiteRtBridge {
           );
         }
 
-        final toolConfig = buildToolCallConfig(selectedTools);
+        final supportsTypedFunctionCalls = _supportsTypedFunctionCalls(
+          selectedTools,
+        );
+        final toolConfig = buildToolCallConfig(
+          selectedTools,
+          supportsTypedFunctionCalls: supportsTypedFunctionCalls,
+        );
         await _disposeActiveChat();
         debugPrint(
           'LiteRtBridge.generateStream: createChat tools=${toolConfig.tools.length} supportsFunctionCalls=${toolConfig.supportsFunctionCalls}',
+        );
+        debugPrint(
+          'LiteRtBridge.generateStream: structuredToolNames=${toolConfig.tools.map((tool) => tool.name).join(',')}',
         );
         _activeChat = await _activeModel!.createChat(
           tools: toolConfig.tools,
           supportsFunctionCalls: toolConfig.supportsFunctionCalls,
           toolChoice: toolConfig.toolChoice,
         );
+        _activeChatToolCount = toolConfig.tools.length;
+        _activeChatSupportsFunctionCalls = toolConfig.supportsFunctionCalls;
+        _activeChatToolCapableTurn = selectedTools.isNotEmpty;
         debugPrint('DIAGNOSTIC: Active model ID: $_activeModelId');
-        debugPrint('DIAGNOSTIC: Is marked function-capable: ${_isFunctionGemmaModel(_activeModelId)}');
-        debugPrint('DIAGNOSTIC: Tools provided to session: ${selectedTools.isNotEmpty} (count: ${selectedTools.length})');
+        debugPrint(
+          'DIAGNOSTIC: Is marked function-capable: $supportsTypedFunctionCalls',
+        );
+        debugPrint(
+          'DIAGNOSTIC: Tools provided to session: ${selectedTools.isNotEmpty} (count: ${selectedTools.length})',
+        );
 
         await _activeChat!.addQueryChunk(
           Message.text(text: context, isUser: true),
         );
 
-        debugPrint(
-          'LiteRtBridge.generateStream: start generateChatResponseAsync',
-        );
-        _activeChat!.generateChatResponseAsync().listen(
-          (ModelResponse response) {
-            if (response is TextResponse) {
-              debugPrint('DIAGNOSTIC: Received model response type: TEXT (token: "${response.token.trim()}")');
-              if (response.token.trim().isNotEmpty) {
-                emittedVisibleText = true;
-              }
-              controller.add(
-                LiteRtGenerationEvent(chunk: response.token, isFinished: false),
-              );
-              return;
-            }
-
-            if (response is FunctionCallResponse) {
-              emittedToolCall = true;
-              debugPrint('DIAGNOSTIC: Received model response type: FUNCTION_CALL');
-              debugPrint('DIAGNOSTIC: Bridge emitted typed toolCall as JSON text (flattening!)');
-              controller.add(
-                LiteRtGenerationEvent(
-                  chunk: jsonEncode(<String, Object?>{
-                    'tool_call': <String, Object?>{
-                      'id': 'fg_${DateTime.now().microsecondsSinceEpoch}',
-                      'tool_id': response.name,
-                      'arguments': response.args,
-                    },
-                  }),
-                  isFinished: false,
-                ),
-              );
-              return;
-            }
-
-            if (response is ParallelFunctionCallResponse) {
-              emittedToolCall = true;
-              final calls = response.calls;
-              debugPrint('DIAGNOSTIC: Received model response type: PARALLEL_FUNCTION_CALL (count=${calls.length})');
-              debugPrint('DIAGNOSTIC: Bridge emitted typed toolCalls as JSON text (flattening!)');
-              controller.add(
-                LiteRtGenerationEvent(
-                  chunk: jsonEncode(<String, Object?>{
-                    'tool_calls': <Map<String, Object?>>[
-                      for (var index = 0; index < calls.length; index += 1)
-                        <String, Object?>{
-                          'id':
-                              'fg_${DateTime.now().microsecondsSinceEpoch}_$index',
-                          'tool_id': calls[index].name,
-                          'arguments': calls[index].args,
-                        },
-                    ],
-                  }),
-                  isFinished: false,
-                ),
-              );
-              return;
-            }
-
-            if (response is ThinkingResponse) {
-              debugPrint(
-                'LiteRtBridge.generateStream: thinking token ${response.content}',
-              );
-            }
-          },
-          onDone: () {
-            debugPrint('LiteRtBridge.generateStream: generation done');
-            if (!emittedVisibleText &&
-                !emittedToolCall &&
-                _isFunctionGemmaModel(_activeModelId)) {
-              controller.add(
-                const LiteRtGenerationEvent(
-                  chunk:
-                      'The selected FunctionGemma model is tool-calling oriented and did not produce a visible reply for this message. Try a tool-eligible request or switch to a general chat model.',
-                  isFinished: false,
-                ),
-              );
-            }
-            controller.add(
-              const LiteRtGenerationEvent(chunk: '', isFinished: true),
-            );
-            unawaited(_disposeActiveChat());
-            controller.close();
-          },
-          onError: (Object error, StackTrace stackTrace) {
-            debugPrint('LiteRtBridge.generateStream: generation error $error');
-            unawaited(_disposeActiveChat());
-            controller.addError(error, stackTrace);
-            controller.close();
-          },
+        _listenToActiveChatGeneration(
+          controller,
+          keepChatOpenForToolCall: true,
+          emitFunctionModelFallback: true,
         );
       } catch (error, stackTrace) {
         debugPrint('LiteRtBridge.generateStream: setup error $error');
@@ -301,13 +237,175 @@ class LiteRtBridge {
     return controller.stream;
   }
 
-  LiteRtToolCallConfig buildToolCallConfig(List<ToolDefinition> selectedTools) {
-    final tools = _toolMapper.mapAll(selectedTools);
+  Future<void> appendToolResponse({
+    required String toolName,
+    required Map<String, dynamic> response,
+  }) async {
+    final chat = _activeChat;
+    if (chat == null) {
+      throw StateError('tool_response_append_failed');
+    }
+    await chat.addQueryChunk(
+      Message.toolResponse(toolName: toolName, response: response),
+    );
+  }
+
+  Stream<LiteRtGenerationEvent> continueStream({required int maxTokens}) {
+    if (_activeChat == null) {
+      throw StateError('typed_tool_call_without_dispatch');
+    }
+    debugPrint(
+      'LiteRtBridge.continueStream: phase=continuation tools=$_activeChatToolCount supportsFunctionCalls=$_activeChatSupportsFunctionCalls maxTokens=$maxTokens',
+    );
+    if (_activeChatToolCapableTurn &&
+        (_activeChatToolCount == 0 || !_activeChatSupportsFunctionCalls)) {
+      throw StateError('tool_capability_lost');
+    }
+    final controller = StreamController<LiteRtGenerationEvent>();
+    _listenToActiveChatGeneration(
+      controller,
+      keepChatOpenForToolCall: false,
+      emitFunctionModelFallback: false,
+    );
+    return controller.stream;
+  }
+
+  LiteRtToolCallConfig buildToolCallConfig(
+    List<ToolDefinition> selectedTools, {
+    bool? supportsTypedFunctionCalls,
+  }) {
+    final enabled = supportsTypedFunctionCalls ?? selectedTools.isNotEmpty;
+    final tools = enabled ? _toolMapper.mapAll(selectedTools) : const <Tool>[];
     return LiteRtToolCallConfig(
       tools: tools,
-      supportsFunctionCalls: tools.isNotEmpty,
+      supportsFunctionCalls: enabled && tools.isNotEmpty,
       toolChoice: tools.isEmpty ? ToolChoice.none : ToolChoice.auto,
     );
+  }
+
+  void _listenToActiveChatGeneration(
+    StreamController<LiteRtGenerationEvent> controller, {
+    required bool keepChatOpenForToolCall,
+    required bool emitFunctionModelFallback,
+  }) {
+    var emittedVisibleText = false;
+    var emittedToolCall = false;
+    debugPrint('LiteRtBridge.generateStream: start generateChatResponseAsync');
+    _activeChat!.generateChatResponseAsync().listen(
+      (ModelResponse response) {
+        if (response is TextResponse) {
+          debugPrint(
+            'DIAGNOSTIC: Received model response type: TEXT (token: "${response.token.trim()}")',
+          );
+          if (response.token.trim().isNotEmpty) {
+            emittedVisibleText = true;
+          }
+          controller.add(
+            LiteRtGenerationEvent(chunk: response.token, isFinished: false),
+          );
+          return;
+        }
+
+        if (response is FunctionCallResponse) {
+          emittedToolCall = true;
+          debugPrint('DIAGNOSTIC: Received model response type: FUNCTION_CALL');
+          controller.add(
+            LiteRtGenerationEvent(
+              chunk: '',
+              isFinished: false,
+              toolCalls: <ToolCall>[
+                _toolCallFromTypedResponse(
+                  id: 'fg_${DateTime.now().microsecondsSinceEpoch}',
+                  name: response.name,
+                  args: response.args,
+                ),
+              ],
+            ),
+          );
+          return;
+        }
+
+        if (response is ParallelFunctionCallResponse) {
+          emittedToolCall = true;
+          final calls = response.calls;
+          final stamp = DateTime.now().microsecondsSinceEpoch;
+          debugPrint(
+            'DIAGNOSTIC: Received model response type: PARALLEL_FUNCTION_CALL (count=${calls.length})',
+          );
+          controller.add(
+            LiteRtGenerationEvent(
+              chunk: '',
+              isFinished: false,
+              toolCalls: <ToolCall>[
+                for (var index = 0; index < calls.length; index += 1)
+                  _toolCallFromTypedResponse(
+                    id: 'fg_${stamp}_$index',
+                    name: calls[index].name,
+                    args: calls[index].args,
+                  ),
+              ],
+            ),
+          );
+          return;
+        }
+
+        if (response is ThinkingResponse) {
+          debugPrint(
+            'LiteRtBridge.generateStream: thinking token ${response.content}',
+          );
+        }
+      },
+      onDone: () {
+        debugPrint('LiteRtBridge.generateStream: generation done');
+        if (!emittedVisibleText &&
+            !emittedToolCall &&
+            emitFunctionModelFallback &&
+            _isFunctionGemmaModel(_activeModelId)) {
+          controller.add(
+            const LiteRtGenerationEvent(
+              chunk:
+                  'The selected FunctionGemma model is tool-calling oriented and did not produce a visible reply for this message. Try a tool-eligible request or switch to a general chat model.',
+              isFinished: false,
+            ),
+          );
+        }
+        controller.add(
+          const LiteRtGenerationEvent(chunk: '', isFinished: true),
+        );
+        if (!emittedToolCall || !keepChatOpenForToolCall) {
+          unawaited(_disposeActiveChat());
+        }
+        controller.close();
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        debugPrint('LiteRtBridge.generateStream: generation error $error');
+        unawaited(_disposeActiveChat());
+        controller.addError(error, stackTrace);
+        controller.close();
+      },
+    );
+  }
+
+  ToolCall _toolCallFromTypedResponse({
+    required String id,
+    required String name,
+    required Object? args,
+  }) {
+    return ToolCall(
+      id: id,
+      toolId: name,
+      arguments: args is Map<String, Object?>
+          ? args
+          : args is Map
+          ? Map<String, Object?>.from(args)
+          : const <String, Object?>{},
+      rawArguments: args,
+      hasRawArguments: true,
+    );
+  }
+
+  bool _supportsTypedFunctionCalls(List<ToolDefinition> selectedTools) {
+    return selectedTools.isNotEmpty && _isFunctionGemmaModel(_activeModelId);
   }
 
   bool _isFunctionGemmaModel(String? modelId) {
@@ -491,6 +589,7 @@ class LiteRtBridge {
     await _disposeActiveChat();
     await _activeModel?.close();
     _activeModel = null;
+    _activeModelId = null;
     _memoryPressureBlockedUntil = null;
     return true;
   }
@@ -642,6 +741,9 @@ class LiteRtBridge {
   Future<void> _disposeActiveChat() async {
     final chat = _activeChat;
     _activeChat = null;
+    _activeChatToolCount = 0;
+    _activeChatSupportsFunctionCalls = false;
+    _activeChatToolCapableTurn = false;
     if (chat == null) {
       return;
     }
@@ -694,11 +796,13 @@ class LiteRtGenerationEvent {
   const LiteRtGenerationEvent({
     required this.chunk,
     required this.isFinished,
+    this.toolCalls = const <ToolCall>[],
     this.metrics,
   });
 
   final String chunk;
   final bool isFinished;
+  final List<ToolCall> toolCalls;
   final LiteRtGenerationMetrics? metrics;
 }
 

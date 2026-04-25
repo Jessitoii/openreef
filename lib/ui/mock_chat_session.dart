@@ -1,11 +1,13 @@
 import 'package:flutter/foundation.dart';
+import 'package:openreef/ui/chat/composer_models.dart';
 import 'package:openreef/ui/chat_session_port.dart';
 
 class MockChatSession extends ChangeNotifier
     implements ChatSessionPort, ChatSessionFactory {
   MockChatSession({
     String? sessionId,
-    List<ChatTranscriptMessage> initialMessages = const <ChatTranscriptMessage>[],
+    List<ChatTranscriptMessage> initialMessages =
+        const <ChatTranscriptMessage>[],
   }) : sessionId = sessionId ?? 'mock:main',
        _messages = initialMessages.isEmpty
            ? <ChatTranscriptMessage>[
@@ -77,6 +79,11 @@ class MockChatSession extends ChangeNotifier
     await Future<void>.delayed(const Duration(milliseconds: 180));
     _setActivities(const <SubAgentActivity>[]);
     _setStatus(ChatSessionStatus.idle);
+  }
+
+  @override
+  Future<void> sendComposerSubmission(ComposerSubmission submission) {
+    return sendMessage(submission.text);
   }
 
   String _buildMockResponse(String prompt) {
@@ -270,7 +277,8 @@ class MockChatSession extends ChangeNotifier
   @override
   ChatSessionPort createSession({
     required String sessionId,
-    List<ChatTranscriptMessage> initialMessages = const <ChatTranscriptMessage>[],
+    List<ChatTranscriptMessage> initialMessages =
+        const <ChatTranscriptMessage>[],
   }) {
     return MockChatSession(
       sessionId: sessionId,

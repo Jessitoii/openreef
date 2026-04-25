@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:openreef/memory/chat_session_repository.dart';
+import 'package:openreef/ui/chat/composer_models.dart';
 import 'package:openreef/ui/chat_session_port.dart';
 import 'package:openreef/ui/chat_workspace_controller.dart';
 import 'package:openreef/ui/mock_chat_session.dart';
@@ -206,6 +207,11 @@ class _ExternallyMutableSession extends ChangeNotifier
 
   @override
   Future<void> sendMessage(String message) async {}
+
+  @override
+  Future<void> sendComposerSubmission(ComposerSubmission submission) {
+    return sendMessage(submission.text);
+  }
 
   @override
   ChatSessionPort createSession({

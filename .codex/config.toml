@@ -16,4 +16,4 @@ network_access = true               # Güvenlik için kapalı tut (gerekirse tru
 
 # ====================== PROJE DOKÜMANLARI ======================
 project_doc_max_bytes = 65536        # AGENTS.md + docs klasörü için yeterli alan
-project_doc_fallback_filenames = ["AGENTS.md", "README.md"]
+project_doc_fallback_filenames = ["AGENTS.md", "README.md", "docs/02_system/system-overview.md", "docs/02_system/system-architecture.md"]

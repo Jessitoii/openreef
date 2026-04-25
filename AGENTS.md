@@ -14,7 +14,7 @@ The app is NOT a generic Flutter app. It is an agent-driven system. All changes 
 ---
 
 ## Architecture (STRICT)
-Follow docs/02_system_architecture.md exactly.
+Follow docs/02_system/system-overview.md exactly.
 
 Allowed top-level structure:
 - lib/agent/
@@ -124,7 +124,7 @@ After every implementation:
 ## Source of Truth
 
 Primary:
-- docs/02_system_architecture.md
+- docs/02_system/system-overview.md
 
 Secondary:
 - other docs/ files

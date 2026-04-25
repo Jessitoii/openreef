@@ -15,6 +15,7 @@ import 'package:openreef/memory/memory_index.dart';
 import 'package:openreef/memory/memory_storage.dart';
 import 'package:openreef/memory/semantic_text_embedder.dart';
 import 'package:openreef/memory/sqlite_memory_storage_backend.dart';
+import 'package:openreef/tools/tool_manifest.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
@@ -66,6 +67,12 @@ void main() {
           ToolDefinition(
             id: 'volume_set',
             embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
+            argumentSchema: const <ToolArgumentSpec>[
+              ToolArgumentSpec(
+                name: 'level',
+                type: ToolArgumentType.doubleValue,
+              ),
+            ],
             execute: (call) async => const ToolResult.success('volume max'),
           ),
         ]),
@@ -112,6 +119,12 @@ void main() {
           ToolDefinition(
             id: 'volume_set',
             embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
+            argumentSchema: const <ToolArgumentSpec>[
+              ToolArgumentSpec(
+                name: 'level',
+                type: ToolArgumentType.doubleValue,
+              ),
+            ],
             execute: (call) async => const ToolResult.success('volume max'),
           ),
         ]),

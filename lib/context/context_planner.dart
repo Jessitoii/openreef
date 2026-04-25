@@ -8,6 +8,7 @@ import 'package:openreef/context/capability_retrieval.dart';
 import 'package:openreef/context/compiled_context_package.dart';
 import 'package:openreef/context/context_assembler.dart';
 import 'package:openreef/memory/semantic_text_embedder.dart';
+import 'package:openreef/models/embedding_model_manager.dart';
 
 class ContextPlanner {
   ContextPlanner({
@@ -58,14 +59,27 @@ class ContextPlanner {
       toolCatalog: toolCatalog,
       skillCatalog: skillCatalog,
     );
-    final retrieved = await SemanticCandidateRetriever(
-      index: _capabilityIndex,
-      topK: topK,
-    ).retrieve(userMessage: userMessage, candidates: candidates);
+    var semanticDegradationReason = '';
+    late final List<CapabilityRetrievedCandidate> retrieved;
+    try {
+      retrieved = await SemanticCandidateRetriever(
+        index: _capabilityIndex,
+        topK: topK,
+      ).retrieve(userMessage: userMessage, candidates: candidates);
+    } on EmbeddingModelNotReadyException catch (error) {
+      semanticDegradationReason = error.userMessage;
+      retrieved = const <CapabilityRetrievedCandidate>[];
+    } on SemanticEmbeddingUnavailableException catch (error) {
+      semanticDegradationReason = error.message;
+      retrieved = const <CapabilityRetrievedCandidate>[];
+    } on StateError catch (error) {
+      semanticDegradationReason = error.message;
+      retrieved = const <CapabilityRetrievedCandidate>[];
+    }
     debugPrint(
       'OpenReef.ContextPlanner: selector.start candidates=${retrieved.length}',
     );
-    final proposal = await _selector.select(
+    var proposal = await _selector.select(
       userMessage: userMessage,
       executionMode: executionMode,
       retrievedCandidates: retrieved,
@@ -73,7 +87,7 @@ class ContextPlanner {
     debugPrint(
       'OpenReef.ContextPlanner: selector.end primary=${proposal.primaryToolIds.length} fallback=${proposal.fallbackToolIds.length} skills=${proposal.selectedSkillIds.length} degraded=${proposal.degraded}',
     );
-    final gate =
+    var gate =
         CapabilityPolicyGate(
           toolLimit: toolLimit,
           skillLimit: skillLimit,
@@ -84,6 +98,37 @@ class ContextPlanner {
           executionPolicy: executionPolicy,
           skillBudget: tokenAllocation.sectionBudgets['skills'] ?? 0,
         );
+    var deterministicFallbackReason = '';
+    if (gate.toolExposure.exposedTools.isEmpty &&
+        (semanticDegradationReason.isNotEmpty || retrieved.isEmpty)) {
+      deterministicFallbackReason = semanticDegradationReason.isNotEmpty
+          ? semanticDegradationReason
+          : 'semantic retrieval returned no candidates';
+      final fallbackProposal = _deterministicToolFallbackProposal(
+        userMessage: userMessage,
+        candidates: candidates,
+      );
+      if (fallbackProposal.primaryToolIds.isNotEmpty) {
+        debugPrint(
+          'OpenReef.ContextPlanner: deterministicFallback.start reason=$deterministicFallbackReason primary=${fallbackProposal.primaryToolIds.join(',')}',
+        );
+        proposal = fallbackProposal;
+        gate =
+            CapabilityPolicyGate(
+              toolLimit: toolLimit,
+              skillLimit: skillLimit,
+            ).apply(
+              proposal: proposal,
+              retrievedCandidates: _fallbackRetrievedCandidates(candidates),
+              executionMode: executionMode,
+              executionPolicy: executionPolicy,
+              skillBudget: tokenAllocation.sectionBudgets['skills'] ?? 0,
+            );
+        debugPrint(
+          'OpenReef.ContextPlanner: deterministicFallback.end tools=${gate.toolExposure.exposedTools.length}',
+        );
+      }
+    }
     skillCatalog.recordTurnState(
       matchedSkillIds: retrieved
           .where((entry) => entry.candidate.kind == CapabilityKind.skill)
@@ -131,6 +176,10 @@ class ContextPlanner {
         if (proposal.degraded)
           'selector_degraded':
               proposal.degradationReason ?? 'selector degraded',
+        if (semanticDegradationReason.isNotEmpty)
+          'semantic_retrieval_unavailable': semanticDegradationReason,
+        if (deterministicFallbackReason.isNotEmpty)
+          'deterministic_tool_fallback': deterministicFallbackReason,
       },
       selectorViolations: <String>[
         ...proposal.violations,
@@ -162,8 +211,95 @@ class ContextPlanner {
             decision: 'semantic_fallback',
             reason: proposal.degradationReason ?? 'selector degraded',
           ),
+        if (semanticDegradationReason.isNotEmpty)
+          ContextPolicyDecision(
+            id: 'semantic_retrieval',
+            decision: 'unavailable',
+            reason: semanticDegradationReason,
+          ),
+        if (deterministicFallbackReason.isNotEmpty)
+          ContextPolicyDecision(
+            id: 'deterministic_tool_fallback',
+            decision: '${gate.toolExposure.primaryTools.length} primary tools',
+            reason: deterministicFallbackReason,
+          ),
       ],
     );
+  }
+
+  CandidateSelectionProposal _deterministicToolFallbackProposal({
+    required String userMessage,
+    required List<CapabilityCandidate> candidates,
+  }) {
+    final userTokens = ContextAssembler.normalizeTokens(userMessage).toSet();
+    if (userTokens.isEmpty) {
+      return const CandidateSelectionProposal();
+    }
+    final scored = <_ScoredCapability>[];
+    for (final candidate in candidates) {
+      if (candidate.kind == CapabilityKind.skill || !candidate.enabled) {
+        continue;
+      }
+      final score = _lexicalCapabilityScore(candidate, userTokens);
+      if (score > 0) {
+        scored.add(_ScoredCapability(candidate.id, score));
+      }
+    }
+    scored.sort((left, right) {
+      final scoreCompare = right.score.compareTo(left.score);
+      if (scoreCompare != 0) return scoreCompare;
+      return left.id.compareTo(right.id);
+    });
+    return CandidateSelectionProposal(
+      primaryToolIds: scored
+          .take(toolLimit)
+          .map((entry) => entry.id)
+          .toList(growable: false),
+      degraded: true,
+      degradationReason: 'selector_degraded:deterministic_tool_fallback',
+      notes: const <String>[
+        'Lexical fallback used after semantic retrieval produced no usable tool candidates.',
+      ],
+    );
+  }
+
+  List<CapabilityRetrievedCandidate> _fallbackRetrievedCandidates(
+    List<CapabilityCandidate> candidates,
+  ) {
+    const documentBuilder = CandidateDocumentBuilder();
+    return candidates
+        .map(
+          (candidate) => CapabilityRetrievedCandidate(
+            candidate: candidate,
+            score: 0,
+            documentHash: 'deterministic:${candidate.id}',
+            document: documentBuilder.build(candidate),
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  int _lexicalCapabilityScore(
+    CapabilityCandidate candidate,
+    Set<String> userTokens,
+  ) {
+    final haystack = ContextAssembler.normalizeTokens(
+      [
+        candidate.id,
+        candidate.displayName,
+        candidate.description,
+        ...candidate.capabilityPhrases,
+        ...candidate.usageExamples,
+        ...candidate.tags,
+      ].join(' '),
+    ).toSet();
+    var score = 0;
+    for (final token in userTokens) {
+      if (haystack.contains(token)) {
+        score += candidate.id.contains(token) ? 3 : 1;
+      }
+    }
+    return score;
   }
 }
 
@@ -315,7 +451,7 @@ class SafetyPolicyEvaluator {
       confirmationRequired: risky.isNotEmpty,
       riskyToolIds: risky,
       hardConstraints: const <String>[
-        'Do not execute risky tools without explicit confirmation.',
+        'Runtime handles confirmation for risky tools; do not ask for confirmation in chat.',
         'Unavailable or disabled tools must not be called.',
       ],
     );
@@ -864,6 +1000,13 @@ class _ScoredSkill {
   const _ScoredSkill(this.skill, this.score);
 
   final SkillDefinition skill;
+  final int score;
+}
+
+class _ScoredCapability {
+  const _ScoredCapability(this.id, this.score);
+
+  final String id;
   final int score;
 }
 

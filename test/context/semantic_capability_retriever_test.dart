@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:openreef/agent/agent_models.dart';
 import 'package:openreef/agent/execution_request.dart';
@@ -80,6 +81,111 @@ void main() {
       expect(
         plan.finalExposureReasons['battery_info'],
         contains('policy valid'),
+      );
+    },
+  );
+
+  test('planner degrades when semantic embedder is unavailable', () async {
+    final plan =
+        await ContextPlanner(
+          capabilityIndex: CapabilityEmbeddingIndex(
+            embedder: const _UnavailableEmbedder(),
+          ),
+          selector: const SemanticFallbackCapabilitySelector(),
+        ).plan(
+          userMessage: 'what is my battery level',
+          conversationHistory: const <AgentMessage>[],
+          modelContextWindow: 4096,
+          toolCatalog: const _ToolCatalog(<ToolDefinition>[_batteryTool]),
+          skillCatalog: InMemorySkillCatalog(const <SkillDefinition>[]),
+          compactRequested: false,
+          executionMode: ExecutionMode.reactiveToolUse,
+        );
+
+    expect(plan.retrievedCandidates, isEmpty);
+    expect(plan.selectorDecisions['semantic_retrieval_unavailable'], isNotNull);
+    expect(
+      plan.selectorDecisions['deterministic_tool_fallback'],
+      'Embedding model file paths not found.',
+    );
+    expect(
+      plan.toolExposure.primaryTools.map((tool) => tool.id),
+      contains('battery_info'),
+    );
+    expect(plan.finalExposureReasons['battery_info'], contains('policy valid'));
+    expect(
+      plan.safetyEnvelope.hardConstraints,
+      isNot(
+        contains('Do not execute risky tools without explicit confirmation.'),
+      ),
+    );
+    expect(
+      plan.safetyEnvelope.hardConstraints,
+      contains(
+        'Runtime handles confirmation for risky tools; do not ask for confirmation in chat.',
+      ),
+    );
+    expect(
+      plan.policyDecisions.any(
+        (decision) =>
+            decision.id == 'semantic_retrieval' &&
+            decision.decision == 'unavailable',
+      ),
+      isTrue,
+    );
+  });
+
+  test(
+    'battery info stays in rendered tools when semantic retrieval is empty',
+    () async {
+      final storage = MemoryStorage(
+        SqliteMemoryStorageBackend(
+          path: inMemoryDatabasePath,
+          databaseFactory: databaseFactoryFfi,
+        ),
+      );
+      await storage.initialize();
+      addTearDown(storage.close);
+
+      final memoryIndex = MemoryIndex(storage);
+      await memoryIndex.rebuild();
+      final assembler = ContextAssembler(
+        memoryIndex: memoryIndex,
+        embedder: const _LegacyIntentEmbedder(),
+        capabilityIndex: CapabilityEmbeddingIndex(
+          embedder: const _UnavailableEmbedder(),
+        ),
+        toolCatalog: const _ToolCatalog(<ToolDefinition>[_batteryTool]),
+        skillCatalog: InMemorySkillCatalog(const <SkillDefinition>[]),
+        capabilitySelector: const SemanticFallbackCapabilitySelector(),
+      );
+
+      final result = await assembler.assembleRequest(
+        const ContextAssemblyRequest(
+          sessionKey: 'battery-test',
+          userMessage: 'can you give my battery info',
+          conversationHistory: <AgentMessage>[],
+          modelContextWindow: 4096,
+          executionMode: ExecutionMode.reactiveToolUse,
+          executionSource: ExecutionSource.user,
+        ),
+      );
+
+      final prompt = result.compiledPackage!.prompt.toPrompt();
+      final toolsStart = prompt.indexOf('[AVAILABLE TOOLS]');
+      final toolsEnd = prompt.indexOf('[END TOOLS]') + '[END TOOLS]'.length;
+      debugPrint(
+        'TEST_AVAILABLE_TOOLS_BLOCK:\n${prompt.substring(toolsStart, toolsEnd)}',
+      );
+
+      expect(
+        result.selectedTools.map((tool) => tool.id),
+        contains('battery_info'),
+      );
+      expect(prompt, contains('[battery_info]'));
+      expect(
+        prompt,
+        contains('Read current battery level and charging state.'),
       );
     },
   );
@@ -429,6 +535,29 @@ class _CountingEmbedder extends _FixtureE5Embedder {
   Future<List<double>> embedDocument(String text) async {
     documentEmbeds += 1;
     return super.embedDocument(text);
+  }
+}
+
+class _UnavailableEmbedder implements SemanticTextEmbedder {
+  const _UnavailableEmbedder();
+
+  @override
+  String get modelId => 'unavailable-fixture';
+
+  @override
+  Future<List<double>> embedDocument(String text) async {
+    throw const SemanticEmbeddingUnavailableException(
+      'unavailable-fixture',
+      'Embedding model file paths not found.',
+    );
+  }
+
+  @override
+  Future<List<double>> embedQuery(String text) async {
+    throw const SemanticEmbeddingUnavailableException(
+      'unavailable-fixture',
+      'Embedding model file paths not found.',
+    );
   }
 }
 

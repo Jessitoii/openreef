@@ -160,6 +160,11 @@ class ToolRouter {
     ToolCall call, {
     required String sessionKey,
   }) async {
+    final validationFailure = validateToolCall(call);
+    if (validationFailure != null) {
+      return validationFailure;
+    }
+
     final tool = _catalog.byId(call.toolId);
     if (tool == null || !tool.enabled) {
       return ToolResult.failure(
@@ -177,8 +182,70 @@ class ToolRouter {
       );
     }
 
-    if (tool.requiresConfirmation) {
-      if (!_isSubAgentSession(sessionKey)) {
+    final request = NormalizedToolRequest(
+      callId: call.id,
+      toolId: tool.id,
+      normalizedArgs: Map<String, Object?>.unmodifiable(call.arguments),
+      requiresConfirmation: tool.requiresConfirmation,
+      sessionKey: sessionKey,
+      source: call.source,
+    );
+    return dispatchRequest(request);
+  }
+
+  ToolResult? validateToolCall(ToolCall call) {
+    if (call.hasRawArguments && call.rawArguments is! Map) {
+      return _protocolFailure(call, 'malformed_tool_call');
+    }
+
+    final tool = _catalog.byId(call.toolId);
+    if (tool == null || !tool.enabled) {
+      return null;
+    }
+
+    final declaredKeys = tool.argumentSchema
+        .map((argument) => argument.name)
+        .toSet();
+    for (final key in call.arguments.keys) {
+      if (_schemaArgumentKeys.contains(key) && !declaredKeys.contains(key)) {
+        return _protocolFailure(call, 'schema_passed_as_args');
+      }
+    }
+    if (_containsNestedSchemaPayload(call.arguments)) {
+      return _protocolFailure(call, 'schema_passed_as_args');
+    }
+    if (_containsProtocolPayload(call.arguments)) {
+      return _protocolFailure(call, 'malformed_tool_call');
+    }
+    for (final key in call.arguments.keys) {
+      if (!declaredKeys.contains(key)) {
+        return _protocolFailure(call, 'malformed_tool_call');
+      }
+    }
+    return null;
+  }
+
+  Future<ToolResult> dispatchRequest(NormalizedToolRequest request) async {
+    final tool = _catalog.byId(request.toolId);
+    if (tool == null || !tool.enabled) {
+      return ToolResult.failure(
+        'Tool ${request.toolId} is unavailable.',
+        toolId: request.toolId,
+        callId: request.callId,
+        status: ToolResultStatus.unavailable,
+        retryable: tool != null,
+        metadata: <String, Object?>{
+          'reason': tool == null ? 'unknown_tool' : 'disabled_tool',
+          'errorCode': tool == null
+              ? 'unknown_tool:${request.toolId}'
+              : 'disabled_tool:${request.toolId}',
+        },
+      );
+    }
+
+    final call = request.toToolCall();
+    if (request.requiresConfirmation) {
+      if (!_isSubAgentSession(request.sessionKey)) {
         final approved = await _confirmToolCall(call);
         if (!approved) {
           return ToolResult.rejected(
@@ -194,7 +261,7 @@ class ToolRouter {
         }
       } else {
         final decision = await _mailbox.requestApproval(
-          workerSessionKey: sessionKey,
+          workerSessionKey: request.sessionKey,
           call: call,
         );
         if (decision.isRejected) {
@@ -221,6 +288,61 @@ class ToolRouter {
     } catch (error) {
       return _normalizeException(call, error);
     }
+  }
+
+  static const Set<String> _schemaArgumentKeys = <String>{
+    'type',
+    'properties',
+    'required',
+    'parameters',
+    'schema',
+  };
+
+  static const List<String> _protocolTokens = <String>[
+    '<|tool_call>',
+    '<tool_call|>',
+    '<|assistant|>',
+    '<|user|>',
+    '<|system|>',
+    '<|tool|>',
+  ];
+
+  bool _containsNestedSchemaPayload(Object? value) {
+    if (value is Map) {
+      final keys = value.keys.map((key) => key.toString()).toSet();
+      if (keys.contains('type') && keys.contains('properties')) {
+        return true;
+      }
+      return value.values.any(_containsNestedSchemaPayload);
+    }
+    if (value is List) {
+      return value.any(_containsNestedSchemaPayload);
+    }
+    return false;
+  }
+
+  bool _containsProtocolPayload(Object? value) {
+    if (value is String) {
+      return _protocolTokens.any(value.contains);
+    }
+    if (value is Map) {
+      return value.values.any(_containsProtocolPayload);
+    }
+    if (value is Iterable) {
+      return value.any(_containsProtocolPayload);
+    }
+    return false;
+  }
+
+  ToolResult _protocolFailure(ToolCall call, String reason) {
+    return ToolResult.failure(
+      reason,
+      toolId: call.toolId,
+      callId: call.id,
+      status: ToolResultStatus.validationError,
+      userVisibleMessage: reason,
+      metadata: <String, Object?>{'reason': reason, 'errorCode': reason},
+    );
   }
 
   ToolResult _normalizeException(ToolCall call, Object error) {

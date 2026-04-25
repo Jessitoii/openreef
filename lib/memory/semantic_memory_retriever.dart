@@ -8,12 +8,7 @@ import 'package:openreef/memory/semantic_memory_match.dart';
 import 'package:openreef/memory/semantic_text_embedder.dart';
 import 'package:openreef/models/embedding_model_manager.dart';
 
-enum SemanticMemoryRetrievalStatus {
-  success,
-  noMatches,
-  unavailable,
-  degraded,
-}
+enum SemanticMemoryRetrievalStatus { success, noMatches, unavailable, degraded }
 
 class SemanticMemoryRetrievalResult {
   const SemanticMemoryRetrievalResult({
@@ -66,17 +61,17 @@ class SemanticMemoryRetriever {
     SemanticEmbeddingModelAccess? embeddingModelManager,
     SemanticTextEmbedder? embedder,
     this.defaultThreshold = 0.60,
-  })  : assert(
-          embeddingModelManager != null || embedder != null,
-          'Provide a manager-backed embedder or an explicit legacy embedder.',
-        ),
-        _storage = storage,
-        _embeddingModelManager =
-            embeddingModelManager ??
-            _StaticSemanticAccess(
-              embedder: embedder!,
-              modelId: embedder.modelId,
-            );
+  }) : assert(
+         embeddingModelManager != null || embedder != null,
+         'Provide a manager-backed embedder or an explicit legacy embedder.',
+       ),
+       _storage = storage,
+       _embeddingModelManager =
+           embeddingModelManager ??
+           _StaticSemanticAccess(
+             embedder: embedder!,
+             modelId: embedder.modelId,
+           );
 
   final MemoryStorage _storage;
   final SemanticEmbeddingModelAccess _embeddingModelManager;
@@ -110,8 +105,36 @@ class SemanticMemoryRetriever {
       );
     }
 
-    final embedder = await _embeddingModelManager.requireReadyEmbedder();
-    final queryEmbedding = await embedder.embedQuery(normalizedQuery);
+    late final SemanticTextEmbedder embedder;
+    late final List<double> queryEmbedding;
+    try {
+      embedder = await _embeddingModelManager.requireReadyEmbedder();
+      queryEmbedding = await embedder.embedQuery(normalizedQuery);
+    } on EmbeddingModelNotReadyException catch (error) {
+      return SemanticMemoryRetrievalResult(
+        status: SemanticMemoryRetrievalStatus.unavailable,
+        modelIdUsed: error.modelId,
+        matches: const <SemanticMemoryMatch>[],
+        message: error.userMessage,
+        embeddingModelReady: false,
+      );
+    } on SemanticEmbeddingUnavailableException catch (error) {
+      return SemanticMemoryRetrievalResult(
+        status: SemanticMemoryRetrievalStatus.unavailable,
+        modelIdUsed: _embeddingModelManager.selectedModelId,
+        matches: const <SemanticMemoryMatch>[],
+        message: error.message,
+        embeddingModelReady: false,
+      );
+    } on StateError catch (error) {
+      return SemanticMemoryRetrievalResult(
+        status: SemanticMemoryRetrievalStatus.unavailable,
+        modelIdUsed: _embeddingModelManager.selectedModelId,
+        matches: const <SemanticMemoryMatch>[],
+        message: error.message,
+        embeddingModelReady: false,
+      );
+    }
     final records = await _storage.readRecords(
       store: store,
       includeExpired: false,
@@ -119,7 +142,9 @@ class SemanticMemoryRetriever {
     final matches = <SemanticMemoryMatch>[];
     var skippedCrossModelCount = 0;
     for (final record in records) {
-      if (category != null && category.isNotEmpty && record.category != category) {
+      if (category != null &&
+          category.isNotEmpty &&
+          record.category != category) {
         continue;
       }
       final embeddingRecord = await _storage.readEmbedding(record.key);
@@ -133,16 +158,14 @@ class SemanticMemoryRetriever {
       if (embeddingRecord.embedding.length != queryEmbedding.length) {
         continue;
       }
-      final similarity = _cosineSimilarity(queryEmbedding, embeddingRecord.embedding);
+      final similarity = _cosineSimilarity(
+        queryEmbedding,
+        embeddingRecord.embedding,
+      );
       if (similarity < (threshold ?? defaultThreshold)) {
         continue;
       }
-      matches.add(
-        SemanticMemoryMatch(
-          record: record,
-          score: similarity,
-        ),
-      );
+      matches.add(SemanticMemoryMatch(record: record, score: similarity));
     }
     matches.sort((left, right) {
       final scoreCompare = right.score.compareTo(left.score);
@@ -168,8 +191,8 @@ class SemanticMemoryRetriever {
         modelIdUsed: embedder.modelId,
         matches: const <SemanticMemoryMatch>[],
         message: skippedCrossModelCount > 0
-          ? 'cross_model_matches_excluded'
-          : 'no_semantic_memory_matches',
+            ? 'cross_model_matches_excluded'
+            : 'no_semantic_memory_matches',
         skippedCrossModelCount: skippedCrossModelCount,
         embeddingModelReady: true,
       );
@@ -257,7 +280,8 @@ class SemanticMemoryContextProvider implements MemoryContextProvider {
       return <AgentMessage>[
         AgentMessage(
           role: AgentMessageRole.memory,
-          content: '[MEMORY RETRIEVAL DEFERRED]\n'
+          content:
+              '[MEMORY RETRIEVAL DEFERRED]\n'
               'status: unavailable\n'
               'reason: ${result.message}\n'
               'modelId: ${result.modelIdUsed}\n'
@@ -310,7 +334,8 @@ class SemanticMemoryContextProvider implements MemoryContextProvider {
         0,
         AgentMessage(
           role: AgentMessageRole.memory,
-          content: '[MEMORY RETRIEVAL PARTIAL]\n'
+          content:
+              '[MEMORY RETRIEVAL PARTIAL]\n'
               'status: degraded\n'
               'reason: ${result.message}\n'
               'modelId: ${result.modelIdUsed}\n'

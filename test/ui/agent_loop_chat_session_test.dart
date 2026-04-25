@@ -5,6 +5,7 @@ import 'package:openreef/agent/execution_request.dart';
 import 'package:openreef/agent/mailbox.dart';
 import 'package:openreef/agent/runtime_transcript_event.dart';
 import 'package:openreef/ui/agent_loop_chat_session.dart';
+import 'package:openreef/ui/chat/composer_models.dart';
 import 'package:openreef/ui/chat_session_port.dart';
 
 void main() {
@@ -156,6 +157,210 @@ void main() {
           (message) => message.sender == ChatMessageSender.assistant,
         ),
         hasLength(1),
+      );
+    },
+  );
+
+  test('raw tool marker result is not shown or persisted', () async {
+    const marker = '<|tool_call>call:battery_info{}<tool_call|>';
+    final executor = _RecordingTaskExecutor(
+      result: const AgentLoopResult(
+        sessionResult: SessionResult.completed,
+        text: 'unused',
+        reason: 'completed',
+      ),
+    );
+    final persistence = _RecordingPersistencePort();
+    final session = AgentLoopChatSession(taskExecutor: executor);
+    session.attachTranscriptPersistencePort(persistence);
+
+    await session.appendExecutionResult(
+      ExecutionRequest.fromTrigger(
+        sessionKey: session.sessionKey,
+        prompt: 'battery',
+        source: ExecutionSource.trigger,
+        visibility: ExecutionVisibility.chat,
+      ),
+      ExecutionResult(
+        requestId: 'raw-marker-1',
+        sessionKey: session.sessionKey,
+        source: ExecutionSource.trigger,
+        mode: ExecutionLifecycleMode.triggeredRequest,
+        terminalStatus: ExecutionLifecycleStatus.completed,
+        admissionOutcome: ExecutionAdmissionOutcome.admitted,
+        policyReason: 'completed',
+        visibility: ExecutionVisibility.chat,
+        loopResult: const AgentLoopResult(
+          sessionResult: SessionResult.completed,
+          text: marker,
+          reason: 'completed',
+        ),
+      ),
+    );
+
+    expect(
+      session.messages.where((message) => message.text.contains(marker)),
+      isEmpty,
+    );
+    expect(
+      persistence.persistedMessages.where(
+        (message) => message.text.contains(marker),
+      ),
+      isEmpty,
+    );
+  });
+
+  test('unstable malformed tool result is not shown or persisted', () async {
+    const fallbackText = 'Fake successful fallback text.';
+    final executor = _RecordingTaskExecutor(
+      result: const AgentLoopResult(
+        sessionResult: SessionResult.completed,
+        text: fallbackText,
+        reason: 'completed',
+      ),
+    );
+    final persistence = _RecordingPersistencePort();
+    final session = AgentLoopChatSession(taskExecutor: executor);
+    session.attachTranscriptPersistencePort(persistence);
+
+    await session.appendExecutionResult(
+      ExecutionRequest.fromTrigger(
+        sessionKey: session.sessionKey,
+        prompt: 'battery',
+        source: ExecutionSource.trigger,
+        visibility: ExecutionVisibility.chat,
+      ),
+      ExecutionResult(
+        requestId: 'malformed-tool-1',
+        sessionKey: session.sessionKey,
+        source: ExecutionSource.trigger,
+        mode: ExecutionLifecycleMode.triggeredRequest,
+        terminalStatus: ExecutionLifecycleStatus.completed,
+        admissionOutcome: ExecutionAdmissionOutcome.admitted,
+        policyReason: 'completed',
+        visibility: ExecutionVisibility.chat,
+        loopResult: const AgentLoopResult(
+          sessionResult: SessionResult.completed,
+          text: fallbackText,
+          reason: 'completed',
+          toolResults: <ToolResult>[
+            ToolResult.failure(
+              'malformed_tool_call',
+              toolId: 'agent_protocol',
+              callId: 'parser_failure_1',
+              status: ToolResultStatus.validationError,
+              metadata: <String, Object?>{
+                'reason': 'malformed_tool_call',
+                'visibleSuppressed': true,
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+
+    expect(
+      session.messages.where((message) => message.text.contains(fallbackText)),
+      isEmpty,
+    );
+    expect(
+      persistence.persistedMessages.where(
+        (message) => message.text.contains(fallbackText),
+      ),
+      isEmpty,
+    );
+  });
+
+  test(
+    'sendComposerSubmission delegates text-only submissions to sendMessage',
+    () async {
+      final executor = _RecordingTaskExecutor(
+        result: const AgentLoopResult(
+          sessionResult: SessionResult.completed,
+          text: 'done',
+          reason: 'completed',
+        ),
+      );
+      final session = AgentLoopChatSession(taskExecutor: executor);
+
+      await session.sendComposerSubmission(
+        const ComposerSubmission(text: 'hello'),
+      );
+
+      expect(executor.requests, hasLength(1));
+      expect(executor.requests.single.prompt, 'hello');
+      expect(
+        session.messages.where(
+          (message) =>
+              message.sender == ChatMessageSender.user &&
+              message.text == 'hello',
+        ),
+        hasLength(1),
+      );
+    },
+  );
+
+  test(
+    'unsupported attachment-only submissions do not reach execution',
+    () async {
+      final executor = _RecordingTaskExecutor(
+        result: const AgentLoopResult(
+          sessionResult: SessionResult.completed,
+          text: 'done',
+          reason: 'completed',
+        ),
+      );
+      final session = AgentLoopChatSession(taskExecutor: executor);
+
+      await session.sendComposerSubmission(
+        const ComposerSubmission(
+          text: '',
+          attachments: <ComposerAttachmentDescriptor>[
+            ComposerAttachmentDescriptor(
+              id: 'image-1',
+              type: ComposerAttachmentType.image,
+              displayName: 'reef-photo.jpg',
+            ),
+          ],
+        ),
+      );
+
+      expect(executor.requests, isEmpty);
+      expect(session.messages.last.sender, ChatMessageSender.system);
+      expect(session.messages.last.text, contains('not available'));
+    },
+  );
+
+  test(
+    'unsupported attachments are not packaged into execution metadata',
+    () async {
+      final executor = _RecordingTaskExecutor(
+        result: const AgentLoopResult(
+          sessionResult: SessionResult.completed,
+          text: 'done',
+          reason: 'completed',
+        ),
+      );
+      final session = AgentLoopChatSession(taskExecutor: executor);
+
+      await session.sendComposerSubmission(
+        const ComposerSubmission(
+          text: 'hello',
+          attachments: <ComposerAttachmentDescriptor>[
+            ComposerAttachmentDescriptor(
+              id: 'doc-1',
+              type: ComposerAttachmentType.document,
+              displayName: 'notes.pdf',
+            ),
+          ],
+        ),
+      );
+
+      expect(executor.requests, hasLength(1));
+      expect(executor.requests.single.prompt, 'hello');
+      expect(
+        executor.requests.single.metadata?.containsKey('attachments') ?? false,
+        isFalse,
       );
     },
   );

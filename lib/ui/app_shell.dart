@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:openreef/memory/chat_session_record.dart';
 import 'package:openreef/memory/chat_session_repository.dart';
 import 'package:openreef/memory/memory_index.dart';
+import 'package:openreef/models/model_capabilities.dart';
 import 'package:openreef/ui/app_theme.dart';
+import 'package:openreef/ui/chat/attachment_runtime_support.dart';
+import 'package:openreef/ui/chat/composer_capability_resolver.dart';
 import 'package:openreef/ui/components/app_components.dart';
 import 'package:openreef/memory/memory_storage.dart';
 import 'package:openreef/models/embedding_model_manager.dart';
@@ -97,7 +100,12 @@ class _AppShellState extends State<AppShell> {
               child: Column(
                 children: [
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.md, AppSpacing.md, AppSpacing.sm),
+                    padding: const EdgeInsets.fromLTRB(
+                      AppSpacing.md,
+                      AppSpacing.md,
+                      AppSpacing.md,
+                      AppSpacing.sm,
+                    ),
                     child: SizedBox(
                       width: double.infinity,
                       child: AppButton.primary(
@@ -112,7 +120,9 @@ class _AppShellState extends State<AppShell> {
                   ),
                   Expanded(
                     child: ListView(
-                      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: AppSpacing.sm,
+                      ),
                       children: [
                         const _DrawerSectionLabel(label: 'Recent Chats'),
                         for (final session
@@ -256,19 +266,28 @@ class _AppShellState extends State<AppShell> {
           sessionTitle: activeSession.record.title,
           lastModified: activeSession.record.lastModified,
           onSendMessage: _workspaceController.sendMessage,
+          onSendComposerSubmission: _workspaceController.sendComposerSubmission,
+          capabilityResolver: ComposerCapabilityResolver(
+            modelCapabilityProvider: CallbackActiveModelCapabilityProvider(
+              () =>
+                  widget
+                      .modelDownloadController
+                      .state
+                      .selectedModel
+                      ?.inputCapabilities ??
+                  ModelInputCapabilities.textOnly,
+            ),
+            runtimeSupport: const DefaultAttachmentRuntimeSupport(),
+          ),
         );
       case AppShellDestination.settings:
-        return SettingsScreen(
-          manager: widget.embeddingModelManager!,
-        );
+        return SettingsScreen(manager: widget.embeddingModelManager!);
       case AppShellDestination.skills:
         return SkillsScreen(controller: widget.skillRegistryController);
       case AppShellDestination.automation:
         return widget.automationController == null
             ? const Center(child: Text('Automation unavailable'))
-            : AutomationScreen(
-                controller: widget.automationController!,
-              );
+            : AutomationScreen(controller: widget.automationController!);
       case AppShellDestination.mcp:
         return McpConnectionsScreen(
           controller: widget.mcpConnectionsController,
@@ -311,7 +330,12 @@ class _ShellTopBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(AppSpacing.sm, AppSpacing.sm, AppSpacing.sm, AppSpacing.xs),
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.sm,
+        AppSpacing.sm,
+        AppSpacing.sm,
+        AppSpacing.xs,
+      ),
       child: Row(
         children: [
           IconButton(
@@ -342,7 +366,12 @@ class _DrawerSectionLabel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.sm),
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.md,
+        AppSpacing.sm,
+        AppSpacing.md,
+        AppSpacing.sm,
+      ),
       child: Text(
         label.toUpperCase(),
         style: Theme.of(context).textTheme.labelLarge,

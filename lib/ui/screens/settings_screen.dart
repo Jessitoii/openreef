@@ -4,6 +4,40 @@ import 'package:openreef/ui/components/app_components.dart';
 import 'package:openreef/models/embedding_model_manager.dart';
 import 'package:openreef/models/model_descriptor.dart';
 
+bool canActOnEmbeddingReadiness(EmbeddingModelReadiness readiness) {
+  return switch (readiness.status) {
+    EmbeddingModelReadinessStatus.downloadable => true,
+    EmbeddingModelReadinessStatus.installed => true,
+    EmbeddingModelReadinessStatus.requiresAuth => readiness.hasToken,
+    EmbeddingModelReadinessStatus.failed => true,
+    _ => false,
+  };
+}
+
+String embeddingReadinessActionLabel(EmbeddingModelReadiness readiness) {
+  return switch (readiness.status) {
+    EmbeddingModelReadinessStatus.ready => 'Ready to use',
+    EmbeddingModelReadinessStatus.installed => 'Prepare',
+    EmbeddingModelReadinessStatus.activating => 'Preparing...',
+    EmbeddingModelReadinessStatus.downloading => 'Downloading...',
+    EmbeddingModelReadinessStatus.failed => 'Retry',
+    _ => 'Install',
+  };
+}
+
+String embeddingReadinessStatusLabel(EmbeddingModelReadiness readiness) {
+  return switch (readiness.status) {
+    EmbeddingModelReadinessStatus.notConfigured => 'Choose a retrieval model.',
+    EmbeddingModelReadinessStatus.downloadable => 'Not installed.',
+    EmbeddingModelReadinessStatus.requiresAuth => 'Requires token.',
+    EmbeddingModelReadinessStatus.downloading => 'Downloading...',
+    EmbeddingModelReadinessStatus.installed => 'Installed. Preparing needed.',
+    EmbeddingModelReadinessStatus.activating => 'Preparing...',
+    EmbeddingModelReadinessStatus.ready => 'Ready to use.',
+    EmbeddingModelReadinessStatus.failed => 'Preparation failed.',
+  };
+}
+
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({required this.manager, super.key});
   final EmbeddingModelManager manager;
@@ -20,43 +54,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void dispose() {
     _tokenController.dispose();
     super.dispose();
-  }
-
-  bool _canInstall(EmbeddingModelReadiness readiness) {
-    if (readiness.status == EmbeddingModelReadinessStatus.downloadable) {
-      return true;
-    }
-    if (readiness.status == EmbeddingModelReadinessStatus.requiresAuth) {
-      return readiness.hasToken;
-    }
-    if (readiness.status == EmbeddingModelReadinessStatus.failed) {
-      return true;
-    }
-    return false;
-  }
-
-  String _installLabel(EmbeddingModelReadiness readiness) {
-    return switch (readiness.status) {
-      EmbeddingModelReadinessStatus.ready => 'Active',
-      EmbeddingModelReadinessStatus.installed => 'Installed',
-      EmbeddingModelReadinessStatus.downloading => 'Downloading...',
-      EmbeddingModelReadinessStatus.failed => 'Retry Install',
-      _ => 'Install',
-    };
-  }
-
-  String _statusLabel(EmbeddingModelReadiness readiness) {
-    return switch (readiness.status) {
-      EmbeddingModelReadinessStatus.notConfigured =>
-        'Choose a retrieval model.',
-      EmbeddingModelReadinessStatus.downloadable => 'Available to install.',
-      EmbeddingModelReadinessStatus.requiresAuth => 'Requires token.',
-      EmbeddingModelReadinessStatus.downloading => 'Downloading...',
-      EmbeddingModelReadinessStatus.installed => 'Ready for use.',
-      EmbeddingModelReadinessStatus.ready => 'Active and ready for use.',
-      EmbeddingModelReadinessStatus.failed => 'Installation failed.',
-      _ => 'Status unknown',
-    };
   }
 
   @override
@@ -106,10 +103,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   const SizedBox(height: AppSpacing.sm),
                   AppBadge(
-                    label: _statusLabel(readiness),
+                    label: embeddingReadinessStatusLabel(readiness),
                     isSuccess:
-                        readiness.status ==
-                        EmbeddingModelReadinessStatus.installed,
+                        readiness.status == EmbeddingModelReadinessStatus.ready,
                     isError:
                         readiness.status ==
                         EmbeddingModelReadinessStatus.failed,
@@ -154,17 +150,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   Align(
                     alignment: Alignment.centerRight,
                     child: AppButton.primary(
-                      onPressed: _canInstall(readiness) && !_busy
+                      onPressed: canActOnEmbeddingReadiness(readiness) && !_busy
                           ? () async {
                               setState(() => _busy = true);
                               try {
-                                await widget.manager.installSelectedModel();
+                                if (readiness.status ==
+                                    EmbeddingModelReadinessStatus.installed) {
+                                  await widget.manager
+                                      .prepareSelectedModelIfInstalled();
+                                } else {
+                                  await widget.manager.installSelectedModel();
+                                }
                               } finally {
                                 if (mounted) setState(() => _busy = false);
                               }
                             }
                           : null,
-                      label: _installLabel(readiness),
+                      label: embeddingReadinessActionLabel(readiness),
                     ),
                   ),
                 ],

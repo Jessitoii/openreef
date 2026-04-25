@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:openreef/ui/chat/composer_models.dart';
 
 enum ChatMessageSender { user, assistant, system }
 
@@ -99,6 +100,7 @@ abstract class ChatSessionPort extends Listenable {
   List<SubAgentActivity> get activities;
 
   Future<void> sendMessage(String message);
+  Future<void> sendComposerSubmission(ComposerSubmission submission);
 }
 
 abstract class ChatSessionFactory {

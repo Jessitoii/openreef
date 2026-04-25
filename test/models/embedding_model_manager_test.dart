@@ -41,6 +41,19 @@ void main() {
     expect(await embedder.embedQuery('battery level'), isNotEmpty);
   });
 
+  test('installed selected model is prepared on startup', () async {
+    final runtime = _FakeEmbeddingRuntime(installedIds: {'gecko-512'});
+    final env = await _Environment.create(
+      runtime: runtime,
+      selectedEmbeddingModelId: 'gecko-512',
+    );
+
+    await env.manager.initialize();
+
+    expect(runtime.lastActivatedId, 'gecko-512');
+    expect(env.manager.readiness.status, EmbeddingModelReadinessStatus.ready);
+  });
+
   test('token-required model without token reports requires auth', () async {
     final env = await _Environment.create(runtime: _FakeEmbeddingRuntime());
     await env.manager.initialize();
@@ -144,6 +157,7 @@ class _Environment {
     required _FakeEmbeddingRuntime runtime,
     _MemoryTokenStore? tokenStore,
     void Function()? onModelChanged,
+    String? selectedEmbeddingModelId,
   }) async {
     final dir = await Directory.systemTemp.createTemp(
       'openreef_embedding_test_',
@@ -154,6 +168,9 @@ class _Environment {
       ),
     );
     await controller.initialize();
+    if (selectedEmbeddingModelId != null) {
+      controller.updateSemanticEmbeddingModelId(selectedEmbeddingModelId);
+    }
     final manager = EmbeddingModelManager(
       registry: const ModelRegistry(),
       settingsController: controller,
@@ -200,6 +217,7 @@ class _FakeEmbeddingRuntime implements EmbeddingModelRuntime {
   String? activeId;
   final Set<String> installedIds;
   String? lastInstalledId;
+  String? lastActivatedId;
   String? lastToken;
 
   @override
@@ -212,6 +230,16 @@ class _FakeEmbeddingRuntime implements EmbeddingModelRuntime {
 
   @override
   bool hasActiveEmbedder() => active;
+
+  @override
+  Future<void> activateInstalled(ModelDescriptor descriptor) async {
+    lastActivatedId = descriptor.id;
+    active = true;
+    activeId = descriptor.storageFileName.substring(
+      0,
+      descriptor.storageFileName.lastIndexOf('.'),
+    );
+  }
 
   @override
   Future<void> install({

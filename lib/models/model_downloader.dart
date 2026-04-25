@@ -117,6 +117,7 @@ class ModelDownloader {
   Future<ModelDownloadResult> download({
     required ModelDescriptor descriptor,
     required void Function(int downloadedBytes, int totalBytes) onProgress,
+    String? authToken,
   }) async {
     if (_isDownloading) {
       throw StateError('A model download is already in progress.');
@@ -154,6 +155,7 @@ class ModelDownloader {
         descriptor: descriptor,
         targetFile: targetFile,
         onProgress: onProgress,
+        authToken: authToken,
       );
       if (!await _storage.isValidInstalledFile(descriptor, file: targetFile)) {
         throw StateError(
@@ -239,6 +241,7 @@ class ModelDownloader {
     required ModelDescriptor descriptor,
     required File targetFile,
     required void Function(int downloadedBytes, int totalBytes) onProgress,
+    String? authToken,
   }) async {
     final totalBytes = descriptor.expectedFileSizeBytes;
     final completer = Completer<void>();
@@ -258,10 +261,12 @@ class ModelDownloader {
         taskId: taskId,
         url: descriptor.downloadUrl,
         group: _downloadGroup,
-        headers: const <String, String>{
+        headers: <String, String>{
           'Connection': 'keep-alive',
           'Cache-Control': 'no-cache, no-store',
           'Pragma': 'no-cache',
+          if (authToken != null && authToken.trim().isNotEmpty)
+            'Authorization': 'Bearer ${authToken.trim()}',
         },
         baseDirectory: baseDirectory,
         directory: directory,

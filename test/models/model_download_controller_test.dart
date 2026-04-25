@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter_gemma/flutter_gemma.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:openreef/models/hugging_face_token_store.dart';
 import 'package:openreef/models/litert_bridge.dart';
 import 'package:openreef/models/model_descriptor.dart';
 import 'package:openreef/models/model_download_controller.dart';
@@ -35,7 +36,7 @@ void main() {
     );
     await settingsController.initialize();
     registry = const ModelRegistry(
-      models: <ModelDescriptor>[_primary, _secondary],
+      models: <ModelDescriptor>[_primary, _secondary, _gated],
     );
   });
 
@@ -52,7 +53,7 @@ void main() {
     }
   });
 
-  test('loads device stats and picks a compatible default model', () async {
+  test('loads device stats without selecting an active model', () async {
     final controller = _controller(
       registry: registry,
       storage: storage,
@@ -63,14 +64,15 @@ void main() {
 
     expect(controller.state.deviceStats?.freeRam, 2.0);
     expect(controller.state.selectedModel?.id, _primary.id);
-    expect(settingsController.settings.generationModelId, _primary.id);
+    expect(settingsController.settings.generationModelId, isNull);
   });
 
-  test('fresh install downloads and emits installed state', () async {
+  test('download creates installed record but does not mark active', () async {
     final downloader = _FakeModelDownloader(
       storage: storage,
-      onDownload: (model, onProgress) async {
+      onDownload: (model, onProgress, authToken) async {
         expect(model.id, _primary.id);
+        expect(authToken, isNull);
         onProgress(2, 4);
         final file = await storage.getInstalledFile(model);
         await file.parent.create(recursive: true);
@@ -91,18 +93,23 @@ void main() {
     );
 
     await controller.initialize();
-    final installed = await controller.startDownload();
+    final installed = await controller.downloadSelectedModel();
 
     expect(installed, isNotNull);
     expect(downloader.downloadCount, 1);
     expect(controller.state.status, ModelDownloadStatus.completed);
     expect(controller.state.progress, 1);
     expect(controller.state.installedModel?.descriptor.id, _primary.id);
-    expect(settingsController.settings.generationModelId, _primary.id);
+    expect(
+      controller.cardStateFor(_primary).lifecycle,
+      ModelCardLifecycle.downloaded,
+    );
+    expect(settingsController.settings.generationModelId, isNull);
+    expect(controller.isActive(_primary), isFalse);
   });
 
   test(
-    'existing file plus missing metadata initializes as installed',
+    'existing file plus missing metadata initializes as downloaded',
     () async {
       final file = await storage.getInstalledFile(_primary);
       await file.parent.create(recursive: true);
@@ -118,6 +125,7 @@ void main() {
       expect(controller.state.status, ModelDownloadStatus.completed);
       expect(controller.state.installedModel?.descriptor.id, _primary.id);
       expect(controller.isInstalled(_primary), isTrue);
+      expect(controller.cardStateFor(_primary).primaryLabel, 'Initialize');
     },
   );
 
@@ -136,84 +144,49 @@ void main() {
       );
 
       await controller.initialize();
-      final installed = await controller.startDownload();
+      final installed = await controller.downloadSelectedModel();
 
       expect(installed, isNotNull);
       expect(downloader.downloadCount, 0);
       expect(controller.state.status, ModelDownloadStatus.completed);
       expect(controller.state.progress, 1);
+      expect(settingsController.settings.generationModelId, isNull);
     },
   );
 
   test(
-    'completion keeps UI state installed instead of reset to download',
+    'initialization projects initialized only after LiteRT success',
     () async {
-      final downloader = _FakeModelDownloader(
-        storage: storage,
-        onDownload: (model, onProgress) async {
-          final file = await storage.getInstalledFile(model);
-          await file.parent.create(recursive: true);
-          await file.writeAsBytes(<int>[1, 2, 3, 4], flush: true);
-          return ModelDownloadResult(
-            status: ModelDownloadResultStatus.completed,
-            installedModel: await storage.recoverInstalledModel(
-              model,
-              file: file,
-            ),
-          );
-        },
-      );
+      final bridge = _FakeLiteRtBridge();
+      final file = await storage.getInstalledFile(_primary);
+      await file.parent.create(recursive: true);
+      await file.writeAsBytes(<int>[1, 2, 3, 4], flush: true);
+      await storage.recoverInstalledModel(_primary, file: file);
       final controller = _controller(
         registry: registry,
         storage: storage,
         settingsController: settingsController,
-        downloader: downloader,
+        bridge: bridge,
       );
 
       await controller.initialize();
-      await controller.startDownload();
+      final initialized = await controller.initializeSelectedModel();
 
-      expect(controller.state.status, ModelDownloadStatus.completed);
-      expect(controller.state.installedRecordFor(_primary), isNotNull);
-      expect(controller.isInstalled(_primary), isTrue);
-      expect(controller.isActive(_primary), isTrue);
+      expect(initialized, isNotNull);
+      expect(bridge.initializedPaths, <String>[_primary.storageFileName]);
+      expect(
+        controller.cardStateFor(_primary).lifecycle,
+        ModelCardLifecycle.initialized,
+      );
+      expect(settingsController.settings.generationModelId, isNull);
     },
   );
 
-  test('installed active model survives controller restart', () async {
+  test('activation is blocked before initialization', () async {
     final file = await storage.getInstalledFile(_primary);
     await file.parent.create(recursive: true);
     await file.writeAsBytes(<int>[1, 2, 3, 4], flush: true);
     await storage.recoverInstalledModel(_primary, file: file);
-    settingsController.updateGenerationModelId(_primary.id);
-    await Future<void>.delayed(const Duration(milliseconds: 20));
-    final restartedSettings = SettingsController(
-      store: SettingsStore(
-        File('${tempDirectory.path}${Platform.pathSeparator}settings.json'),
-      ),
-    );
-    await restartedSettings.initialize();
-    final controller = _controller(
-      registry: registry,
-      storage: storage,
-      settingsController: restartedSettings,
-    );
-
-    await controller.initialize();
-
-    expect(controller.state.installedModel?.descriptor.id, _primary.id);
-    expect(controller.isActive(_primary), isTrue);
-  });
-
-  test('stale metadata missing file reloads as not installed', () async {
-    await storage.saveInstalledModel(
-      InstalledModelRecord(
-        descriptor: _primary,
-        modelId: _primary.storageFileName,
-        fileSizeBytes: 4,
-        installedAt: DateTime.now(),
-      ),
-    );
     final controller = _controller(
       registry: registry,
       storage: storage,
@@ -221,42 +194,196 @@ void main() {
     );
 
     await controller.initialize();
+    final active = await controller.activateSelectedModel();
 
-    expect(controller.state.installedModel, isNull);
-    expect(controller.isInstalled(_primary), isFalse);
-    expect(controller.state.status, ModelDownloadStatus.idle);
+    expect(active, isNull);
+    expect(
+      controller.state.errorMessage,
+      'Initialize this model before making it active.',
+    );
+    expect(settingsController.settings.generationModelId, isNull);
+    expect(controller.isActive(_primary), isFalse);
+  });
+
+  test('activation updates settings only after initialization', () async {
+    final bridge = _FakeLiteRtBridge();
+    final primary = await storage.getInstalledFile(_primary);
+    await primary.parent.create(recursive: true);
+    await primary.writeAsBytes(<int>[1, 2, 3, 4], flush: true);
+    await storage.recoverInstalledModel(_primary, file: primary);
+    final controller = _controller(
+      registry: registry,
+      storage: storage,
+      settingsController: settingsController,
+      bridge: bridge,
+    );
+
+    await controller.initialize();
+    await controller.initializeSelectedModel();
+    final active = await controller.activateSelectedModel();
+
+    expect(active, isNotNull);
+    expect(settingsController.settings.generationModelId, _primary.id);
+    expect(
+      controller.cardStateFor(_primary).lifecycle,
+      ModelCardLifecycle.active,
+    );
   });
 
   test(
-    'installed inactive selected model activates without download',
+    'runtime initialization failure projects failedInitialization',
     () async {
-      final primary = await storage.getInstalledFile(_primary);
-      await primary.parent.create(recursive: true);
-      await primary.writeAsBytes(<int>[1, 2, 3, 4], flush: true);
-      await storage.recoverInstalledModel(_primary, file: primary);
-      final secondary = await storage.getInstalledFile(_secondary);
-      await secondary.writeAsBytes(<int>[5, 6], flush: true);
-      await storage.recoverInstalledModel(_secondary, file: secondary);
-      settingsController.updateGenerationModelId(_primary.id);
-      final downloader = _FakeModelDownloader(storage: storage);
+      final file = await storage.getInstalledFile(_primary);
+      await file.parent.create(recursive: true);
+      await file.writeAsBytes(<int>[1, 2, 3, 4], flush: true);
+      await storage.recoverInstalledModel(_primary, file: file);
       final controller = _controller(
         registry: registry,
         storage: storage,
         settingsController: settingsController,
-        downloader: downloader,
+        bridge: _FakeLiteRtBridge(initFailure: StateError('boom')),
       );
 
       await controller.initialize();
-      controller.selectModel(_secondary);
-      expect(controller.isInstalled(_secondary), isTrue);
-      expect(controller.isActive(_secondary), isFalse);
-      await controller.activateSelectedModel();
+      final initialized = await controller.initializeSelectedModel();
 
-      expect(downloader.downloadCount, 0);
-      expect(controller.isActive(_secondary), isTrue);
-      expect(settingsController.settings.generationModelId, _secondary.id);
+      expect(initialized, isNull);
+      expect(
+        controller.cardStateFor(_primary).lifecycle,
+        ModelCardLifecycle.failedInitialization,
+      );
+      expect(settingsController.settings.generationModelId, isNull);
     },
   );
+
+  test(
+    'restart with downloaded but uninitialized model is not active',
+    () async {
+      final file = await storage.getInstalledFile(_primary);
+      await file.parent.create(recursive: true);
+      await file.writeAsBytes(<int>[1, 2, 3, 4], flush: true);
+      await storage.recoverInstalledModel(_primary, file: file);
+      settingsController.updateGenerationModelId(_primary.id);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      final restartedSettings = SettingsController(
+        store: SettingsStore(
+          File('${tempDirectory.path}${Platform.pathSeparator}settings.json'),
+        ),
+      );
+      await restartedSettings.initialize();
+      final controller = _controller(
+        registry: registry,
+        storage: storage,
+        settingsController: restartedSettings,
+      );
+
+      await controller.initialize();
+
+      expect(controller.state.installedModel?.descriptor.id, _primary.id);
+      expect(
+        controller.cardStateFor(_primary).lifecycle,
+        ModelCardLifecycle.downloaded,
+      );
+      expect(controller.isActive(_primary), isFalse);
+    },
+  );
+
+  test(
+    'restart active model is active only after bootstrap marks initialized',
+    () async {
+      final file = await storage.getInstalledFile(_primary);
+      await file.parent.create(recursive: true);
+      await file.writeAsBytes(<int>[1, 2, 3, 4], flush: true);
+      await storage.recoverInstalledModel(_primary, file: file);
+      settingsController.updateGenerationModelId(_primary.id);
+      final controller = _controller(
+        registry: registry,
+        storage: storage,
+        settingsController: settingsController,
+      );
+
+      await controller.initialize();
+      expect(controller.isActive(_primary), isFalse);
+
+      controller.markInitializedModel(_primary.storageFileName);
+
+      expect(
+        controller.cardStateFor(_primary).lifecycle,
+        ModelCardLifecycle.active,
+      );
+    },
+  );
+
+  test('missing HF token blocks gated download', () async {
+    final tokenStore = _FakeHuggingFaceTokenStore();
+    final downloader = _FakeModelDownloader(storage: storage);
+    final controller = _controller(
+      registry: registry,
+      storage: storage,
+      settingsController: settingsController,
+      downloader: downloader,
+      tokenStore: tokenStore,
+    );
+
+    await controller.initialize();
+    controller.selectModel(_gated);
+    final installed = await controller.downloadSelectedModel();
+
+    expect(installed, isNull);
+    expect(downloader.downloadCount, 0);
+    expect(
+      controller.cardStateFor(_gated).lifecycle,
+      ModelCardLifecycle.missingToken,
+    );
+  });
+
+  test('present HF token is passed to gated download', () async {
+    final tokenStore = _FakeHuggingFaceTokenStore(token: 'hf_test');
+    final downloader = _FakeModelDownloader(
+      storage: storage,
+      onDownload: (model, onProgress, authToken) async {
+        final file = await storage.getInstalledFile(model);
+        await file.parent.create(recursive: true);
+        await file.writeAsBytes(<int>[1, 2, 3], flush: true);
+        return ModelDownloadResult(
+          status: ModelDownloadResultStatus.completed,
+          installedModel: await storage.recoverInstalledModel(
+            model,
+            file: file,
+          ),
+        );
+      },
+    );
+    final controller = _controller(
+      registry: registry,
+      storage: storage,
+      settingsController: settingsController,
+      downloader: downloader,
+      tokenStore: tokenStore,
+    );
+
+    await controller.initialize();
+    controller.selectModel(_gated);
+    await controller.downloadSelectedModel();
+
+    expect(downloader.lastAuthToken, 'hf_test');
+  });
+
+  test('unsupported RAM state disables primary action', () async {
+    final controller = _controller(
+      registry: registry,
+      storage: storage,
+      settingsController: settingsController,
+      bridge: _FakeLiteRtBridge(freeRam: 0.5),
+    );
+
+    await controller.initialize();
+
+    final card = controller.cardStateFor(_primary);
+    expect(card.lifecycle, ModelCardLifecycle.unsupported);
+    expect(card.canRunPrimaryAction, isFalse);
+    expect(card.primaryLabel, 'Unavailable');
+  });
 }
 
 ModelDownloadController _controller({
@@ -264,13 +391,16 @@ ModelDownloadController _controller({
   required ModelStorage storage,
   required SettingsController settingsController,
   ModelDownloader? downloader,
+  _FakeLiteRtBridge? bridge,
+  HuggingFaceTokenStore? tokenStore,
 }) {
   return ModelDownloadController(
     registry: registry,
     storage: storage,
     downloader: downloader ?? _FakeModelDownloader(storage: storage),
-    bridge: _FakeLiteRtBridge(),
+    bridge: bridge ?? _FakeLiteRtBridge(),
     settingsController: settingsController,
+    hfTokenStore: tokenStore,
   );
 }
 
@@ -282,10 +412,12 @@ class _FakeModelDownloader extends ModelDownloader {
       );
 
   int downloadCount = 0;
+  String? lastAuthToken;
 
   final Future<ModelDownloadResult> Function(
     ModelDescriptor descriptor,
     void Function(int downloadedBytes, int totalBytes) onProgress,
+    String? authToken,
   )?
   onDownload;
 
@@ -293,10 +425,12 @@ class _FakeModelDownloader extends ModelDownloader {
   Future<ModelDownloadResult> download({
     required ModelDescriptor descriptor,
     required void Function(int downloadedBytes, int totalBytes) onProgress,
+    String? authToken,
   }) async {
     downloadCount += 1;
+    lastAuthToken = authToken;
     if (onDownload != null) {
-      return onDownload!(descriptor, onProgress);
+      return onDownload!(descriptor, onProgress, authToken);
     }
     return const ModelDownloadResult(
       status: ModelDownloadResultStatus.cancelled,
@@ -305,9 +439,53 @@ class _FakeModelDownloader extends ModelDownloader {
 }
 
 class _FakeLiteRtBridge extends LiteRtBridge {
+  _FakeLiteRtBridge({this.initFailure, this.freeRam = 2.0});
+
+  final Object? initFailure;
+  final double freeRam;
+  final List<String> initializedPaths = <String>[];
+  String? _activeModelId;
+
+  @override
+  String? get activeModelId => _activeModelId;
+
   @override
   Future<LiteRtDeviceStats> getDeviceStats() async {
-    return const LiteRtDeviceStats(freeRam: 2.0, npuReady: false);
+    return LiteRtDeviceStats(freeRam: freeRam, npuReady: false);
+  }
+
+  @override
+  Future<bool> initModel({required String path, required bool useNpu}) async {
+    final failure = initFailure;
+    if (failure != null) {
+      throw failure;
+    }
+    initializedPaths.add(path);
+    _activeModelId = path;
+    return true;
+  }
+}
+
+class _FakeHuggingFaceTokenStore implements HuggingFaceTokenStore {
+  _FakeHuggingFaceTokenStore({this.token});
+
+  String? token;
+
+  @override
+  Future<void> deleteTokenForModel(String modelId) async {
+    token = null;
+  }
+
+  @override
+  Future<bool> hasTokenForModel(String modelId) async =>
+      token?.trim().isNotEmpty ?? false;
+
+  @override
+  Future<String?> readTokenForModel(String modelId) async => token;
+
+  @override
+  Future<void> writeTokenForModel(String modelId, String token) async {
+    this.token = token;
   }
 }
 
@@ -336,4 +514,18 @@ const _secondary = ModelDescriptor(
   contextWindow: 4096,
   minRamGb: 1,
   bestFor: 'Testing.',
+);
+
+const _gated = ModelDescriptor(
+  id: 'test-gated',
+  name: 'Test Gated',
+  downloadUrl: 'https://huggingface.co/example/test-gated',
+  modelType: ModelType.gemmaIt,
+  fileType: ModelFileType.litertlm,
+  storageFileName: 'test-gated.litertlm',
+  expectedFileSizeBytes: 3,
+  contextWindow: 4096,
+  minRamGb: 1,
+  bestFor: 'Testing gated downloads.',
+  requiresHfToken: true,
 );

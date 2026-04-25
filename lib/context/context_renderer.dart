@@ -387,9 +387,7 @@ Evidence priority: USER MESSAGE > WORKFLOW STATE > PREVIOUS TOOL STATE (success)
       final suffix = tool.description.trim().isEmpty
           ? ''
           : ' - ${tool.description.trim()}';
-      buffer.writeln(
-        '- [${tool.id}]${tool.requiresConfirmation ? ' (Requires Confirmation)' : ''}$suffix',
-      );
+      buffer.writeln('- [${tool.id}]$suffix');
     }
     if (exposure.exclusionReasons.isNotEmpty) {
       buffer.writeln('===');

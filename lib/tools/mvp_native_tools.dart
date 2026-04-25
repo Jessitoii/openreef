@@ -8,9 +8,17 @@ import 'package:openreef/memory/memory_storage.dart';
 import 'package:openreef/memory/memory_record.dart';
 import 'package:openreef/memory/memory_store_kind.dart';
 import 'package:openreef/memory/semantic_memory_retriever.dart';
+import 'package:openreef/agent/sub_inference_service.dart';
 import 'package:openreef/settings/settings_controller.dart';
+import 'package:openreef/tools/calendar_native_tools.dart';
+import 'package:openreef/tools/communication_native_tools.dart';
+import 'package:openreef/tools/ddgs_web_search_service.dart';
+import 'package:openreef/tools/location_native_tools.dart' as location_tools;
+import 'package:openreef/tools/media_native_tools.dart';
 import 'package:openreef/tools/native_tool_adapters.dart';
+import 'package:openreef/tools/runtime_orchestration_tools.dart';
 import 'package:openreef/tools/tool_manifest.dart';
+import 'package:openreef/tools/system_native_tools.dart';
 import 'package:openreef/triggers/trigger_native_sync.dart';
 import 'package:openreef/triggers/trigger_polling_policy.dart';
 import 'package:openreef/triggers/trigger_models.dart';
@@ -38,32 +46,78 @@ List<NativeToolHandler> createMvpNativeToolHandlers({
   required TriggerNativeSync triggerNativeSync,
   required TriggerSystem triggerSystem,
   required TriggerRepository triggerRepository,
+  SubInferenceService? subInferenceService,
+  DdgsWebSearchService? webSearchService,
 }) {
   return <NativeToolHandler>[
+    // System
     VolumeSetToolHandler(volumeAdapter),
     ClipboardReadToolHandler(clipboardAdapter),
     ClipboardWriteToolHandler(clipboardAdapter),
     BatteryInfoToolHandler(batteryAdapter),
-    ContactReadToolHandler(contactAdapter),
-    ContactCreateToolHandler(contactAdapter),
-    SmsDraftToolHandler(draftMessageAdapter),
-    EmailDraftToolHandler(draftMessageAdapter),
     FlashlightToggleToolHandler(flashlightAdapter),
     DndSetToolHandler(dndAdapter),
-    LocationGetToolHandler(locationAdapter),
-    MapsNavigateToolHandler(mapsAdapter),
-    RegexEvalToolHandler(),
-    MathEvalToolHandler(),
-    TtsSpeakToolHandler(ttsAdapter),
-    MemorySaveToolHandler(memoryStorage: memoryStorage),
-    MemorySearchToolHandler(memoryRetriever),
+    BrightnessSetToolHandler(),
+    WifiToggleToolHandler(),
+    BluetoothToggleToolHandler(),
+    ScreenLockToolHandler(),
+    DeviceInfoToolHandler(),
+    AppListToolHandler(),
     NotifyToolHandler(notificationAdapter),
     AppOpenToolHandler(appLauncherAdapter),
     ShareToolHandler(shareAdapter),
+
+    // Communication
+    ContactReadToolHandler(contactAdapter),
+    ContactCreateToolHandler(contactAdapter),
+    SmsDraftToolHandler(draftMessageAdapter),
+    SmsSendToolHandler(),
+    EmailDraftToolHandler(draftMessageAdapter),
+    WhatsappDraftToolHandler(),
+    TelegramDraftToolHandler(),
+    PhoneCallToolHandler(),
+    PhoneDialToolHandler(),
+
+    // Location and maps
+    LocationGetToolHandler(locationAdapter),
+    location_tools.GeofenceAddToolHandler(),
+    location_tools.MapsSearchToolHandler(),
+    location_tools.LocationDistanceToolHandler(),
+    location_tools.LocationReverseGeocodeToolHandler(),
+    MapsNavigateToolHandler(mapsAdapter),
+
+    // Research
+    WebSearchToolHandler(webSearchService),
+    WebFetchToolHandler(webSearchService),
+
+    // Compute
+    RegexEvalToolHandler(),
+    MathEvalToolHandler(),
+
+    // Media
+    TtsSpeakToolHandler(ttsAdapter),
+    CameraPhotoToolHandler(),
+    CameraScanToolHandler(),
+    MediaDisplayToolHandler(),
+    MediaPlayToolHandler(),
+    ImageAnalyzeToolHandler(),
+
+    // Memory
+    MemorySaveToolHandler(memoryStorage: memoryStorage),
+    MemorySearchToolHandler(memoryRetriever),
+
+    // Files
+    ExtFileListToolHandler(),
     FileReadToolHandler(),
     FileWriteToolHandler(),
+
+    // Settings
     SettingsReadToolHandler(settingsController),
     SettingsWriteToolHandler(settingsController, triggerNativeSync),
+
+    // Calendar and triggers
+    CalendarReadToolHandler(),
+    CalendarWriteToolHandler(),
     TriggerCreateToolHandler(
       triggerSystem,
       triggerRepository,
@@ -78,11 +132,12 @@ List<NativeToolHandler> createMvpNativeToolHandlers({
     AlarmSetToolHandler(triggerSystem, triggerRepository, triggerNativeSync),
     CronAddToolHandler(triggerSystem, triggerRepository, triggerNativeSync),
     CronListToolHandler(triggerSystem),
-    CronRemoveToolHandler(
-      triggerSystem,
-      triggerRepository,
-      triggerNativeSync,
-    ),
+    CronRemoveToolHandler(triggerSystem, triggerRepository, triggerNativeSync),
+
+    // Runtime orchestration
+    SessionStatusToolHandler(),
+    AgentSpawnToolHandler(),
+    LlmTaskToolHandler(subInferenceService),
   ];
 }
 
@@ -233,9 +288,8 @@ class BatteryInfoToolHandler implements NativeToolHandler {
 }
 
 class MemorySaveToolHandler implements NativeToolHandler {
-  MemorySaveToolHandler({
-    required MemoryStorage memoryStorage,
-  }) : _memoryStorage = memoryStorage;
+  MemorySaveToolHandler({required MemoryStorage memoryStorage})
+    : _memoryStorage = memoryStorage;
 
   static const ToolManifest _manifest = ToolManifest(
     id: 'memory_save',
@@ -992,10 +1046,7 @@ class AlarmSetToolHandler extends _BaseTriggerMutationToolHandler {
     ToolExecutionContext context,
   ) {
     final trigger = _createTrigger(
-      <String, Object?>{
-        ...invocation.arguments,
-        'kind': 'schedule',
-      },
+      <String, Object?>{...invocation.arguments, 'kind': 'schedule'},
       now: context.now(),
       defaultSurface: 'alarm',
     );
@@ -1036,10 +1087,7 @@ class CronAddToolHandler extends _BaseTriggerMutationToolHandler {
     ToolExecutionContext context,
   ) {
     final trigger = _createTrigger(
-      <String, Object?>{
-        ...invocation.arguments,
-        'kind': 'interval',
-      },
+      <String, Object?>{...invocation.arguments, 'kind': 'interval'},
       now: context.now(),
       defaultSurface: 'cron',
     );
@@ -1200,17 +1248,17 @@ abstract class _BaseTriggerMutationToolHandler implements NativeToolHandler {
       pollIntervalMinutes: arguments['poll_interval_minutes'] as int?,
       scheduleSpec: kind == TriggerType.schedule
           ? ScheduleTriggerSpec(
-              hour: arguments['hour'] as int? ??
+              hour:
+                  arguments['hour'] as int? ??
                   (throw ArgumentError('missing_hour')),
-              minute: arguments['minute'] as int? ??
+              minute:
+                  arguments['minute'] as int? ??
                   (throw ArgumentError('missing_minute')),
             )
           : null,
       intervalSpec: kind == TriggerType.interval
           ? IntervalTriggerSpec(
-              every: Duration(
-                minutes: _resolveEveryMinutes(arguments),
-              ),
+              every: Duration(minutes: _resolveEveryMinutes(arguments)),
             )
           : null,
       payload: <String, Object?>{
@@ -1347,7 +1395,8 @@ class ContactCreateToolHandler implements NativeToolHandler {
     ToolExecutionContext context,
   ) async {
     try {
-      final displayName = (invocation.arguments['display_name'] as String).trim();
+      final displayName = (invocation.arguments['display_name'] as String)
+          .trim();
       final created = await _adapter.createContact(
         displayName: displayName,
         phone: (invocation.arguments['phone'] as String?)?.trim(),
@@ -1844,9 +1893,7 @@ NativeToolExecutionResult _nativeFailure(
 ) {
   return NativeToolExecutionResult.failure(
     error: error,
-    metadata: <String, Object?>{
-      'executedAt': context.now().toIso8601String(),
-    },
+    metadata: <String, Object?>{'executedAt': context.now().toIso8601String()},
   );
 }
 
@@ -2007,8 +2054,9 @@ String _normalizeAbsolutePath(String rawPath) {
 
 Map<String, Object?> _serializeTriggerRow(
   TriggerConfig trigger,
-  TriggerState? state,
-  {SettingsController? settingsController}) {
+  TriggerState? state, {
+  SettingsController? settingsController,
+}) {
   final resolvedPollMinutes = settingsController == null
       ? (trigger.pollIntervalMinutes ?? trigger.intervalSpec?.every.inMinutes)
       : const TriggerPollingPolicy().resolvePollMinutes(

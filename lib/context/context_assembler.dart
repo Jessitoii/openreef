@@ -233,8 +233,8 @@ class ManagedSemanticMemoryContextProvider implements MemoryContextProvider {
   ManagedSemanticMemoryContextProvider({
     required SemanticMemoryRetriever retriever,
     required SemanticEmbeddingModelAccess readinessProvider,
-  })  : _retriever = retriever,
-        _readinessProvider = readinessProvider;
+  }) : _retriever = retriever,
+       _readinessProvider = readinessProvider;
 
   final SemanticMemoryRetriever _retriever;
   final SemanticEmbeddingModelAccess _readinessProvider;
@@ -246,11 +246,6 @@ class ManagedSemanticMemoryContextProvider implements MemoryContextProvider {
     required int maxTokens,
   }) async {
     final readiness = await _readinessProvider.checkReadiness();
-    final result = await _retriever.search(
-      query: userMessage,
-      limit: maxTokens <= 0 ? 0 : 6,
-    );
-
     if (!readiness.isReady) {
       return <AgentMessage>[
         AgentMessage(
@@ -258,13 +253,14 @@ class ManagedSemanticMemoryContextProvider implements MemoryContextProvider {
           content:
               '[MEMORY RETRIEVAL UNAVAILABLE]\n'
               'status: unavailable\n'
-              'reason: semantic_embedding_model_not_ready\n'
+              'reason: ${readiness.message ?? 'semantic_embedding_model_not_ready'}\n'
               'embeddingModelId: ${readiness.model?.id ?? 'none'}\n'
               '[END MEMORY RETRIEVAL UNAVAILABLE]',
           turnNumber: 0,
           metadata: <String, Object?>{
             'memory_retrieval_status': 'unavailable',
-            'memory_retrieval_reason': 'semantic_embedding_model_not_ready',
+            'memory_retrieval_reason':
+                readiness.message ?? 'semantic_embedding_model_not_ready',
             'embedding_model_id_used': readiness.model?.id ?? 'none',
             'memory_retrieval_skipped_no_embedder': true,
             'memory_retrieval_degraded': true,
@@ -272,6 +268,11 @@ class ManagedSemanticMemoryContextProvider implements MemoryContextProvider {
         ),
       ];
     }
+
+    final result = await _retriever.search(
+      query: userMessage,
+      limit: maxTokens <= 0 ? 0 : 6,
+    );
 
     if (result.status == SemanticMemoryRetrievalStatus.unavailable) {
       return <AgentMessage>[
@@ -317,7 +318,9 @@ class ManagedSemanticMemoryContextProvider implements MemoryContextProvider {
         },
       );
       selected.add(degradedMessage);
-      usedTokens += ContextAssembler.estimateTextTokens(degradedMessage.content);
+      usedTokens += ContextAssembler.estimateTextTokens(
+        degradedMessage.content,
+      );
     }
 
     for (final match in result.matches) {
@@ -334,7 +337,9 @@ class ManagedSemanticMemoryContextProvider implements MemoryContextProvider {
           'memory_retrieval_reason': result.message,
         },
       );
-      final estimatedTokens = ContextAssembler.estimateTextTokens(message.content);
+      final estimatedTokens = ContextAssembler.estimateTextTokens(
+        message.content,
+      );
       if (usedTokens + estimatedTokens > maxTokens) {
         continue;
       }
@@ -526,6 +531,14 @@ class ContextAssembler {
     }
     // ignore: deprecated_member_use_from_same_package
     final intentSignal = await detectIntent(request.userMessage);
+    final tools = _toolCatalog.listTools();
+
+    debugPrint("==== TOOL UNIVERSE ====");
+    debugPrint("TOTAL TOOLS: ${tools.length}");
+    for (final t in tools) {
+      debugPrint("${t.id} | source=${t.source} | enabled=${t.enabled}");
+    }
+    debugPrint("=======================");
     final planner = ContextPlanner(
       toolLimit: _toolLimit,
       skillLimit: _skillLimit,

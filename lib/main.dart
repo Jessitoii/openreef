@@ -44,6 +44,7 @@ import 'package:openreef/skills/skill_package_service.dart';
 import 'package:openreef/skills/skill_registry.dart';
 import 'package:openreef/skills/skill_registry_controller.dart';
 import 'package:openreef/skills/skill_runtime_catalog.dart';
+import 'package:openreef/tools/ddgs_web_search_service.dart';
 import 'package:openreef/tools/mvp_native_tools.dart';
 import 'package:openreef/tools/platform_native_tool_adapters.dart';
 import 'package:openreef/tools/tool_manifest_bridge.dart';
@@ -87,14 +88,12 @@ class _MyAppState extends State<MyApp> {
   late bool _modelReady = widget.bootstrap.modelReady;
 
   Future<void> _handleModelReady() async {
-    final installedModel =
-        widget.bootstrap.modelDownloadController.state.installedModel;
-    if (installedModel == null) {
+    final controller = widget.bootstrap.modelDownloadController;
+    final selectedModel = controller.state.selectedModel;
+    if (selectedModel == null || !controller.isActive(selectedModel)) {
       return;
     }
-    widget.bootstrap.modelDownloadController.markInitializingModel();
     try {
-      await widget.bootstrap.initializeModelAtPath(installedModel.modelId);
       await widget.bootstrap.markRuntimeReady();
       if (!mounted) {
         return;
@@ -103,9 +102,7 @@ class _MyAppState extends State<MyApp> {
         _modelReady = true;
       });
     } catch (error) {
-      await widget.bootstrap.modelDownloadController
-          .recoverFromCorruptInstalledModel(installedModel);
-      widget.bootstrap.modelDownloadController.setInitializationError(error);
+      controller.setInitializationError(error);
       if (!mounted) {
         return;
       }
@@ -134,11 +131,61 @@ class _MyAppState extends State<MyApp> {
   }
 }
 
-Future<void> initializeLiteRtModelAtPath(
+Future<bool> initializeLiteRtModelAtPath(
   LiteRtBridge bridge, {
   required String path,
 }) {
   return OpenReefBootstrap.initializeLiteRtBridge(bridge, path: path);
+}
+
+List<ToolDefinition> buildNativeTools(
+  ToolManifestRegistry registry,
+  ToolManifestBridge bridge,
+) {
+  return registry
+      .listManifests()
+      .map((manifest) {
+        return bridge.toToolDefinition(
+          toolId: manifest.id,
+          embedding: _nativeToolEmbedding(manifest.id),
+        );
+      })
+      .toList(growable: false);
+}
+
+List<double> _nativeToolEmbedding(String toolId) {
+  switch (toolId) {
+    case 'contact_read':
+    case 'contact_create':
+    case 'sms_draft':
+    case 'email_draft':
+    case 'communication_phone_call':
+    case 'communication_phone_dial':
+    case 'communication_whatsapp_draft':
+    case 'communication_telegram_draft':
+    case 'share':
+      return const <double>[0, 1, 0, 0, 0, 0, 0];
+    case 'regex_eval':
+    case 'math_eval':
+      return const <double>[0, 0, 0, 1, 0, 0, 0];
+    case 'memory_save':
+    case 'memory_search':
+      return const <double>[0, 0, 0, 0, 0, 1, 0];
+    case 'file_read':
+    case 'file_write':
+      return const <double>[0, 0, 0, 0, 1, 0, 1];
+    case 'trigger_create':
+    case 'trigger_list':
+    case 'trigger_remove':
+    case 'cron_add':
+    case 'cron_list':
+    case 'cron_remove':
+      return const <double>[1, 0, 0, 0, 1, 0, 0];
+    case 'alarm_set':
+      return const <double>[1, 0, 1, 0, 1, 0, 0];
+    default:
+      return const <double>[0, 0, 0, 0, 1, 0, 0];
+  }
 }
 
 class OpenReefBootstrap {
@@ -243,12 +290,14 @@ class OpenReefBootstrap {
     final modelRegistry = const ModelRegistry();
     final modelStorage = ModelStorage();
     final modelDownloader = ModelDownloader(storage: modelStorage);
+    const hfTokenStore = SecureHuggingFaceTokenStore();
     final modelDownloadController = ModelDownloadController(
       registry: modelRegistry,
       storage: modelStorage,
       downloader: modelDownloader,
       bridge: liteRtBridge,
       settingsController: settingsController,
+      hfTokenStore: hfTokenStore,
     );
     await modelDownloadController.initialize();
 
@@ -256,7 +305,7 @@ class OpenReefBootstrap {
     final embeddingModelManager = EmbeddingModelManager(
       registry: modelRegistry,
       settingsController: settingsController,
-      tokenStore: const SecureHuggingFaceTokenStore(),
+      tokenStore: hfTokenStore,
       onModelChanged: () => capabilityEmbeddingIndex.invalidate(),
     );
     await embeddingModelManager.initialize();
@@ -288,11 +337,21 @@ class OpenReefBootstrap {
         final registeredModel = await modelDownloader.registerInstalledModel(
           installedModel,
         );
-        await initializeLiteRtBridge(
+        final initialized = await initializeLiteRtBridge(
           liteRtBridge,
           path: registeredModel.modelId,
         );
-        modelReady = true;
+        if (initialized) {
+          modelDownloadController.markInitializedModel(registeredModel.modelId);
+          modelReady = true;
+        } else {
+          modelDownloadController.setInitializationError(
+            StateError(
+              'LiteRT model initialization failed for ${registeredModel.modelId}.',
+            ),
+          );
+          modelReady = false;
+        }
       } catch (error) {
         await modelDownloadController.recoverFromCorruptInstalledModel(
           installedModel,
@@ -333,135 +392,11 @@ class OpenReefBootstrap {
         triggerNativeSync: triggerNativeSync,
         triggerSystem: triggerSystem,
         triggerRepository: triggerRepository,
+        webSearchService: DdgsWebSearchService(),
       ),
     );
     final toolBridge = ToolManifestBridge(toolRegistry);
-    final nativeTools = <ToolDefinition>[
-      toolBridge.toToolDefinition(
-        toolId: 'volume_set',
-        embedding: const <double>[0, 0, 0, 0, 1, 0, 0],
-      ),
-      toolBridge.toToolDefinition(
-        toolId: 'clipboard_read',
-        embedding: const <double>[0, 0, 0, 0, 1, 0, 0],
-      ),
-      toolBridge.toToolDefinition(
-        toolId: 'clipboard_write',
-        embedding: const <double>[0, 0, 0, 0, 1, 0, 0],
-      ),
-      toolBridge.toToolDefinition(
-        toolId: 'battery_info',
-        embedding: const <double>[0, 0, 0, 0, 1, 0, 0],
-      ),
-      toolBridge.toToolDefinition(
-        toolId: 'contact_read',
-        embedding: const <double>[0, 1, 0, 0, 0, 0, 0],
-      ),
-      toolBridge.toToolDefinition(
-        toolId: 'contact_create',
-        embedding: const <double>[0, 1, 0, 0, 0, 0, 0],
-      ),
-      toolBridge.toToolDefinition(
-        toolId: 'sms_draft',
-        embedding: const <double>[0, 1, 0, 0, 0, 0, 0],
-      ),
-      toolBridge.toToolDefinition(
-        toolId: 'email_draft',
-        embedding: const <double>[0, 1, 0, 0, 0, 0, 0],
-      ),
-      toolBridge.toToolDefinition(
-        toolId: 'flashlight_toggle',
-        embedding: const <double>[0, 0, 0, 0, 1, 0, 0],
-      ),
-      toolBridge.toToolDefinition(
-        toolId: 'dnd_set',
-        embedding: const <double>[0, 0, 0, 0, 1, 0, 0],
-      ),
-      toolBridge.toToolDefinition(
-        toolId: 'location_get',
-        embedding: const <double>[0, 0, 0, 0, 1, 0, 0],
-      ),
-      toolBridge.toToolDefinition(
-        toolId: 'maps_navigate',
-        embedding: const <double>[0, 0, 0, 0, 1, 0, 0],
-      ),
-      toolBridge.toToolDefinition(
-        toolId: 'regex_eval',
-        embedding: const <double>[0, 0, 0, 1, 0, 0, 0],
-      ),
-      toolBridge.toToolDefinition(
-        toolId: 'math_eval',
-        embedding: const <double>[0, 0, 0, 1, 0, 0, 0],
-      ),
-      toolBridge.toToolDefinition(
-        toolId: 'tts_speak',
-        embedding: const <double>[0, 0, 0, 0, 1, 0, 0],
-      ),
-      toolBridge.toToolDefinition(
-        toolId: 'notify',
-        embedding: const <double>[0, 0, 0, 0, 1, 0, 0],
-      ),
-      toolBridge.toToolDefinition(
-        toolId: 'app_open',
-        embedding: const <double>[0, 0, 0, 0, 1, 0, 0],
-      ),
-      toolBridge.toToolDefinition(
-        toolId: 'share',
-        embedding: const <double>[0, 1, 0, 0, 1, 0, 0],
-      ),
-      toolBridge.toToolDefinition(
-        toolId: 'file_read',
-        embedding: const <double>[0, 0, 0, 0, 1, 0, 1],
-      ),
-      toolBridge.toToolDefinition(
-        toolId: 'file_write',
-        embedding: const <double>[0, 0, 0, 0, 1, 0, 1],
-      ),
-      toolBridge.toToolDefinition(
-        toolId: 'settings_read',
-        embedding: const <double>[0, 0, 0, 0, 1, 0, 0],
-      ),
-      toolBridge.toToolDefinition(
-        toolId: 'settings_write',
-        embedding: const <double>[0, 0, 0, 0, 1, 0, 0],
-      ),
-      toolBridge.toToolDefinition(
-        toolId: 'memory_save',
-        embedding: const <double>[0, 0, 0, 0, 0, 1, 0],
-      ),
-      toolBridge.toToolDefinition(
-        toolId: 'memory_search',
-        embedding: const <double>[0, 0, 0, 0, 0, 1, 0],
-      ),
-      toolBridge.toToolDefinition(
-        toolId: 'trigger_create',
-        embedding: const <double>[1, 0, 0, 0, 1, 0, 0],
-      ),
-      toolBridge.toToolDefinition(
-        toolId: 'trigger_list',
-        embedding: const <double>[1, 0, 0, 0, 1, 0, 0],
-      ),
-      toolBridge.toToolDefinition(
-        toolId: 'trigger_remove',
-        embedding: const <double>[1, 0, 0, 0, 1, 0, 0],
-      ),
-      toolBridge.toToolDefinition(
-        toolId: 'alarm_set',
-        embedding: const <double>[1, 0, 1, 0, 1, 0, 0],
-      ),
-      toolBridge.toToolDefinition(
-        toolId: 'cron_add',
-        embedding: const <double>[1, 0, 0, 0, 1, 0, 0],
-      ),
-      toolBridge.toToolDefinition(
-        toolId: 'cron_list',
-        embedding: const <double>[1, 0, 0, 0, 1, 0, 0],
-      ),
-      toolBridge.toToolDefinition(
-        toolId: 'cron_remove',
-        embedding: const <double>[1, 0, 0, 0, 1, 0, 0],
-      ),
-    ];
+    final nativeTools = buildNativeTools(toolRegistry, toolBridge);
     final toolCatalog = RuntimeToolCatalog(
       sourceTools: <String, List<ToolDefinition>>{'native': nativeTools},
     );
@@ -619,7 +554,7 @@ class OpenReefBootstrap {
     await triggerSystem.fireBootTriggers();
   }
 
-  static Future<void> initializeLiteRtBridge(
+  static Future<bool> initializeLiteRtBridge(
     LiteRtBridge bridge, {
     required String path,
   }) async {
@@ -637,14 +572,31 @@ class OpenReefBootstrap {
         'OpenReefBootstrap.initializeLiteRtBridge: initModel modelId=$path useNpu=$useNpu',
       );
       await bridge.initModel(path: path, useNpu: useNpu);
+      return true;
     } on PlatformException catch (error) {
       if (error.code != 'ERR_NPU_FALLBACK' || !useNpu) {
-        rethrow;
+        debugPrint(
+          'OpenReefBootstrap.initializeLiteRtBridge: init failed modelId=$path useNpu=$useNpu error=$error',
+        );
+        return false;
       }
       debugPrint(
         'OpenReefBootstrap.initializeLiteRtBridge: NPU fallback, retrying on CPU/GPU',
       );
-      await bridge.initModel(path: path, useNpu: false);
+      try {
+        await bridge.initModel(path: path, useNpu: false);
+        return true;
+      } on Object catch (fallbackError) {
+        debugPrint(
+          'OpenReefBootstrap.initializeLiteRtBridge: fallback init failed modelId=$path error=$fallbackError',
+        );
+        return false;
+      }
+    } on Object catch (error) {
+      debugPrint(
+        'OpenReefBootstrap.initializeLiteRtBridge: unexpected init failure modelId=$path useNpu=$useNpu error=$error',
+      );
+      return false;
     }
   }
 

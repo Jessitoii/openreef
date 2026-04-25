@@ -1,9 +1,11 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:openreef/agent/mailbox.dart';
 import 'package:openreef/agent/agent_models.dart';
 import 'package:openreef/agent/agent_task_executor.dart';
 import 'package:openreef/agent/execution_request.dart';
+import 'package:openreef/agent/tool_router.dart';
 import 'package:openreef/memory/memory_storage.dart';
 import 'package:openreef/memory/semantic_memory_retriever.dart';
 import 'package:openreef/memory/memory_store_kind.dart';
@@ -11,8 +13,11 @@ import 'package:openreef/memory/semantic_text_embedder.dart';
 import 'package:openreef/memory/sqlite_memory_storage_backend.dart';
 import 'package:openreef/settings/settings_controller.dart';
 import 'package:openreef/settings/settings_store.dart';
+import 'package:openreef/main.dart' as app_main;
+import 'package:openreef/tools/ddgs_web_search_service.dart';
 import 'package:openreef/tools/mvp_native_tools.dart';
 import 'package:openreef/tools/native_tool_adapters.dart';
+import 'package:openreef/tools/tool_manifest_bridge.dart';
 import 'package:openreef/tools/tool_manifest.dart';
 import 'package:openreef/tools/tool_manifest_registry.dart';
 import 'package:openreef/triggers/trigger_native_sync.dart';
@@ -97,6 +102,7 @@ void main() {
         triggerNativeSync: _NoopTriggerNativeSync(),
         triggerSystem: triggerSystem,
         triggerRepository: triggerRepository,
+        webSearchService: DdgsWebSearchService(),
       ),
     );
   });
@@ -108,7 +114,9 @@ void main() {
     }
   });
 
-  test('memory_save followed by memory_search returns the persisted fact', () async {
+  test(
+    'memory_save followed by memory_search returns the persisted fact',
+    () async {
       await registry.execute(
         const ToolInvocation(
           toolId: 'memory_save',
@@ -120,10 +128,134 @@ void main() {
           },
         ),
       );
-      final records = await storage.readRecords(store: MemoryStoreKind.longTerm);
+      final records = await storage.readRecords(
+        store: MemoryStoreKind.longTerm,
+      );
       expect(records.isNotEmpty, isTrue);
       expect(records.first.content, 'Prefers concise updates');
-    });
+    },
+  );
+
+  test('implemented native tools are bridged into the runtime catalog', () {
+    final bridge = ToolManifestBridge(registry);
+    final nativeTools = app_main.buildNativeTools(registry, bridge);
+    final catalog = RuntimeToolCatalog(
+      sourceTools: <String, List<ToolDefinition>>{'native': nativeTools},
+    );
+    final toolsById = <String, ToolDefinition>{
+      for (final tool in catalog.listTools()) tool.id: tool,
+    };
+
+    expect(
+      toolsById.keys,
+      containsAll(<String>[
+        'communication_phone_call',
+        'communication_phone_dial',
+        'communication_sms_send',
+        'communication_whatsapp_draft',
+        'communication_telegram_draft',
+        'app_list',
+        'brightness_set',
+        'device_info',
+        'wifi_toggle',
+        'bluetooth_toggle',
+        'screen_lock',
+        'web_search',
+        'web_fetch',
+        'geofence_add',
+        'maps_search',
+        'location_distance',
+        'location_reverse_geocode',
+        'camera_photo',
+        'camera_scan',
+        'media_display',
+        'media_play',
+        'image_analyze',
+        'calendar_read',
+        'calendar_write',
+        'session_status',
+        'agent_spawn',
+        'file_list',
+        'llm_task',
+      ]),
+    );
+    expect(toolsById['location_reverse_geocode']?.enabled, isFalse);
+    expect(toolsById['llm_task']?.enabled, isFalse);
+    for (final id in <String>[
+      'communication_sms_send',
+      'web_search',
+      'web_fetch',
+      'geofence_add',
+      'maps_search',
+      'location_distance',
+      'camera_photo',
+      'camera_scan',
+      'media_display',
+      'media_play',
+      'image_analyze',
+      'agent_spawn',
+      'file_list',
+      'device_info',
+    ]) {
+      expect(toolsById[id]?.enabled, isTrue, reason: id);
+    }
+    expect(toolsById.containsKey('code_run'), isFalse);
+    expect(toolsById.containsKey('session_history'), isFalse);
+    expect(toolsById.containsKey('x_search'), isFalse);
+  });
+
+  test(
+    'production native manifests are compatible with strict router validation',
+    () {
+      final bridge = ToolManifestBridge(registry);
+      final nativeTools = app_main.buildNativeTools(registry, bridge);
+      final router = ToolRouter(
+        catalog: RuntimeToolCatalog(
+          sourceTools: <String, List<ToolDefinition>>{'native': nativeTools},
+        ),
+        mailbox: AgentMailbox(),
+        confirmToolCall: (_) async => true,
+      );
+
+      for (final tool in nativeTools) {
+        final validArgs = <String, Object?>{
+          for (final spec in tool.argumentSchema) spec.name: _sampleValue(spec),
+        };
+        expect(
+          router.validateToolCall(
+            ToolCall(
+              id: 'audit-valid-${tool.id}',
+              toolId: tool.id,
+              arguments: validArgs,
+            ),
+          ),
+          isNull,
+          reason: tool.id,
+        );
+
+        final extraKeyResult = router.validateToolCall(
+          ToolCall(
+            id: 'audit-extra-${tool.id}',
+            toolId: tool.id,
+            arguments: <String, Object?>{
+              ...validArgs,
+              'legacy_extra_key': true,
+            },
+          ),
+        );
+        if (tool.enabled) {
+          expect(extraKeyResult?.status, ToolResultStatus.validationError);
+          expect(
+            extraKeyResult?.metadata['reason'],
+            'malformed_tool_call',
+            reason: tool.id,
+          );
+        } else {
+          expect(extraKeyResult, isNull, reason: tool.id);
+        }
+      }
+    },
+  );
 
   test('file_write and file_read operate on real absolute paths', () async {
     final path = '${tempDir.path}${Platform.pathSeparator}notes.txt';
@@ -209,6 +341,22 @@ void main() {
     expect(listed.content, contains('every 30m'));
     expect(await triggerRepository.loadAll(), isEmpty);
   });
+}
+
+Object? _sampleValue(ToolArgumentSpec spec) {
+  if (spec.allowedValues.isNotEmpty) {
+    return spec.allowedValues.first;
+  }
+  switch (spec.type) {
+    case ToolArgumentType.string:
+      return 'sample';
+    case ToolArgumentType.integer:
+      return (spec.minimum ?? 1).ceil();
+    case ToolArgumentType.doubleValue:
+      return (spec.minimum ?? 0.5).toDouble();
+    case ToolArgumentType.boolean:
+      return true;
+  }
 }
 
 class _MappedSemanticEmbedder implements SemanticTextEmbedder {
@@ -401,5 +549,3 @@ class _NoopTriggerNativeSync extends TriggerNativeSync {
   @override
   Future<void> syncGlobalPollMinutes(int minutes) async {}
 }
-
-

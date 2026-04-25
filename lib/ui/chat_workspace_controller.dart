@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:openreef/memory/chat_session_record.dart';
 import 'package:openreef/memory/chat_session_repository.dart';
+import 'package:openreef/ui/chat/composer_models.dart';
 import 'package:openreef/ui/chat_session_port.dart';
 
 enum AppShellDestination { chat, settings, skills, automation, mcp, memory }
@@ -94,6 +95,19 @@ class ChatWorkspaceController extends ChangeNotifier
     }
 
     await session.chatSession.sendMessage(message);
+    await _activePersistQueue;
+    await _persistSession(session);
+    _refreshRecentSessions();
+    notifyListeners();
+  }
+
+  Future<void> sendComposerSubmission(ComposerSubmission submission) async {
+    final session = _activeSession;
+    if (session == null) {
+      return;
+    }
+
+    await session.chatSession.sendComposerSubmission(submission);
     await _activePersistQueue;
     await _persistSession(session);
     _refreshRecentSessions();

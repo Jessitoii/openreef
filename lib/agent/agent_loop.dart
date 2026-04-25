@@ -150,6 +150,8 @@ class AgentLoop {
     var consecutiveErrors = 0;
     var iterationCount = 0;
     var failedToolCalls = false;
+    var unstableToolTurn = false;
+    var sawToolCall = false;
     var activeBlockedFingerprint = '';
     var repeatedBlockedFingerprintCount = 0;
     final afterTurnMessageStart = context.messages.length;
@@ -163,6 +165,78 @@ class AgentLoop {
       sessionKey: sessionKey,
       sink: transcriptSink,
     );
+
+    Future<AgentLoopResult?> recoverParserFailures(String phase) async {
+      while (response.hasParserFailure) {
+        failedToolCalls = true;
+        unstableToolTurn = true;
+        iterationCount += 1;
+        currentStepIndex += 1;
+        final result = _parserFailureToolResult(
+          response,
+          phase: phase,
+          callId: 'parser_failure_$iterationCount',
+        );
+        toolResults.add(result);
+        context = context.appendToolResult(result.callId!, result);
+        _trace(
+          'parser.outcome phase=$phase tools=${context.selectedTools.length} supportsFunctionCalls=${context.selectedTools.isNotEmpty} parserStatus=${response.parserStatus.name} normalizedRequest=false visibleSuppressed=true persistenceAllowed=false',
+        );
+        if (iterationCount > control.maxSteps ||
+            iterationCount > _maxIterations) {
+          return _completeWithFailure(
+            'malformed_tool_call',
+            '',
+            sessionKey: sessionKey,
+            hasFailedToolCalls: true,
+            toolsUsed: toolsUsed,
+            toolResults: toolResults,
+            continuation: LoopContinuation(
+              currentStepIndex: currentStepIndex,
+              variables: variables,
+              waitingReason: continuation.waitingReason,
+              waitingMetadata: continuation.waitingMetadata,
+              resumeToken: continuation.resumeToken,
+            ),
+            skipMemoryFormation: true,
+          );
+        }
+        try {
+          response = await _generateAssistantResponse(
+            context,
+            maxTokens: context.tokenBudget.outputReserve,
+            emitter: transcriptEmitter,
+            messageId: _assistantMessageId(
+              transcriptEmitter.requestId,
+              currentStepIndex,
+            ),
+            phase: 'continuation',
+            suppressVisibleText: true,
+          );
+        } catch (error, stackTrace) {
+          _traceError('modelGeneration.failed', error, stackTrace);
+          return _completeWithFailure(
+            'generation_failure',
+            _generationFailureMessage(error),
+            sessionKey: sessionKey,
+            hasFailedToolCalls: true,
+            toolsUsed: toolsUsed,
+            toolResults: toolResults,
+            continuation: LoopContinuation(
+              currentStepIndex: currentStepIndex,
+              variables: variables,
+              waitingReason: continuation.waitingReason,
+              waitingMetadata: continuation.waitingMetadata,
+              resumeToken: continuation.resumeToken,
+            ),
+            exceptionType: error.runtimeType.toString(),
+            errorMessage: error.toString(),
+            skipMemoryFormation: true,
+          );
+        }
+      }
+      return null;
+    }
 
     final cancellation = _checkCancelled(control);
     if (cancellation != null) {
@@ -189,7 +263,12 @@ class AgentLoop {
           transcriptEmitter.requestId,
           currentStepIndex,
         ),
+        phase: 'main_turn',
       );
+      final parserFailureResult = await recoverParserFailures('main_turn');
+      if (parserFailureResult != null) {
+        return parserFailureResult;
+      }
       final cancellationAfterGeneration = _checkCancelled(control);
       if (cancellationAfterGeneration != null) {
         return _cancelledResult(
@@ -226,7 +305,9 @@ class AgentLoop {
       );
     }
 
+    toolLoop:
     while (response.hasToolCall) {
+      sawToolCall = true;
       iterationCount += 1;
       currentStepIndex += 1;
       final cancellation = _checkCancelled(control);
@@ -340,6 +421,46 @@ class AgentLoop {
       }
 
       final pendingToolCalls = response.effectiveToolCalls;
+      final typedToolTurn = response.hasTypedToolCall;
+      final toolResponseAdapter =
+          typedToolTurn && _modelAdapter is ToolResponseModelAdapter
+          ? _modelAdapter
+          : null;
+      var continueWithTypedToolResponses =
+          typedToolTurn && toolResponseAdapter != null;
+      if (typedToolTurn &&
+          (toolResponseAdapter == null || pendingToolCalls.isEmpty)) {
+        final result = ToolResult.failure(
+          'typed_tool_call_without_dispatch',
+          status: ToolResultStatus.validationError,
+          userVisibleMessage: 'typed_tool_call_without_dispatch',
+          metadata: const <String, Object?>{
+            'reason': 'typed_tool_call_without_dispatch',
+            'errorCode': 'typed_tool_call_without_dispatch',
+          },
+        );
+        failedToolCalls = true;
+        unstableToolTurn = true;
+        toolResults.add(result);
+        context = context.appendToolResult('typed_tool_call', result);
+        continueWithTypedToolResponses = false;
+        response = await _generateAssistantResponse(
+          context,
+          maxTokens: context.tokenBudget.outputReserve,
+          emitter: transcriptEmitter,
+          messageId: _assistantMessageId(
+            transcriptEmitter.requestId,
+            currentStepIndex,
+          ),
+          phase: 'continuation',
+          suppressVisibleText: true,
+        );
+        final parserFailureResult = await recoverParserFailures('continuation');
+        if (parserFailureResult != null) {
+          return parserFailureResult;
+        }
+        continue toolLoop;
+      }
       for (final toolCall in pendingToolCalls) {
         final cancellationBeforeTool = _checkCancelled(control);
         if (cancellationBeforeTool != null) {
@@ -389,6 +510,30 @@ class AgentLoop {
           );
         }
 
+        final protocolFailure = _validateToolCallForDispatch(
+          toolCall,
+          validateArguments: true,
+        );
+        if (protocolFailure != null) {
+          failedToolCalls = true;
+          unstableToolTurn = true;
+          toolResults.add(protocolFailure);
+          context = context.appendToolResult(toolCall.id, protocolFailure);
+          if (typedToolTurn && toolResponseAdapter != null) {
+            final appendFailure = await _appendTypedToolResponse(
+              toolResponseAdapter,
+              toolCall,
+              protocolFailure,
+            );
+            if (appendFailure != null) {
+              toolResults.add(appendFailure);
+              context = context.appendToolResult(toolCall.id, appendFailure);
+              continueWithTypedToolResponses = false;
+            }
+          }
+          continue;
+        }
+
         toolsUsed.add(toolCall.toolId);
         final stepId = _toolStepId(
           transcriptEmitter.requestId,
@@ -415,9 +560,14 @@ class AgentLoop {
           _trace(
             'toolExecution.start tool=${toolCall.toolId} call=${toolCall.id}',
           );
-          final result = await _toolRouter.dispatch(
+          var result = await _toolRouter.dispatch(
             toolCall,
             sessionKey: sessionKey,
+          );
+          result = _normalizeToolDispatchResult(
+            toolCall,
+            result,
+            typedToolTurn: typedToolTurn,
           );
           _trace(
             'toolExecution.end tool=${toolCall.toolId} status=${result.statusName}',
@@ -436,6 +586,19 @@ class AgentLoop {
           variables['lastToolStatus'] = result.statusName;
           variables['lastToolSummary'] = result.summary;
           context = context.appendToolResult(toolCall.id, result);
+          if (typedToolTurn) {
+            final appendFailure = await _appendTypedToolResponse(
+              toolResponseAdapter!,
+              toolCall,
+              result,
+            );
+            if (appendFailure != null) {
+              failedToolCalls = true;
+              toolResults.add(appendFailure);
+              context = context.appendToolResult(toolCall.id, appendFailure);
+              continueWithTypedToolResponses = false;
+            }
+          }
 
           if (result.isError) {
             failedToolCalls = true;
@@ -505,6 +668,18 @@ class AgentLoop {
             toolResult: result,
           );
           context = context.appendToolResult(toolCall.id, result);
+          if (typedToolTurn) {
+            final appendFailure = await _appendTypedToolResponse(
+              toolResponseAdapter!,
+              toolCall,
+              result,
+            );
+            if (appendFailure != null) {
+              toolResults.add(appendFailure);
+              context = context.appendToolResult(toolCall.id, appendFailure);
+              continueWithTypedToolResponses = false;
+            }
+          }
 
           final nextFingerprint = _fingerprintToolException(toolCall, error);
           if (activeBlockedFingerprint == nextFingerprint) {
@@ -536,15 +711,32 @@ class AgentLoop {
       }
 
       try {
-        response = await _generateAssistantResponse(
-          context,
-          maxTokens: context.tokenBudget.outputReserve,
-          emitter: transcriptEmitter,
-          messageId: _assistantMessageId(
-            transcriptEmitter.requestId,
-            currentStepIndex,
-          ),
-        );
+        response = continueWithTypedToolResponses
+            ? await _continueAfterToolResponses(
+                toolResponseAdapter!,
+                maxTokens: context.tokenBudget.outputReserve,
+                emitter: transcriptEmitter,
+                messageId: _assistantMessageId(
+                  transcriptEmitter.requestId,
+                  currentStepIndex,
+                ),
+                suppressVisibleText: unstableToolTurn,
+              )
+            : await _generateAssistantResponse(
+                context,
+                maxTokens: context.tokenBudget.outputReserve,
+                emitter: transcriptEmitter,
+                messageId: _assistantMessageId(
+                  transcriptEmitter.requestId,
+                  currentStepIndex,
+                ),
+                phase: 'continuation',
+                suppressVisibleText: unstableToolTurn,
+              );
+        final parserFailureResult = await recoverParserFailures('continuation');
+        if (parserFailureResult != null) {
+          return parserFailureResult;
+        }
         final cancellationAfterGeneration = _checkCancelled(control);
         if (cancellationAfterGeneration != null) {
           return _cancelledResult(
@@ -583,6 +775,25 @@ class AgentLoop {
     }
 
     currentStepIndex += 1;
+    if ((sawToolCall && response.text.trim().isEmpty) ||
+        _isProtocolOnlyAssistantText(response.text)) {
+      return _completeWithFailure(
+        'post_tool_completion_missing',
+        '',
+        sessionKey: sessionKey,
+        hasFailedToolCalls: true,
+        toolsUsed: toolsUsed,
+        toolResults: toolResults,
+        continuation: LoopContinuation(
+          currentStepIndex: currentStepIndex,
+          variables: variables,
+          waitingReason: continuation.waitingReason,
+          waitingMetadata: continuation.waitingMetadata,
+          resumeToken: continuation.resumeToken,
+        ),
+        skipMemoryFormation: true,
+      );
+    }
     variables['lastResponseText'] = response.text;
 
     await _persistCompletedTurnMemory(
@@ -592,6 +803,7 @@ class AgentLoop {
       context: context,
       afterTurnMessageStart: afterTurnMessageStart,
       hasFailedToolCalls: failedToolCalls,
+      skipMemoryFormation: unstableToolTurn,
     );
 
     return AgentLoopResult(
@@ -622,15 +834,22 @@ class AgentLoop {
     required LoopContinuation continuation,
     String? exceptionType,
     String? errorMessage,
+    bool skipMemoryFormation = false,
   }) async {
-    await _memoryFormer.process(
-      MemoryTurn(
-        facts: const [],
-        hasFailedToolCalls: hasFailedToolCalls,
-        isAmbiguous: false,
-        sessionKey: sessionKey,
-      ),
-    );
+    if (skipMemoryFormation) {
+      _trace(
+        'memoryFormation.skip phase=after_turn reason=$reason persistenceAllowed=false',
+      );
+    } else {
+      await _memoryFormer.process(
+        MemoryTurn(
+          facts: const [],
+          hasFailedToolCalls: hasFailedToolCalls,
+          isAmbiguous: false,
+          sessionKey: sessionKey,
+        ),
+      );
+    }
 
     return AgentLoopResult(
       sessionResult: SessionResult.failed,
@@ -659,23 +878,34 @@ class AgentLoop {
     required int maxTokens,
     required RuntimeTranscriptEmitter emitter,
     required String messageId,
+    String phase = 'main_turn',
+    bool suppressVisibleText = false,
   }) async {
     final buffer = StringBuffer();
     try {
-      _trace('modelGeneration.start maxTokens=$maxTokens');
+      _trace(
+        'modelGeneration.start phase=$phase tools=${context.selectedTools.length} supportsFunctionCalls=${context.selectedTools.isNotEmpty} maxTokens=$maxTokens',
+      );
       final streamingAdapter = _modelAdapter;
-      if (streamingAdapter is! StreamingAgentModelAdapter) {
+      if (streamingAdapter is ToolResponseModelAdapter ||
+          streamingAdapter is! StreamingAgentModelAdapter) {
         final response = await _modelAdapter.generate(
           context,
           maxTokens: maxTokens,
         );
-        await _emitVisibleAssistantResponse(
-          response,
-          emitter: emitter,
-          messageId: messageId,
-        );
+        if (suppressVisibleText) {
+          _trace(
+            'visibleEmission.suppressed phase=$phase parserStatus=${response.parserStatus.name} hasToolCall=${response.hasToolCall}',
+          );
+        } else {
+          await _emitVisibleAssistantResponse(
+            response,
+            emitter: emitter,
+            messageId: messageId,
+          );
+        }
         _trace(
-          'modelGeneration.end hasToolCall=${response.hasToolCall} textLength=${response.text.length}',
+          'modelGeneration.end phase=$phase parserStatus=${response.parserStatus.name} hasToolCall=${response.hasToolCall} textLength=${response.text.length}',
         );
         return response;
       }
@@ -686,16 +916,26 @@ class AgentLoop {
         buffer.write(chunk);
       }
       final rawOutput = buffer.toString();
-      debugPrint('DIAGNOSTIC: AgentLoop finished gathering stream. Raw output length: ${rawOutput.length}');
-      final response = const AgentResponseParser().parse(rawOutput);
-      debugPrint('DIAGNOSTIC: AgentResponseParser finished. hasToolCall=${response.hasToolCall}, textLength=${response.text.length}');
-      await _emitVisibleAssistantResponse(
-        response,
-        emitter: emitter,
-        messageId: messageId,
+      debugPrint(
+        'DIAGNOSTIC: AgentLoop finished gathering stream. Raw output length: ${rawOutput.length}',
       );
+      final response = const AgentResponseParser().parse(rawOutput);
+      debugPrint(
+        'DIAGNOSTIC: AgentResponseParser finished. parserStatus=${response.parserStatus.name}, hasToolCall=${response.hasToolCall}, textLength=${response.text.length}',
+      );
+      if (suppressVisibleText) {
+        _trace(
+          'visibleEmission.suppressed phase=$phase parserStatus=${response.parserStatus.name} hasToolCall=${response.hasToolCall}',
+        );
+      } else {
+        await _emitVisibleAssistantResponse(
+          response,
+          emitter: emitter,
+          messageId: messageId,
+        );
+      }
       _trace(
-        'modelGeneration.end hasToolCall=${response.hasToolCall} textLength=${response.text.length}',
+        'modelGeneration.end phase=$phase parserStatus=${response.parserStatus.name} hasToolCall=${response.hasToolCall} textLength=${response.text.length}',
       );
       return response;
     } catch (error, stackTrace) {
@@ -709,6 +949,144 @@ class AgentLoop {
       );
       rethrow;
     }
+  }
+
+  Future<AgentResponse> _continueAfterToolResponses(
+    ToolResponseModelAdapter adapter, {
+    required int maxTokens,
+    required RuntimeTranscriptEmitter emitter,
+    required String messageId,
+    bool suppressVisibleText = false,
+  }) async {
+    try {
+      _trace(
+        'modelGeneration.continueAfterToolResponses.start phase=continuation',
+      );
+      final response = await adapter.continueAfterToolResponses(
+        maxTokens: maxTokens,
+      );
+      if (suppressVisibleText) {
+        _trace(
+          'visibleEmission.suppressed phase=continuation parserStatus=${response.parserStatus.name} hasToolCall=${response.hasToolCall}',
+        );
+      } else {
+        await _emitVisibleAssistantResponse(
+          response,
+          emitter: emitter,
+          messageId: messageId,
+        );
+      }
+      _trace(
+        'modelGeneration.continueAfterToolResponses.end phase=continuation parserStatus=${response.parserStatus.name} hasToolCall=${response.hasToolCall} textLength=${response.text.length}',
+      );
+      return response;
+    } catch (error, stackTrace) {
+      _traceError(
+        'modelGeneration.continueAfterToolResponses.failed',
+        error,
+        stackTrace,
+      );
+      await emitter.emit(
+        kind: RuntimeTranscriptEventKind.assistantMessageFailed,
+        messageId: messageId,
+        finalText: _generationFailureMessage(error),
+        status: 'failed',
+        summary: error.toString(),
+      );
+      rethrow;
+    }
+  }
+
+  Future<ToolResult?> _appendTypedToolResponse(
+    ToolResponseModelAdapter adapter,
+    ToolCall toolCall,
+    ToolResult result,
+  ) async {
+    try {
+      await adapter.appendToolResponse(toolCall: toolCall, result: result);
+      return null;
+    } catch (error) {
+      return ToolResult.failure(
+        'tool_response_append_failed',
+        toolId: toolCall.toolId,
+        callId: toolCall.id,
+        status: ToolResultStatus.executionError,
+        userVisibleMessage: 'tool_response_append_failed',
+        metadata: <String, Object?>{
+          'reason': 'tool_response_append_failed',
+          'errorCode': 'tool_response_append_failed',
+          'errorMessage': error.toString(),
+        },
+      );
+    }
+  }
+
+  ToolResult _normalizeToolDispatchResult(
+    ToolCall toolCall,
+    ToolResult result, {
+    required bool typedToolTurn,
+  }) {
+    if (result.summary.trim().isNotEmpty ||
+        (result.userVisibleMessage?.trim().isNotEmpty ?? false) ||
+        result.payload.isNotEmpty) {
+      return result.withCall(toolCall);
+    }
+    final reason = typedToolTurn
+        ? 'typed_tool_call_without_output'
+        : 'tool_call_without_output';
+    return ToolResult.failure(
+      reason,
+      toolId: toolCall.toolId,
+      callId: toolCall.id,
+      status: ToolResultStatus.executionError,
+      userVisibleMessage: reason,
+      metadata: <String, Object?>{'reason': reason, 'errorCode': reason},
+    );
+  }
+
+  ToolResult? _validateToolCallForDispatch(
+    ToolCall toolCall, {
+    required bool validateArguments,
+  }) {
+    if (toolCall.hasRawArguments && toolCall.rawArguments is! Map) {
+      return _protocolToolFailure(toolCall, 'malformed_tool_call');
+    }
+    if (!validateArguments) {
+      return null;
+    }
+    return _toolRouter.validateToolCall(toolCall);
+  }
+
+  ToolResult _protocolToolFailure(ToolCall toolCall, String reason) {
+    return ToolResult.failure(
+      reason,
+      toolId: toolCall.toolId,
+      callId: toolCall.id,
+      status: ToolResultStatus.validationError,
+      userVisibleMessage: reason,
+      metadata: <String, Object?>{'reason': reason, 'errorCode': reason},
+    );
+  }
+
+  ToolResult _parserFailureToolResult(
+    AgentResponse response, {
+    required String phase,
+    required String callId,
+  }) {
+    final reason = response.parserError ?? 'malformed_tool_call';
+    return ToolResult.failure(
+      reason,
+      callId: callId,
+      status: ToolResultStatus.validationError,
+      userVisibleMessage: reason,
+      metadata: <String, Object?>{
+        'reason': reason,
+        'errorCode': reason,
+        'phase': phase,
+        'parserStatus': response.parserStatus.name,
+        'visibleSuppressed': true,
+      },
+    );
   }
 
   String _failureMessage(String prefix, Object error) {
@@ -729,16 +1107,28 @@ class AgentLoop {
     required RuntimeTranscriptEmitter emitter,
     required String messageId,
   }) async {
+    if (response.hasParserFailure) {
+      debugPrint(
+        'DIAGNOSTIC: _emitVisibleAssistantResponse skipping emission because parserStatus=${response.parserStatus.name}',
+      );
+      return;
+    }
     if (response.hasToolCall) {
-      debugPrint('DIAGNOSTIC: _emitVisibleAssistantResponse skipping emission because hasToolCall=true');
+      debugPrint(
+        'DIAGNOSTIC: _emitVisibleAssistantResponse skipping emission because hasToolCall=true',
+      );
       return;
     }
     final visibleText = response.text.trim();
-    if (visibleText.isEmpty) {
-      debugPrint('DIAGNOSTIC: _emitVisibleAssistantResponse skipping emission because visibleText is empty');
+    if (visibleText.isEmpty || _isProtocolOnlyAssistantText(visibleText)) {
+      debugPrint(
+        'DIAGNOSTIC: _emitVisibleAssistantResponse skipping emission because visibleText is empty',
+      );
       return;
     }
-    debugPrint('DIAGNOSTIC: _emitVisibleAssistantResponse IS EMITTING VISIBLE TEXT to transcript!');
+    debugPrint(
+      'DIAGNOSTIC: _emitVisibleAssistantResponse IS EMITTING VISIBLE TEXT to transcript!',
+    );
     await emitter.emit(
       kind: RuntimeTranscriptEventKind.assistantMessageStarted,
       messageId: messageId,
@@ -758,6 +1148,19 @@ class AgentLoop {
     );
   }
 
+  bool _isProtocolOnlyAssistantText(String text) {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) {
+      return false;
+    }
+    if (trimmed.startsWith('<|tool_call>') &&
+        trimmed.endsWith('<tool_call|>')) {
+      return true;
+    }
+    final parsed = const AgentResponseParser().parse(trimmed);
+    return parsed.hasToolCall && parsed.text.trim().isEmpty;
+  }
+
   String _assistantMessageId(String requestId, int stepIndex) {
     return '$requestId-assistant-$stepIndex';
   }
@@ -773,21 +1176,26 @@ class AgentLoop {
     required AssembleResult context,
     required int afterTurnMessageStart,
     required bool hasFailedToolCalls,
+    bool skipMemoryFormation = false,
   }) async {
-    if (hasFailedToolCalls) {
-      await _memoryFormer.process(
-        MemoryTurn(
-          facts: const [],
-          hasFailedToolCalls: true,
-          isAmbiguous: false,
-          sessionKey: sessionKey,
-        ),
+    if (skipMemoryFormation) {
+      _trace(
+        'memoryFormation.skip phase=after_turn reason=unstable_tool_turn persistenceAllowed=false',
       );
       return;
     }
-
     final formationService = _memoryFormationService;
     if (formationService == null) {
+      if (hasFailedToolCalls) {
+        await _memoryFormer.process(
+          MemoryTurn(
+            facts: const [],
+            hasFailedToolCalls: true,
+            isAmbiguous: false,
+            sessionKey: sessionKey,
+          ),
+        );
+      }
       return;
     }
 
@@ -811,7 +1219,7 @@ class AgentLoop {
       await _memoryFormer.process(
         MemoryTurn(
           facts: result.facts,
-          hasFailedToolCalls: false,
+          hasFailedToolCalls: hasFailedToolCalls,
           isAmbiguous: result.isAmbiguous,
           sessionKey: sessionKey,
         ),
