@@ -3,7 +3,7 @@ import 'package:openreef/tools/tool_manifest.dart';
 
 class PhoneCallToolHandler implements NativeToolHandler {
   static const ToolManifest _manifest = ToolManifest(
-    id: 'communication_phone_call',
+    id: 'phone_call',
     description: 'Make a direct phone call.',
     category: 'communication',
     requiresConfirmation: true,
@@ -26,7 +26,7 @@ class PhoneCallToolHandler implements NativeToolHandler {
 
 class PhoneDialToolHandler implements NativeToolHandler {
   static const ToolManifest _manifest = ToolManifest(
-    id: 'communication_phone_dial',
+    id: 'phone_dial',
     description: 'Open the dialer.',
     category: 'communication',
     requiresConfirmation: true,
@@ -49,7 +49,7 @@ class PhoneDialToolHandler implements NativeToolHandler {
 
 class SmsSendToolHandler implements NativeToolHandler {
   static const ToolManifest _manifest = ToolManifest(
-    id: 'communication_sms_send',
+    id: 'sms_send',
     description: 'Send an SMS message.',
     category: 'communication',
     requiresConfirmation: true,

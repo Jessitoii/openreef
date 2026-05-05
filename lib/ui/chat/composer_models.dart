@@ -1,4 +1,4 @@
-enum ComposerAttachmentType { image, audio, document }
+enum ComposerAttachmentType { image, audio, document, voiceMessage }
 
 enum ComposerAttachmentAvailability {
   available,
@@ -13,12 +13,16 @@ class ComposerAttachmentDescriptor {
     required this.type,
     required this.displayName,
     this.sizeBytes,
+    this.mimeType,
+    this.sourceUri,
   });
 
   final String id;
   final ComposerAttachmentType type;
   final String displayName;
   final int? sizeBytes;
+  final String? mimeType;
+  final String? sourceUri;
 }
 
 class ComposerSubmission {

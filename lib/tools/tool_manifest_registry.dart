@@ -4,12 +4,7 @@ import 'package:openreef/tools/tool_execution_context.dart';
 
 class ToolManifestRegistry {
   ToolManifestRegistry(List<NativeToolHandler> handlers)
-    : _handlers = Map<String, NativeToolHandler>.fromEntries(
-        handlers.map(
-          (handler) =>
-              MapEntry<String, NativeToolHandler>(handler.manifest.id, handler),
-        ),
-      );
+    : _handlers = _handlersById(handlers);
 
   final Map<String, NativeToolHandler> _handlers;
 
@@ -58,7 +53,9 @@ class ToolManifestRegistry {
 
   Future<NativeToolExecutionResult> execute(
     ToolInvocation invocation, {
-    ToolExecutionContext context = const ToolExecutionContext(sessionKey: 'agent:main'),
+    ToolExecutionContext context = const ToolExecutionContext(
+      sessionKey: 'agent:main',
+    ),
   }) async {
     try {
       final validation = validate(invocation);
@@ -150,6 +147,18 @@ class ToolManifestRegistry {
     }
     return value;
   }
+}
+
+Map<String, NativeToolHandler> _handlersById(List<NativeToolHandler> handlers) {
+  final byId = <String, NativeToolHandler>{};
+  for (final handler in handlers) {
+    final id = handler.manifest.id;
+    if (byId.containsKey(id)) {
+      throw StateError('duplicate_tool_id:$id');
+    }
+    byId[id] = handler;
+  }
+  return byId;
 }
 
 class _NormalizationFailure {

@@ -17,11 +17,19 @@ enum ScheduleRecurrence { daily }
 
 enum BatteryTriggerCondition { levelAtOrBelow, levelAtOrAbove, stateChanged }
 
-enum TriggerExecutionStatus { completed, frozen, failed }
+enum TriggerExecutionStatus { completed, frozen, cancelled, failed }
 
 enum TriggerDecision { execute, skip, delay }
 
-enum TriggerRuntimeStatus { idle, completed, frozen, failed, skipped, delayed }
+enum TriggerRuntimeStatus {
+  idle,
+  completed,
+  frozen,
+  cancelled,
+  failed,
+  skipped,
+  delayed,
+}
 
 enum TriggerDeliverySource {
   manual,

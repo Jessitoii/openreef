@@ -60,6 +60,12 @@ class ComposerCapabilityResolver {
           modelSupports: modelCaps.supportsDocumentInput,
           runtimeSupports: runtimeSupport.documentPreprocessingAvailable,
         ),
+        ComposerAttachmentType.voiceMessage: _resolveType(
+          modelSupports: modelCaps.supportsTextInput,
+          runtimeSupports:
+              runtimeSupport.textRuntimeAvailable &&
+              runtimeSupport.speechToTextAvailable,
+        ),
       },
     );
   }

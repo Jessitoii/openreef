@@ -10,10 +10,9 @@ model_verbosity = "medium"
 
 # ====================== APPROVAL & GÜVENLIK ======================
 
-# workspace-write ekstra ayarları
 [sandbox_workspace_write]
-network_access = true               # Güvenlik için kapalı tut (gerekirse true yap)
+network_access = true
 
 # ====================== PROJE DOKÜMANLARI ======================
 project_doc_max_bytes = 65536        # AGENTS.md + docs klasörü için yeterli alan
-project_doc_fallback_filenames = ["AGENTS.md", "README.md", "docs/02_system/system-overview.md", "docs/02_system/system-architecture.md"]
+project_doc_fallback_filenames = ["AGENTS.md", "README.md", "docs/01-features.md", "docs/02-architecture.md"]

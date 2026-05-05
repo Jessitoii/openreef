@@ -208,7 +208,7 @@ class LiteRtBridge {
         );
         _activeChatToolCount = toolConfig.tools.length;
         _activeChatSupportsFunctionCalls = toolConfig.supportsFunctionCalls;
-        _activeChatToolCapableTurn = selectedTools.isNotEmpty;
+        _activeChatToolCapableTurn = toolConfig.supportsFunctionCalls;
         debugPrint('DIAGNOSTIC: Active model ID: $_activeModelId');
         debugPrint(
           'DIAGNOSTIC: Is marked function-capable: $supportsTypedFunctionCalls',
@@ -251,22 +251,30 @@ class LiteRtBridge {
   }
 
   Stream<LiteRtGenerationEvent> continueStream({required int maxTokens}) {
-    if (_activeChat == null) {
-      throw StateError('typed_tool_call_without_dispatch');
-    }
-    debugPrint(
-      'LiteRtBridge.continueStream: phase=continuation tools=$_activeChatToolCount supportsFunctionCalls=$_activeChatSupportsFunctionCalls maxTokens=$maxTokens',
-    );
-    if (_activeChatToolCapableTurn &&
-        (_activeChatToolCount == 0 || !_activeChatSupportsFunctionCalls)) {
-      throw StateError('tool_capability_lost');
-    }
     final controller = StreamController<LiteRtGenerationEvent>();
-    _listenToActiveChatGeneration(
-      controller,
-      keepChatOpenForToolCall: false,
-      emitFunctionModelFallback: false,
-    );
+    () async {
+      try {
+        await _guardGenerationStart();
+        if (_activeChat == null) {
+          throw StateError('typed_tool_call_without_dispatch');
+        }
+        debugPrint(
+          'LiteRtBridge.continueStream: phase=continuation tools=$_activeChatToolCount supportsFunctionCalls=$_activeChatSupportsFunctionCalls maxTokens=$maxTokens',
+        );
+        if (_activeChatToolCapableTurn &&
+            (_activeChatToolCount == 0 || !_activeChatSupportsFunctionCalls)) {
+          throw StateError('tool_capability_lost');
+        }
+        _listenToActiveChatGeneration(
+          controller,
+          keepChatOpenForToolCall: false,
+          emitFunctionModelFallback: false,
+        );
+      } catch (error, stackTrace) {
+        controller.addError(error, stackTrace);
+        await controller.close();
+      }
+    }();
     return controller.stream;
   }
 
@@ -281,6 +289,10 @@ class LiteRtBridge {
       supportsFunctionCalls: enabled && tools.isNotEmpty,
       toolChoice: tools.isEmpty ? ToolChoice.none : ToolChoice.auto,
     );
+  }
+
+  bool supportsTypedFunctionCallsFor(List<ToolDefinition> selectedTools) {
+    return _supportsTypedFunctionCalls(selectedTools);
   }
 
   void _listenToActiveChatGeneration(
@@ -592,6 +604,39 @@ class LiteRtBridge {
     _activeModelId = null;
     _memoryPressureBlockedUntil = null;
     return true;
+  }
+
+  Future<bool> recoverClosedModelSession() async {
+    await _disposeActiveChat();
+    final modelId = _activeModelId;
+    if (modelId == null) {
+      return false;
+    }
+    try {
+      await _activeModel?.close();
+    } catch (error) {
+      debugPrint(
+        'LiteRtBridge.recoverClosedModelSession: failed to close model $error',
+      );
+    } finally {
+      _activeModel = null;
+    }
+
+    try {
+      debugPrint(
+        'LiteRtBridge.recoverClosedModelSession: reloading modelId=$modelId',
+      );
+      _activeModel = await FlutterGemma.getActiveModel(
+        preferredBackend: _preferredBackend,
+        maxTokens: _maxTokens,
+      );
+      return true;
+    } catch (error) {
+      debugPrint(
+        'LiteRtBridge.recoverClosedModelSession: reload failed $error',
+      );
+      return false;
+    }
   }
 
   Future<LiteRtDeviceStats?> getDeviceStats() async {

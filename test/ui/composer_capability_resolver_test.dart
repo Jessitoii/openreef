@@ -23,6 +23,10 @@ void main() {
       snapshot.availabilityFor(ComposerAttachmentType.document),
       ComposerAttachmentAvailability.unavailable,
     );
+    expect(
+      snapshot.availabilityFor(ComposerAttachmentType.voiceMessage),
+      ComposerAttachmentAvailability.unsupportedByRuntime,
+    );
   });
 
   test(
@@ -47,6 +51,10 @@ void main() {
       );
       expect(
         snapshot.availabilityFor(ComposerAttachmentType.document),
+        ComposerAttachmentAvailability.unsupportedByRuntime,
+      );
+      expect(
+        snapshot.availabilityFor(ComposerAttachmentType.voiceMessage),
         ComposerAttachmentAvailability.unsupportedByRuntime,
       );
     },
@@ -75,6 +83,10 @@ void main() {
       expect(
         snapshot.availabilityFor(ComposerAttachmentType.document),
         ComposerAttachmentAvailability.unsupportedByModel,
+      );
+      expect(
+        snapshot.availabilityFor(ComposerAttachmentType.voiceMessage),
+        ComposerAttachmentAvailability.unsupportedByRuntime,
       );
     },
   );
@@ -105,6 +117,32 @@ void main() {
       snapshot.availabilityFor(ComposerAttachmentType.document),
       ComposerAttachmentAvailability.available,
     );
+    expect(
+      snapshot.availabilityFor(ComposerAttachmentType.voiceMessage),
+      ComposerAttachmentAvailability.unsupportedByRuntime,
+    );
+  });
+
+  test('voice message requires speech-to-text and text runtime', () {
+    final snapshot = _resolve(
+      modelCapabilities: ModelInputCapabilities.textOnly,
+      runtimeSupport: const _RuntimeSupport(stt: true),
+    );
+
+    expect(
+      snapshot.availabilityFor(ComposerAttachmentType.voiceMessage),
+      ComposerAttachmentAvailability.available,
+    );
+
+    final noTextRuntime = _resolve(
+      modelCapabilities: ModelInputCapabilities.textOnly,
+      runtimeSupport: const _RuntimeSupport(stt: true, textRuntime: false),
+    );
+
+    expect(
+      noTextRuntime.availabilityFor(ComposerAttachmentType.voiceMessage),
+      ComposerAttachmentAvailability.unsupportedByRuntime,
+    );
   });
 }
 
@@ -125,11 +163,18 @@ class _RuntimeSupport implements AttachmentRuntimeSupport {
     this.image = false,
     this.audio = false,
     this.document = false,
+    this.stt = false,
+    this.textRuntime = true,
   });
 
   final bool image;
   final bool audio;
   final bool document;
+  final bool stt;
+  final bool textRuntime;
+
+  @override
+  bool get textRuntimeAvailable => textRuntime;
 
   @override
   bool get imagePreprocessingAvailable => image;
@@ -139,4 +184,7 @@ class _RuntimeSupport implements AttachmentRuntimeSupport {
 
   @override
   bool get documentPreprocessingAvailable => document;
+
+  @override
+  bool get speechToTextAvailable => stt;
 }

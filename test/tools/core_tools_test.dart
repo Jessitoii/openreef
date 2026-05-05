@@ -17,6 +17,7 @@ import 'package:openreef/main.dart' as app_main;
 import 'package:openreef/tools/ddgs_web_search_service.dart';
 import 'package:openreef/tools/mvp_native_tools.dart';
 import 'package:openreef/tools/native_tool_adapters.dart';
+import 'package:openreef/tools/tool_errors.dart';
 import 'package:openreef/tools/tool_manifest_bridge.dart';
 import 'package:openreef/tools/tool_manifest.dart';
 import 'package:openreef/tools/tool_manifest_registry.dart';
@@ -149,9 +150,9 @@ void main() {
     expect(
       toolsById.keys,
       containsAll(<String>[
-        'communication_phone_call',
-        'communication_phone_dial',
-        'communication_sms_send',
+        'phone_call',
+        'phone_dial',
+        'sms_send',
         'communication_whatsapp_draft',
         'communication_telegram_draft',
         'app_list',
@@ -182,7 +183,7 @@ void main() {
     expect(toolsById['location_reverse_geocode']?.enabled, isFalse);
     expect(toolsById['llm_task']?.enabled, isFalse);
     for (final id in <String>[
-      'communication_sms_send',
+      'sms_send',
       'web_search',
       'web_fetch',
       'geofence_add',
@@ -288,6 +289,56 @@ void main() {
   });
 
   test(
+    'stubbed DDGS service reports unavailable instead of fake success',
+    () async {
+      await expectLater(
+        DdgsWebSearchService().search('OpenAI news'),
+        throwsA(isA<UnsupportedError>()),
+      );
+      await expectLater(
+        DdgsWebSearchService().fetch('https://example.com'),
+        throwsA(isA<UnsupportedError>()),
+      );
+
+      final searchResult = await registry.execute(
+        const ToolInvocation(
+          toolId: 'web_search',
+          arguments: <String, Object?>{'query': 'OpenAI news'},
+        ),
+      );
+      final fetchResult = await registry.execute(
+        const ToolInvocation(
+          toolId: 'web_fetch',
+          arguments: <String, Object?>{'url': 'https://example.com'},
+        ),
+      );
+
+      expect(searchResult.status, NativeToolExecutionStatus.failure);
+      expect(searchResult.error?.code, ToolErrorCode.featureUnavailable);
+      expect(searchResult.error?.message, 'web_search_backend_unavailable');
+      expect(fetchResult.status, NativeToolExecutionStatus.failure);
+      expect(fetchResult.error?.code, ToolErrorCode.featureUnavailable);
+      expect(fetchResult.error?.message, 'web_fetch_backend_unavailable');
+    },
+  );
+
+  test(
+    'bluetooth_toggle does not report success without platform effect',
+    () async {
+      final result = await registry.execute(
+        const ToolInvocation(
+          toolId: 'bluetooth_toggle',
+          arguments: <String, Object?>{'enabled': true},
+        ),
+      );
+
+      expect(result.status, NativeToolExecutionStatus.failure);
+      expect(result.error?.code, ToolErrorCode.unsupported);
+      expect(result.error?.message, 'bluetooth_toggle_platform_restricted');
+    },
+  );
+
+  test(
     'alarm_set creates a persisted daily reminder and trigger_list exposes it',
     () async {
       await registry.execute(
@@ -379,6 +430,15 @@ class _MappedSemanticEmbedder implements SemanticTextEmbedder {
 }
 
 class _NoopTaskExecutor implements AgentTaskExecutor {
+  @override
+  Future<bool> cancelActiveRun({
+    String? runId,
+    String? sessionKey,
+    RunCancellationReason reason = RunCancellationReason.userRequested,
+  }) async {
+    return false;
+  }
+
   @override
   Future<ExecutionResult> execute(ExecutionRequest request) async {
     return ExecutionResult(

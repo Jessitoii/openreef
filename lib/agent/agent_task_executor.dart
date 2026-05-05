@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:openreef/agent/agent_execution_event.dart';
 import 'package:openreef/agent/agent_loop.dart';
 import 'package:openreef/agent/agent_models.dart';
 import 'package:openreef/agent/execution_log.dart';
@@ -10,7 +11,7 @@ import 'package:openreef/agent/run_state.dart';
 import 'package:openreef/agent/runtime_transcript_event.dart';
 import 'package:openreef/context/compiled_context_package.dart';
 
-enum AgentTaskExecutionStatus { completed, frozen, failed, rejected }
+enum AgentTaskExecutionStatus { completed, frozen, cancelled, failed, rejected }
 
 enum ExecutionAdmissionOutcome {
   admitted,
@@ -240,8 +241,8 @@ class AgentTaskExecutionResult {
       status: switch (result.sessionResult) {
         SessionResult.completed => AgentTaskExecutionStatus.completed,
         SessionResult.frozen => AgentTaskExecutionStatus.frozen,
+        SessionResult.cancelled => AgentTaskExecutionStatus.cancelled,
         SessionResult.failed ||
-        SessionResult.cancelled ||
         SessionResult.suspended => AgentTaskExecutionStatus.failed,
       },
       text: result.text,
@@ -278,6 +279,12 @@ abstract class AgentTaskExecutor {
   Future<ExecutionResult> execute(ExecutionRequest request);
 
   Future<AgentTaskExecutionResult> executeTask(AgentTaskRequest request);
+
+  Future<bool> cancelActiveRun({
+    String? runId,
+    String? sessionKey,
+    RunCancellationReason reason = RunCancellationReason.userRequested,
+  });
 }
 
 class AgentLoopTaskExecutor implements AgentTaskExecutor {
@@ -286,12 +293,14 @@ class AgentLoopTaskExecutor implements AgentTaskExecutor {
     required ExecutionLogStore executionLogStore,
     ChatExecutionSink? chatSink,
     BackgroundExecutionSink? backgroundSink,
+    AgentExecutionEventSink? executionEventSink,
     RunStateStore? runStateStore,
     DateTime Function()? clock,
   }) : _agentLoop = agentLoop,
        _executionLogStore = executionLogStore,
        _chatSink = chatSink,
        _backgroundSink = backgroundSink,
+       _executionEventSink = executionEventSink,
        _runStateStore = runStateStore ?? InMemoryRunStateStore(),
        _clock = clock ?? DateTime.now;
 
@@ -299,6 +308,7 @@ class AgentLoopTaskExecutor implements AgentTaskExecutor {
   final ExecutionLogStore _executionLogStore;
   final ChatExecutionSink? _chatSink;
   final BackgroundExecutionSink? _backgroundSink;
+  final AgentExecutionEventSink? _executionEventSink;
   final RunStateStore _runStateStore;
   final DateTime Function() _clock;
   final Set<String> _activeSessionKeys = <String>{};
@@ -342,7 +352,10 @@ class AgentLoopTaskExecutor implements AgentTaskExecutor {
   }) async {
     final startedAt = _clock().toUtc();
     var runState = await _prepareRunState(request, startedAt);
-    final cancellationSignal = CancellationSignal();
+    final cancellationController = CancellationController();
+    final cancellationSignal = cancellationController.signal;
+    _activeCancellations[request.id] = cancellationSignal;
+    _activeCancellations[request.sessionKey] = cancellationSignal;
     if (runState != null) {
       _activeCancellations[runState.runId] = cancellationSignal;
     }
@@ -407,7 +420,9 @@ class AgentLoopTaskExecutor implements AgentTaskExecutor {
         ),
         continuation: continuation,
         transcriptSink: _visibleTranscriptSinkFor(request),
+        executionEventSink: _executionEventSink,
         requestId: request.id,
+        runId: runState?.runId,
         executionMode: _contextExecutionModeFor(request),
         executionSource: request.source,
         executionPolicy: request.policy,
@@ -481,6 +496,8 @@ class AgentLoopTaskExecutor implements AgentTaskExecutor {
       );
     } finally {
       _activeSessionKeys.remove(request.sessionKey);
+      _activeCancellations.remove(request.id);
+      _activeCancellations.remove(request.sessionKey);
       if (runState != null) {
         _activeCancellations.remove(runState.runId);
       }
@@ -585,7 +602,7 @@ class AgentLoopTaskExecutor implements AgentTaskExecutor {
           await _requestCancellation(
             activeRun,
             supersededByRequestId: request.id,
-            reason: 'replace_running',
+            reason: RunCancellationReason.replaceRunning,
           );
           return const _AdmissionDecision.replaceRunning();
         case DuplicateExecutionPolicy.coalesce:
@@ -703,6 +720,35 @@ class AgentLoopTaskExecutor implements AgentTaskExecutor {
     }
   }
 
+  @override
+  Future<bool> cancelActiveRun({
+    String? runId,
+    String? sessionKey,
+    RunCancellationReason reason = RunCancellationReason.userRequested,
+  }) async {
+    await _runStateStore.initialize();
+    final signal = runId != null
+        ? _activeCancellations[runId]
+        : sessionKey != null
+        ? _activeCancellations[sessionKey]
+        : _activeCancellations.values.isEmpty
+        ? null
+        : _activeCancellations.values.first;
+    if (signal == null) {
+      return false;
+    }
+
+    signal.cancel(reason.code);
+    if (runId != null) {
+      await _markRunCancellationRequested(runId);
+    } else if (sessionKey != null) {
+      for (final run in await _runStateStore.activeForSession(sessionKey)) {
+        await _markRunCancellationRequested(run.runId);
+      }
+    }
+    return true;
+  }
+
   LoopContinuation _continuationFor(ExecutionRequest request, RunState? run) {
     final context = request.runContext;
     return LoopContinuation(
@@ -732,14 +778,28 @@ class AgentLoopTaskExecutor implements AgentTaskExecutor {
   Future<void> _requestCancellation(
     RunState activeRun, {
     required String supersededByRequestId,
-    required String reason,
+    required RunCancellationReason reason,
   }) async {
-    _activeCancellations[activeRun.runId]?.cancel(reason);
-    final latest = await _runStateStore.byId(activeRun.runId) ?? activeRun;
+    _activeCancellations[activeRun.runId]?.cancel(reason.code);
+    await _markRunCancellationRequested(
+      activeRun.runId,
+      supersededByRequestId: supersededByRequestId,
+    );
+  }
+
+  Future<void> _markRunCancellationRequested(
+    String runId, {
+    String? supersededByRequestId,
+  }) async {
+    final latest = await _runStateStore.byId(runId);
+    if (latest == null) {
+      return;
+    }
     await _runStateStore.save(
       latest.copyWith(
         cancelRequested: true,
-        supersededByRequestId: supersededByRequestId,
+        supersededByRequestId:
+            supersededByRequestId ?? latest.supersededByRequestId,
         updatedAt: _clock().toUtc(),
       ),
     );

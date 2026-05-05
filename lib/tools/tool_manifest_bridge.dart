@@ -54,7 +54,7 @@ class ToolManifestBridge {
             toolId: manifest.id,
             callId: call.id,
             status: _statusForNativeError(error.code),
-            userVisibleMessage: error.message,
+            userVisibleMessage: _userVisibleMessageForNativeError(error.code),
             metadata: <String, Object?>{
               'toolId': manifest.id,
               'category': manifest.category,
@@ -90,6 +90,19 @@ class ToolManifestBridge {
       ToolErrorCode.mcpError ||
       ToolErrorCode.runtimeError => ToolResultStatus.executionError,
       ToolErrorCode.semanticError => ToolResultStatus.executionError,
+    };
+  }
+
+  String _userVisibleMessageForNativeError(ToolErrorCode code) {
+    return switch (code) {
+      ToolErrorCode.invalidArguments =>
+        'The tool could not run because its arguments were incomplete or invalid.',
+      ToolErrorCode.permissionDenied || ToolErrorCode.permissionRequired =>
+        'The tool could not run because permission was denied.',
+      ToolErrorCode.featureUnavailable ||
+      ToolErrorCode.appUnavailable ||
+      ToolErrorCode.unsupported => 'The requested tool is unavailable.',
+      _ => 'The tool failed while running.',
     };
   }
 }

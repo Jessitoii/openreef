@@ -67,6 +67,26 @@ void main() {
     },
   );
 
+  test('LiteRt adapter reports text-protocol mode for non-function model', () {
+    final adapter = LiteRtAgentModelAdapter(bridge: LiteRtBridge());
+    final tool = ToolDefinition(
+      id: 'volume_set',
+      embedding: const <double>[1, 0, 0],
+      execute: (call) async => const ToolResult.success('ok'),
+    );
+
+    expect(
+      adapter.toolInvocationModeFor(_assembleWithTools(<ToolDefinition>[tool])),
+      ToolInvocationMode.textProtocolFallback,
+    );
+    expect(
+      adapter.toolInvocationModeFor(
+        _assembleWithTools(const <ToolDefinition>[]),
+      ),
+      ToolInvocationMode.none,
+    );
+  });
+
   test(
     'typed tool calls suppress text parser fallback for the same generation',
     () async {
@@ -201,6 +221,138 @@ void main() {
       expect(response.text, 'done');
     },
   );
+
+  test(
+    'LiteRt adapter retries once after model closed generation error',
+    () async {
+      var calls = 0;
+      final adapter = LiteRtAgentModelAdapter(
+        bridge: LiteRtBridge(),
+        generateStreamOverride:
+            ({
+              required String context,
+              required int maxTokens,
+              required List<ToolDefinition> selectedTools,
+            }) {
+              calls += 1;
+              if (calls == 1) {
+                return Stream<LiteRtGenerationEvent>.error(
+                  StateError(
+                    'Bad state: Model is closed. Create a new instance to use it again',
+                  ),
+                );
+              }
+              return Stream<LiteRtGenerationEvent>.fromIterable(
+                const <LiteRtGenerationEvent>[
+                  LiteRtGenerationEvent(chunk: 'recovered', isFinished: false),
+                  LiteRtGenerationEvent(chunk: '', isFinished: true),
+                ],
+              );
+            },
+      );
+
+      final response = await adapter.generate(
+        _assembleWithTools(const <ToolDefinition>[]),
+        maxTokens: 128,
+      );
+
+      expect(calls, 2);
+      expect(response.text, 'recovered');
+    },
+  );
+
+  test(
+    'LiteRt stream retries once after model closed generation error',
+    () async {
+      var calls = 0;
+      final adapter = LiteRtAgentModelAdapter(
+        bridge: LiteRtBridge(),
+        generateStreamOverride:
+            ({
+              required String context,
+              required int maxTokens,
+              required List<ToolDefinition> selectedTools,
+            }) {
+              calls += 1;
+              if (calls == 1) {
+                return Stream<LiteRtGenerationEvent>.error(
+                  StateError(
+                    'Bad state: Model is closed. Create a new instance to use it again',
+                  ),
+                );
+              }
+              return Stream<LiteRtGenerationEvent>.fromIterable(
+                const <LiteRtGenerationEvent>[
+                  LiteRtGenerationEvent(chunk: 'recovered', isFinished: false),
+                  LiteRtGenerationEvent(chunk: '', isFinished: true),
+                ],
+              );
+            },
+      );
+
+      final chunks = await adapter
+          .generateTextStream(
+            _assembleWithTools(const <ToolDefinition>[]),
+            maxTokens: 128,
+          )
+          .toList();
+
+      expect(calls, 2);
+      expect(chunks.join(), 'recovered');
+    },
+  );
+
+  test(
+    'LiteRt adapter retries once after model closed continuation error',
+    () async {
+      var calls = 0;
+      final adapter = LiteRtAgentModelAdapter(
+        bridge: LiteRtBridge(),
+        continueStreamOverride: ({required int maxTokens}) {
+          calls += 1;
+          if (calls == 1) {
+            return Stream<LiteRtGenerationEvent>.error(
+              StateError(
+                'Bad state: Model is closed. Create a new instance to use it again',
+              ),
+            );
+          }
+          return Stream<LiteRtGenerationEvent>.fromIterable(
+            const <LiteRtGenerationEvent>[
+              LiteRtGenerationEvent(chunk: 'continued', isFinished: false),
+              LiteRtGenerationEvent(chunk: '', isFinished: true),
+            ],
+          );
+        },
+      );
+
+      final response = await adapter.continueAfterToolResponses(maxTokens: 128);
+
+      expect(calls, 2);
+      expect(response.text, 'continued');
+    },
+  );
+
+  test('LiteRt continuation model closed retry is limited to once', () async {
+    var calls = 0;
+    final adapter = LiteRtAgentModelAdapter(
+      bridge: LiteRtBridge(),
+      continueStreamOverride: ({required int maxTokens}) {
+        calls += 1;
+        return Stream<LiteRtGenerationEvent>.error(
+          StateError(
+            'Bad state: Model is closed. Create a new instance to use it again',
+          ),
+        );
+      },
+    );
+
+    await expectLater(
+      adapter.continueAfterToolResponses(maxTokens: 128),
+      throwsA(isA<StateError>()),
+    );
+    expect(calls, 2);
+  });
 }
 
 AssembleResult _assembleWithTools(List<ToolDefinition> tools) {

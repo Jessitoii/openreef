@@ -8,6 +8,8 @@ import 'package:openreef/ui/chat/composer_submission_validator.dart';
 import 'package:openreef/ui/components/app_components.dart';
 import 'package:openreef/ui/chat_session_port.dart';
 import 'package:openreef/ui/viewmodels/chat_viewmodels.dart';
+import 'package:openreef/ui/widgets/execution_trace/execution_trace_view.dart';
+import 'package:openreef/ui/widgets/execution_trace/streaming_assistant_bubble.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({
@@ -16,6 +18,7 @@ class ChatScreen extends StatefulWidget {
     required this.lastModified,
     required this.onSendMessage,
     this.onSendComposerSubmission,
+    this.onCancelActiveRun,
     this.capabilityResolver,
     this.initialComposerAttachments = const <ComposerAttachmentDescriptor>[],
     super.key,
@@ -27,6 +30,7 @@ class ChatScreen extends StatefulWidget {
   final Future<void> Function(String message) onSendMessage;
   final Future<void> Function(ComposerSubmission submission)?
   onSendComposerSubmission;
+  final Future<bool> Function()? onCancelActiveRun;
   final ComposerCapabilityResolver? capabilityResolver;
   final List<ComposerAttachmentDescriptor> initialComposerAttachments;
 
@@ -94,6 +98,23 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  Future<void> _cancelActiveRun() {
+    final cancel = widget.onCancelActiveRun;
+    if (cancel != null) {
+      return cancel().then((_) {});
+    }
+    return widget.chatSession.cancelActiveRunIfSupported().then((_) {});
+  }
+
+  bool get _isRunActive {
+    return switch (widget.chatSession.status) {
+      ChatSessionStatus.planning ||
+      ChatSessionStatus.toolRouting ||
+      ChatSessionStatus.streaming => true,
+      _ => false,
+    };
+  }
+
   ComposerCapabilityResolver get _capabilityResolver {
     return widget.capabilityResolver ??
         const ComposerCapabilityResolver(
@@ -124,55 +145,79 @@ class _ChatScreenState extends State<ChatScreen> {
               AppSpacing.md,
               AppSpacing.md,
             ),
-            child: Column(
-              key: const Key('chat-attachment-sheet'),
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Add attachment',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: AppSpacing.sm),
-                _AttachmentActionTile(
-                  key: const Key('attachment-row-image'),
-                  type: ComposerAttachmentType.image,
-                  title: 'Image',
-                  subtitle: _subtitleFor(
-                    ComposerAttachmentType.image,
-                    capabilities.availabilityFor(ComposerAttachmentType.image),
+            child: SingleChildScrollView(
+              child: Column(
+                key: const Key('chat-attachment-sheet'),
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Add attachment',
+                    style: Theme.of(context).textTheme.titleMedium,
                   ),
-                  availability: capabilities.availabilityFor(
-                    ComposerAttachmentType.image,
+                  const SizedBox(height: AppSpacing.sm),
+                  _AttachmentActionTile(
+                    key: const Key('attachment-row-image'),
+                    type: ComposerAttachmentType.image,
+                    title: 'Image',
+                    subtitle: _subtitleFor(
+                      ComposerAttachmentType.image,
+                      capabilities.availabilityFor(
+                        ComposerAttachmentType.image,
+                      ),
+                    ),
+                    availability: capabilities.availabilityFor(
+                      ComposerAttachmentType.image,
+                    ),
+                    onSelected: _addAttachment,
                   ),
-                ),
-                _AttachmentActionTile(
-                  key: const Key('attachment-row-document'),
-                  type: ComposerAttachmentType.document,
-                  title: 'Document',
-                  subtitle: _subtitleFor(
-                    ComposerAttachmentType.document,
-                    capabilities.availabilityFor(
+                  _AttachmentActionTile(
+                    key: const Key('attachment-row-document'),
+                    type: ComposerAttachmentType.document,
+                    title: 'Document',
+                    subtitle: _subtitleFor(
+                      ComposerAttachmentType.document,
+                      capabilities.availabilityFor(
+                        ComposerAttachmentType.document,
+                      ),
+                    ),
+                    availability: capabilities.availabilityFor(
                       ComposerAttachmentType.document,
                     ),
+                    onSelected: _addAttachment,
                   ),
-                  availability: capabilities.availabilityFor(
-                    ComposerAttachmentType.document,
+                  _AttachmentActionTile(
+                    key: const Key('attachment-row-audio'),
+                    type: ComposerAttachmentType.audio,
+                    title: 'Voice / Audio',
+                    subtitle: _subtitleFor(
+                      ComposerAttachmentType.audio,
+                      capabilities.availabilityFor(
+                        ComposerAttachmentType.audio,
+                      ),
+                    ),
+                    availability: capabilities.availabilityFor(
+                      ComposerAttachmentType.audio,
+                    ),
+                    onSelected: _addAttachment,
                   ),
-                ),
-                _AttachmentActionTile(
-                  key: const Key('attachment-row-audio'),
-                  type: ComposerAttachmentType.audio,
-                  title: 'Voice / Audio',
-                  subtitle: _subtitleFor(
-                    ComposerAttachmentType.audio,
-                    capabilities.availabilityFor(ComposerAttachmentType.audio),
+                  _AttachmentActionTile(
+                    key: const Key('attachment-row-voice-message'),
+                    type: ComposerAttachmentType.voiceMessage,
+                    title: 'Voice message',
+                    subtitle: _subtitleFor(
+                      ComposerAttachmentType.voiceMessage,
+                      capabilities.availabilityFor(
+                        ComposerAttachmentType.voiceMessage,
+                      ),
+                    ),
+                    availability: capabilities.availabilityFor(
+                      ComposerAttachmentType.voiceMessage,
+                    ),
+                    onSelected: _addAttachment,
                   ),
-                  availability: capabilities.availabilityFor(
-                    ComposerAttachmentType.audio,
-                  ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         );
@@ -194,6 +239,8 @@ class _ChatScreenState extends State<ChatScreen> {
           'Switch to a model with audio support to attach voice files',
         ComposerAttachmentType.document =>
           'Switch to a model with document support to attach files',
+        ComposerAttachmentType.voiceMessage =>
+          'Voice messages use speech-to-text and the selected model text path',
       },
       ComposerAttachmentAvailability.unsupportedByRuntime => switch (type) {
         ComposerAttachmentType.image => 'Image attachments are not wired yet',
@@ -201,6 +248,8 @@ class _ChatScreenState extends State<ChatScreen> {
           'Voice and audio attachments are not wired yet',
         ComposerAttachmentType.document =>
           'Document attachments are not wired yet',
+        ComposerAttachmentType.voiceMessage =>
+          'Speech-to-text is not available yet',
       },
       ComposerAttachmentAvailability.unavailable =>
         'Current model only supports text',
@@ -214,6 +263,30 @@ class _ChatScreenState extends State<ChatScreen> {
         'Voice and audio attachments are not available yet',
       ComposerAttachmentType.document =>
         'Document attachments are not available yet',
+      ComposerAttachmentType.voiceMessage =>
+        'Voice messages are not available yet',
+    };
+  }
+
+  void _addAttachment(ComposerAttachmentType type) {
+    final id = '${type.name}-${DateTime.now().microsecondsSinceEpoch}';
+    setState(() {
+      _composerAttachments.add(
+        ComposerAttachmentDescriptor(
+          id: id,
+          type: type,
+          displayName: _placeholderNameFor(type),
+        ),
+      );
+    });
+  }
+
+  String _placeholderNameFor(ComposerAttachmentType type) {
+    return switch (type) {
+      ComposerAttachmentType.image => 'Selected image',
+      ComposerAttachmentType.audio => 'Selected audio',
+      ComposerAttachmentType.document => 'Selected document',
+      ComposerAttachmentType.voiceMessage => 'Voice message',
     };
   }
 
@@ -223,8 +296,15 @@ class _ChatScreenState extends State<ChatScreen> {
       animation: widget.chatSession,
       builder: (context, child) {
         final messages = widget.chatSession.messages;
-        final activities = widget.chatSession.activities;
-        final footprint = messages.length + activities.length;
+        final trace = widget.chatSession is ExecutionTraceCapableChatSession
+            ? (widget.chatSession as ExecutionTraceCapableChatSession)
+                  .executionTrace
+            : null;
+        final activities = trace == null
+            ? widget.chatSession.activities
+            : const <SubAgentActivity>[];
+        final footprint =
+            messages.length + activities.length + (trace?.steps.length ?? 0);
         if (footprint != _lastContentFootprint) {
           _lastContentFootprint = footprint;
           WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -239,6 +319,7 @@ class _ChatScreenState extends State<ChatScreen> {
         final combinedCount =
             messages.length +
             activities.length +
+            (trace != null ? 1 : 0) +
             (widget.chatSession.pendingApprovalOrNull != null ? 1 : 0);
 
         return Column(
@@ -259,7 +340,24 @@ class _ChatScreenState extends State<ChatScreen> {
                       viewModel: ActivityViewModel.fromDomain(activity),
                     );
                   }
-                  final messageIndex = index - activities.length;
+                  final traceIndex = index - activities.length;
+                  if (trace != null && traceIndex == 0) {
+                    return ExecutionTraceView(
+                      trace: trace,
+                      expandedStepIds: _expandedActivityIds,
+                      onToggleStep: (id) {
+                        setState(() {
+                          if (_expandedActivityIds.contains(id)) {
+                            _expandedActivityIds.remove(id);
+                          } else {
+                            _expandedActivityIds.add(id);
+                          }
+                        });
+                      },
+                    );
+                  }
+                  final messageIndex =
+                      index - activities.length - (trace != null ? 1 : 0);
                   if (messageIndex < messages.length) {
                     final message = messages[messageIndex];
                     return _MessageBubble(
@@ -357,11 +455,19 @@ class _ChatScreenState extends State<ChatScreen> {
                         ),
                       ),
                       const SizedBox(width: AppSpacing.sm),
-                      AppButton.primary(
-                        onPressed: _submitMessage,
-                        icon: Icons.send,
-                        label: 'Send',
-                      ),
+                      if (_isRunActive)
+                        IconButton.filled(
+                          key: const Key('chat-stop-button'),
+                          tooltip: 'Stop generation',
+                          onPressed: _cancelActiveRun,
+                          icon: const Icon(Icons.stop),
+                        )
+                      else
+                        AppButton.primary(
+                          onPressed: _submitMessage,
+                          icon: Icons.send,
+                          label: 'Send',
+                        ),
                     ],
                   ),
                 ],
@@ -380,6 +486,7 @@ class _AttachmentActionTile extends StatelessWidget {
     required this.title,
     required this.subtitle,
     required this.availability,
+    required this.onSelected,
     super.key,
   });
 
@@ -387,6 +494,7 @@ class _AttachmentActionTile extends StatelessWidget {
   final String title;
   final String subtitle;
   final ComposerAttachmentAvailability availability;
+  final ValueChanged<ComposerAttachmentType> onSelected;
 
   @override
   Widget build(BuildContext context) {
@@ -396,7 +504,12 @@ class _AttachmentActionTile extends StatelessWidget {
       leading: Icon(_iconForType(type)),
       title: Text(title),
       subtitle: Text(subtitle),
-      onTap: enabled ? () => Navigator.of(context).pop() : null,
+      onTap: enabled
+          ? () {
+              Navigator.of(context).pop();
+              onSelected(type);
+            }
+          : null,
     );
   }
 }
@@ -431,6 +544,7 @@ IconData _iconForType(ComposerAttachmentType type) {
     ComposerAttachmentType.image => Icons.image_outlined,
     ComposerAttachmentType.audio => Icons.mic_none_outlined,
     ComposerAttachmentType.document => Icons.description_outlined,
+    ComposerAttachmentType.voiceMessage => Icons.keyboard_voice_outlined,
   };
 }
 
@@ -481,22 +595,28 @@ class _MessageBubble extends StatelessWidget {
             : MainAxisAlignment.start,
         children: [
           Flexible(
-            child: AppCard(
-              padding: const EdgeInsets.all(AppSpacing.md),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(viewModel.text, style: theme.textTheme.bodyMedium),
-                  const SizedBox(height: AppSpacing.xs),
-                  Text(
-                    viewModel.timeLabel,
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
+            child: viewModel.isStreaming && !isUser && !viewModel.isSystem
+                ? StreamingAssistantBubble(
+                    text: viewModel.text,
+                    timeLabel: viewModel.timeLabel,
+                    isStreaming: viewModel.isStreaming,
+                  )
+                : AppCard(
+                    padding: const EdgeInsets.all(AppSpacing.md),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(viewModel.text, style: theme.textTheme.bodyMedium),
+                        const SizedBox(height: AppSpacing.xs),
+                        Text(
+                          viewModel.timeLabel,
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                ],
-              ),
-            ),
           ),
         ],
       ),

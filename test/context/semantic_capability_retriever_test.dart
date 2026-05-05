@@ -85,6 +85,213 @@ void main() {
     },
   );
 
+  test(
+    'obvious Bluetooth intent is exposed even when selector is wrong',
+    () async {
+      final plan =
+          await ContextPlanner(
+            capabilityIndex: CapabilityEmbeddingIndex(
+              embedder: const _FixtureE5Embedder(),
+            ),
+            selector: const _FixedSelector(<String>['battery_info']),
+          ).plan(
+            userMessage: 'set my Bluetooth on',
+            conversationHistory: const <AgentMessage>[],
+            modelContextWindow: 4096,
+            toolCatalog: const _ToolCatalog(<ToolDefinition>[
+              _batteryTool,
+              _bluetoothTool,
+            ]),
+            skillCatalog: InMemorySkillCatalog(const <SkillDefinition>[]),
+            compactRequested: false,
+            executionMode: ExecutionMode.reactiveToolUse,
+          );
+
+      expect(
+        plan.toolExposure.primaryTools.map((tool) => tool.id),
+        contains('bluetooth_toggle'),
+      );
+      expect(
+        plan.selectorDecisions['bluetooth_toggle'],
+        'deterministic user intent tool',
+      );
+    },
+  );
+
+  test('deterministic device intents require action phrasing', () async {
+    final actionTools = <String>{
+      'bluetooth_toggle',
+      'wifi_toggle',
+      'volume_set',
+      'brightness_set',
+      'flashlight_toggle',
+      'contact_read',
+      'sms_send',
+      'sms_draft',
+    };
+    final planner = ContextPlanner(
+      capabilityIndex: CapabilityEmbeddingIndex(
+        embedder: const _FixtureE5Embedder(),
+      ),
+      selector: const _FixedSelector(<String>['battery_info']),
+    );
+
+    for (final prompt in const <String>[
+      'Bluetooth history',
+      'what is the volume of a cylinder',
+      'volume of sphere',
+      'sound waves',
+      'wireless architecture',
+      'sms architecture',
+      'Bluetooth protocol explanation',
+      'write docs about SMS architecture',
+    ]) {
+      final plan = await planner.plan(
+        userMessage: prompt,
+        conversationHistory: const <AgentMessage>[],
+        modelContextWindow: 4096,
+        toolCatalog: const _ToolCatalog(<ToolDefinition>[
+          _batteryTool,
+          _bluetoothTool,
+          _wifiTool,
+          _volumeTool,
+          _brightnessTool,
+          _flashlightTool,
+          _contactReadTool,
+          _smsSendTool,
+          _smsDraftTool,
+        ]),
+        skillCatalog: InMemorySkillCatalog(const <SkillDefinition>[]),
+        compactRequested: false,
+        executionMode: ExecutionMode.reactiveToolUse,
+      );
+
+      expect(
+        plan.toolExposure.primaryTools.map((tool) => tool.id).toSet(),
+        isNot(containsAll(actionTools)),
+        reason: prompt,
+      );
+      expect(
+        plan.toolExposure.primaryTools.map((tool) => tool.id).toSet()
+          ..remove('battery_info'),
+        isEmpty,
+        reason: prompt,
+      );
+    }
+  });
+
+  test(
+    'deterministic action intents prepend only registered enabled tools',
+    () async {
+      final planner = ContextPlanner(
+        capabilityIndex: CapabilityEmbeddingIndex(
+          embedder: const _FixtureE5Embedder(),
+        ),
+        selector: const _FixedSelector(<String>['battery_info']),
+      );
+
+      final cases = <String, List<String>>{
+        'turn Bluetooth on': <String>['bluetooth_toggle'],
+        'switch Bluetooth off': <String>['bluetooth_toggle'],
+        'enable Wi-Fi': <String>['wifi_toggle'],
+        'turn the volume all the way up': <String>['volume_set'],
+        'mute the volume': <String>['volume_set'],
+        'set brightness to 30%': <String>['brightness_set'],
+        'enable flashlight': <String>['flashlight_toggle'],
+        'send an SMS to mom': <String>['contact_read', 'sms_send', 'sms_draft'],
+      };
+
+      for (final entry in cases.entries) {
+        final plan = await planner.plan(
+          userMessage: entry.key,
+          conversationHistory: const <AgentMessage>[],
+          modelContextWindow: 4096,
+          toolCatalog: const _ToolCatalog(<ToolDefinition>[
+            _batteryTool,
+            _bluetoothTool,
+            _wifiTool,
+            _volumeTool,
+            _brightnessTool,
+            _flashlightTool,
+            _contactReadTool,
+            _smsSendTool,
+            _smsDraftTool,
+          ]),
+          skillCatalog: InMemorySkillCatalog(const <SkillDefinition>[]),
+          compactRequested: false,
+          executionMode: ExecutionMode.reactiveToolUse,
+        );
+
+        expect(
+          plan.toolExposure.primaryTools.map((tool) => tool.id),
+          containsAll(entry.value),
+          reason: entry.key,
+        );
+      }
+    },
+  );
+
+  test('disabled deterministic tools are not injected', () async {
+    final disabledBluetooth = ToolDefinition(
+      id: 'bluetooth_toggle',
+      embedding: const <double>[],
+      description: 'Turn Bluetooth on or off.',
+      enabled: false,
+      execute: _noopExecute,
+    );
+
+    final plan =
+        await ContextPlanner(
+          capabilityIndex: CapabilityEmbeddingIndex(
+            embedder: const _FixtureE5Embedder(),
+          ),
+          selector: const _FixedSelector(<String>['battery_info']),
+        ).plan(
+          userMessage: 'turn Bluetooth on',
+          conversationHistory: const <AgentMessage>[],
+          modelContextWindow: 4096,
+          toolCatalog: _ToolCatalog(<ToolDefinition>[
+            _batteryTool,
+            disabledBluetooth,
+          ]),
+          skillCatalog: InMemorySkillCatalog(const <SkillDefinition>[]),
+          compactRequested: false,
+          executionMode: ExecutionMode.reactiveToolUse,
+        );
+
+    expect(
+      plan.toolExposure.primaryTools.map((tool) => tool.id),
+      isNot(contains('bluetooth_toggle')),
+    );
+  });
+
+  test('web search intent exposes search and fetch tools', () async {
+    final plan =
+        await ContextPlanner(
+          capabilityIndex: CapabilityEmbeddingIndex(
+            embedder: const _FixtureE5Embedder(),
+          ),
+          selector: const _FixedSelector(<String>['battery_info']),
+        ).plan(
+          userMessage: 'search the web for reef tank cycling',
+          conversationHistory: const <AgentMessage>[],
+          modelContextWindow: 4096,
+          toolCatalog: const _ToolCatalog(<ToolDefinition>[
+            _batteryTool,
+            _webSearchTool,
+            _webFetchTool,
+          ]),
+          skillCatalog: InMemorySkillCatalog(const <SkillDefinition>[]),
+          compactRequested: false,
+          executionMode: ExecutionMode.reactiveToolUse,
+        );
+
+    expect(
+      plan.toolExposure.primaryTools.map((tool) => tool.id),
+      containsAll(<String>['web_search', 'web_fetch']),
+    );
+  });
+
   test('planner degrades when semantic embedder is unavailable', () async {
     final plan =
         await ContextPlanner(
@@ -133,6 +340,127 @@ void main() {
       ),
       isTrue,
     );
+  });
+
+  test(
+    'degraded fallback does not select action tools from bare nouns',
+    () async {
+      final planner = ContextPlanner(
+        capabilityIndex: CapabilityEmbeddingIndex(
+          embedder: const _UnavailableEmbedder(),
+        ),
+        selector: const SemanticFallbackCapabilitySelector(),
+      );
+
+      final cases = <String, List<String>>{
+        'Bluetooth history': <String>['bluetooth_toggle'],
+        'what is the volume of a cylinder': <String>['volume_set'],
+        'volume of sphere': <String>['volume_set'],
+        'sms architecture': <String>['sms_send', 'sms_draft'],
+        'search my memory for yesterday': <String>['web_search'],
+      };
+
+      for (final entry in cases.entries) {
+        final plan = await planner.plan(
+          userMessage: entry.key,
+          conversationHistory: const <AgentMessage>[],
+          modelContextWindow: 4096,
+          toolCatalog: const _ToolCatalog(<ToolDefinition>[
+            _memorySearchTool,
+            _bluetoothTool,
+            _volumeTool,
+            _smsSendTool,
+            _smsDraftTool,
+            _webSearchTool,
+            _webFetchTool,
+          ]),
+          skillCatalog: InMemorySkillCatalog(const <SkillDefinition>[]),
+          compactRequested: false,
+          executionMode: ExecutionMode.reactiveToolUse,
+        );
+
+        final selected = plan.toolExposure.primaryTools.map((tool) => tool.id);
+        for (final blockedToolId in entry.value) {
+          expect(
+            selected,
+            isNot(contains(blockedToolId)),
+            reason: entry.key,
+          );
+        }
+      }
+    },
+  );
+
+  test('degraded fallback respects disabled action tools', () async {
+    final disabledBluetooth = ToolDefinition(
+      id: 'bluetooth_toggle',
+      embedding: const <double>[],
+      description: 'Turn Bluetooth on or off.',
+      enabled: false,
+      execute: _noopExecute,
+    );
+
+    final plan =
+        await ContextPlanner(
+          capabilityIndex: CapabilityEmbeddingIndex(
+            embedder: const _UnavailableEmbedder(),
+          ),
+          selector: const SemanticFallbackCapabilitySelector(),
+        ).plan(
+          userMessage: 'turn Bluetooth on',
+          conversationHistory: const <AgentMessage>[],
+          modelContextWindow: 4096,
+          toolCatalog: _ToolCatalog(<ToolDefinition>[disabledBluetooth]),
+          skillCatalog: InMemorySkillCatalog(const <SkillDefinition>[]),
+          compactRequested: false,
+          executionMode: ExecutionMode.reactiveToolUse,
+        );
+
+    expect(
+      plan.toolExposure.primaryTools.map((tool) => tool.id),
+      isNot(contains('bluetooth_toggle')),
+    );
+  });
+
+  test('degraded fallback still exposes strict action intents', () async {
+    final planner = ContextPlanner(
+      capabilityIndex: CapabilityEmbeddingIndex(
+        embedder: const _UnavailableEmbedder(),
+      ),
+      selector: const SemanticFallbackCapabilitySelector(),
+    );
+    final cases = <String, List<String>>{
+      'turn Bluetooth on': <String>['bluetooth_toggle'],
+      'turn the volume all the way up': <String>['volume_set'],
+      'send an SMS to mom': <String>['sms_send', 'sms_draft'],
+      'search the web for OpenAI news': <String>['web_search', 'web_fetch'],
+    };
+
+    for (final entry in cases.entries) {
+      final plan = await planner.plan(
+        userMessage: entry.key,
+        conversationHistory: const <AgentMessage>[],
+        modelContextWindow: 4096,
+        toolCatalog: const _ToolCatalog(<ToolDefinition>[
+          _bluetoothTool,
+          _volumeTool,
+          _contactReadTool,
+          _smsSendTool,
+          _smsDraftTool,
+          _webSearchTool,
+          _webFetchTool,
+        ]),
+        skillCatalog: InMemorySkillCatalog(const <SkillDefinition>[]),
+        compactRequested: false,
+        executionMode: ExecutionMode.reactiveToolUse,
+      );
+
+      expect(
+        plan.toolExposure.primaryTools.map((tool) => tool.id),
+        containsAll(entry.value),
+        reason: entry.key,
+      );
+    }
   });
 
   test(
@@ -443,6 +771,96 @@ const ToolDefinition _batteryTool = ToolDefinition(
   execute: _noopExecute,
 );
 
+const ToolDefinition _memorySearchTool = ToolDefinition(
+  id: 'memory_search',
+  embedding: <double>[],
+  description: 'Search local memory records.',
+  category: 'memory',
+  tags: <String>['memory', 'search'],
+  execute: _noopExecute,
+);
+
+const ToolDefinition _bluetoothTool = ToolDefinition(
+  id: 'bluetooth_toggle',
+  embedding: <double>[],
+  description: 'Turn Bluetooth on or off.',
+  category: 'system',
+  tags: <String>['device', 'bluetooth'],
+  execute: _noopExecute,
+);
+
+const ToolDefinition _wifiTool = ToolDefinition(
+  id: 'wifi_toggle',
+  embedding: <double>[],
+  description: 'Turn Wi-Fi on or off.',
+  category: 'system',
+  tags: <String>['device', 'wifi'],
+  execute: _noopExecute,
+);
+
+const ToolDefinition _brightnessTool = ToolDefinition(
+  id: 'brightness_set',
+  embedding: <double>[],
+  description: 'Set screen brightness.',
+  category: 'system',
+  tags: <String>['device', 'brightness'],
+  execute: _noopExecute,
+);
+
+const ToolDefinition _flashlightTool = ToolDefinition(
+  id: 'flashlight_toggle',
+  embedding: <double>[],
+  description: 'Turn flashlight on or off.',
+  category: 'system',
+  tags: <String>['device', 'flashlight'],
+  execute: _noopExecute,
+);
+
+const ToolDefinition _contactReadTool = ToolDefinition(
+  id: 'contact_read',
+  embedding: <double>[],
+  description: 'Read contacts.',
+  category: 'contacts',
+  tags: <String>['contacts'],
+  execute: _noopExecute,
+);
+
+const ToolDefinition _smsSendTool = ToolDefinition(
+  id: 'sms_send',
+  embedding: <double>[],
+  description: 'Send an SMS.',
+  category: 'communication',
+  tags: <String>['sms'],
+  execute: _noopExecute,
+);
+
+const ToolDefinition _smsDraftTool = ToolDefinition(
+  id: 'sms_draft',
+  embedding: <double>[],
+  description: 'Draft an SMS.',
+  category: 'communication',
+  tags: <String>['sms'],
+  execute: _noopExecute,
+);
+
+const ToolDefinition _webSearchTool = ToolDefinition(
+  id: 'web_search',
+  embedding: <double>[],
+  description: 'Search the web.',
+  category: 'research',
+  tags: <String>['web', 'search'],
+  execute: _noopExecute,
+);
+
+const ToolDefinition _webFetchTool = ToolDefinition(
+  id: 'web_fetch',
+  embedding: <double>[],
+  description: 'Fetch a web page.',
+  category: 'research',
+  tags: <String>['web', 'fetch'],
+  execute: _noopExecute,
+);
+
 const ToolDefinition _notifyTool = ToolDefinition(
   id: 'notify',
   embedding: <double>[],
@@ -582,5 +1000,20 @@ class _InventingSelector implements CapabilitySelector {
     return const CandidateSelectionProposal(
       primaryToolIds: <String>['made_up_tool'],
     );
+  }
+}
+
+class _FixedSelector implements CapabilitySelector {
+  const _FixedSelector(this.toolIds);
+
+  final List<String> toolIds;
+
+  @override
+  Future<CandidateSelectionProposal> select({
+    required String userMessage,
+    required ExecutionMode executionMode,
+    required List<CapabilityRetrievedCandidate> retrievedCandidates,
+  }) async {
+    return CandidateSelectionProposal(primaryToolIds: toolIds);
   }
 }

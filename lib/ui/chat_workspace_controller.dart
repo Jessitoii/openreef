@@ -114,6 +114,20 @@ class ChatWorkspaceController extends ChangeNotifier
     notifyListeners();
   }
 
+  Future<bool> cancelActiveRun() async {
+    final session = _activeSession;
+    if (session == null) {
+      return false;
+    }
+
+    final cancelled = await session.chatSession.cancelActiveRunIfSupported();
+    await _activePersistQueue;
+    await _persistSession(session);
+    _refreshRecentSessions();
+    notifyListeners();
+    return cancelled;
+  }
+
   void showDestination(AppShellDestination destination) {
     if (_destination == destination) {
       return;

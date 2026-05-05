@@ -398,6 +398,15 @@ class _RecordingTaskExecutor implements AgentTaskExecutor {
   final List<AgentTaskRequest> requests = <AgentTaskRequest>[];
 
   @override
+  Future<bool> cancelActiveRun({
+    String? runId,
+    String? sessionKey,
+    RunCancellationReason reason = RunCancellationReason.userRequested,
+  }) async {
+    return false;
+  }
+
+  @override
   Future<ExecutionResult> execute(ExecutionRequest request) async {
     throw UnimplementedError();
   }

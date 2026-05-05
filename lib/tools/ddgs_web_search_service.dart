@@ -3,12 +3,16 @@ import 'package:openreef/tools/tool_execution_context.dart';
 import 'package:openreef/tools/tool_manifest.dart';
 
 class DdgsWebSearchService {
+  static const String searchUnavailableMessage =
+      'web_search_backend_unavailable';
+  static const String fetchUnavailableMessage = 'web_fetch_backend_unavailable';
+
   Future<String> search(String query) async {
-    return '{"results": []}';
+    throw UnsupportedError(searchUnavailableMessage);
   }
 
   Future<String> fetch(String url) async {
-    return '';
+    throw UnsupportedError(fetchUnavailableMessage);
   }
 }
 
@@ -54,8 +58,31 @@ class WebSearchToolHandler implements NativeToolHandler {
       );
     }
 
-    final results = await _service.search(query);
+    final String results;
+    try {
+      results = await _service.search(query);
+    } on UnsupportedError {
+      return NativeToolExecutionResult.failure(
+        error: const ToolExecutionError(
+          code: ToolErrorCode.featureUnavailable,
+          message: DdgsWebSearchService.searchUnavailableMessage,
+        ),
+      );
+    }
+    if (_isEmptySearchResult(results)) {
+      return NativeToolExecutionResult.failure(
+        error: const ToolExecutionError(
+          code: ToolErrorCode.featureUnavailable,
+          message: DdgsWebSearchService.searchUnavailableMessage,
+        ),
+      );
+    }
     return NativeToolExecutionResult.success(content: results);
+  }
+
+  bool _isEmptySearchResult(String results) {
+    final normalized = results.replaceAll(RegExp(r'\s+'), '');
+    return normalized.isEmpty || normalized == '{"results":[]}';
   }
 }
 
@@ -101,7 +128,25 @@ class WebFetchToolHandler implements NativeToolHandler {
       );
     }
 
-    final text = await _service.fetch(url);
+    final String text;
+    try {
+      text = await _service.fetch(url);
+    } on UnsupportedError {
+      return NativeToolExecutionResult.failure(
+        error: const ToolExecutionError(
+          code: ToolErrorCode.featureUnavailable,
+          message: DdgsWebSearchService.fetchUnavailableMessage,
+        ),
+      );
+    }
+    if (text.trim().isEmpty) {
+      return NativeToolExecutionResult.failure(
+        error: const ToolExecutionError(
+          code: ToolErrorCode.featureUnavailable,
+          message: DdgsWebSearchService.fetchUnavailableMessage,
+        ),
+      );
+    }
     return NativeToolExecutionResult.success(content: text);
   }
 }

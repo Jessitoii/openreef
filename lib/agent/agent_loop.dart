@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:openreef/agent/agent_execution_event.dart';
 import 'package:openreef/agent/agent_model_adapter.dart';
 import 'package:openreef/agent/agent_models.dart';
 import 'package:openreef/agent/execution_request.dart';
@@ -34,8 +35,11 @@ class AgentLoop {
   static const int maxErrors = 3;
   static const int _maxIterations = 12;
   static const int _maxRepeatedBlockedFingerprints = 3;
+  static const int _maxParserRepairAttempts = 1;
   static const int _autoCompactReserveTokens = 2000;
   static const int _autoCompactSummaryTokens = 4000;
+  static const String _malformedToolCallMessage =
+      'I tried to call the tool but could not produce a valid tool call.';
 
   final ContextAssembler _contextAssembler;
   final ReefCompactor _compactor;
@@ -55,12 +59,27 @@ class AgentLoop {
     LoopControl control = const LoopControl(),
     LoopContinuation continuation = const LoopContinuation(),
     RuntimeTranscriptSink? transcriptSink,
+    AgentExecutionEventSink? executionEventSink,
     String? requestId,
+    String? runId,
     ExecutionMode executionMode = ExecutionMode.chat,
     ExecutionSource executionSource = ExecutionSource.user,
     ExecutionPolicy? executionPolicy,
   }) async {
     final startedAt = DateTime.now().toUtc();
+    final effectiveRequestId =
+        requestId ?? 'loop_${startedAt.microsecondsSinceEpoch}';
+    final transcriptEmitter = RuntimeTranscriptEmitter(
+      requestId: effectiveRequestId,
+      sessionKey: sessionKey,
+      sink: transcriptSink,
+    );
+    final executionEmitter = AgentExecutionEmitter(
+      requestId: effectiveRequestId,
+      sessionId: sessionKey,
+      runId: runId,
+      sink: executionEventSink,
+    );
     final seededHistory =
         continuation.currentStepIndex == 0 &&
             continuation.variables.isEmpty &&
@@ -118,6 +137,7 @@ class AgentLoop {
         continuation: continuation,
         exceptionType: error.runtimeType.toString(),
         errorMessage: error.toString(),
+        executionEmitter: executionEmitter,
       );
     } catch (error, stackTrace) {
       _traceError('assembleRequest.failed', error, stackTrace);
@@ -131,6 +151,7 @@ class AgentLoop {
         continuation: continuation,
         exceptionType: error.runtimeType.toString(),
         errorMessage: error.toString(),
+        executionEmitter: executionEmitter,
       );
     }
     if (_hasContinuationState(continuation)) {
@@ -160,11 +181,6 @@ class AgentLoop {
     var currentStepIndex = continuation.currentStepIndex;
     var variables = Map<String, Object?>.from(continuation.variables);
     late AgentResponse response;
-    final transcriptEmitter = RuntimeTranscriptEmitter(
-      requestId: requestId ?? 'loop_${startedAt.microsecondsSinceEpoch}',
-      sessionKey: sessionKey,
-      sink: transcriptSink,
-    );
 
     Future<AgentLoopResult?> recoverParserFailures(String phase) async {
       while (response.hasParserFailure) {
@@ -179,14 +195,16 @@ class AgentLoop {
         );
         toolResults.add(result);
         context = context.appendToolResult(result.callId!, result);
+        final toolMode = _toolInvocationMode(context);
         _trace(
-          'parser.outcome phase=$phase tools=${context.selectedTools.length} supportsFunctionCalls=${context.selectedTools.isNotEmpty} parserStatus=${response.parserStatus.name} normalizedRequest=false visibleSuppressed=true persistenceAllowed=false',
+          'parser.outcome phase=$phase tools=${context.selectedTools.length} toolMode=${toolMode.name} supportsFunctionCalls=${toolMode == ToolInvocationMode.structuredFunctionCalls} parserStatus=${response.parserStatus.name} normalizedRequest=false visibleSuppressed=true persistenceAllowed=false',
         );
-        if (iterationCount > control.maxSteps ||
+        if (iterationCount > _maxParserRepairAttempts ||
+            iterationCount > control.maxSteps ||
             iterationCount > _maxIterations) {
           return _completeWithFailure(
             'malformed_tool_call',
-            '',
+            _malformedToolCallMessage,
             sessionKey: sessionKey,
             hasFailedToolCalls: true,
             toolsUsed: toolsUsed,
@@ -199,6 +217,7 @@ class AgentLoop {
               resumeToken: continuation.resumeToken,
             ),
             skipMemoryFormation: true,
+            executionEmitter: executionEmitter,
           );
         }
         try {
@@ -206,12 +225,14 @@ class AgentLoop {
             context,
             maxTokens: context.tokenBudget.outputReserve,
             emitter: transcriptEmitter,
+            executionEmitter: executionEmitter,
             messageId: _assistantMessageId(
               transcriptEmitter.requestId,
               currentStepIndex,
             ),
             phase: 'continuation',
             suppressVisibleText: true,
+            control: control,
           );
         } catch (error, stackTrace) {
           _traceError('modelGeneration.failed', error, stackTrace);
@@ -232,6 +253,7 @@ class AgentLoop {
             exceptionType: error.runtimeType.toString(),
             errorMessage: error.toString(),
             skipMemoryFormation: true,
+            executionEmitter: executionEmitter,
           );
         }
       }
@@ -251,6 +273,7 @@ class AgentLoop {
           waitingMetadata: continuation.waitingMetadata,
           resumeToken: continuation.resumeToken,
         ),
+        executionEmitter: executionEmitter,
       );
     }
 
@@ -259,11 +282,13 @@ class AgentLoop {
         context,
         maxTokens: context.tokenBudget.outputReserve,
         emitter: transcriptEmitter,
+        executionEmitter: executionEmitter,
         messageId: _assistantMessageId(
           transcriptEmitter.requestId,
           currentStepIndex,
         ),
         phase: 'main_turn',
+        control: control,
       );
       final parserFailureResult = await recoverParserFailures('main_turn');
       if (parserFailureResult != null) {
@@ -282,6 +307,7 @@ class AgentLoop {
             waitingMetadata: continuation.waitingMetadata,
             resumeToken: continuation.resumeToken,
           ),
+          executionEmitter: executionEmitter,
         );
       }
     } catch (error, stackTrace) {
@@ -302,6 +328,7 @@ class AgentLoop {
         ),
         exceptionType: error.runtimeType.toString(),
         errorMessage: error.toString(),
+        executionEmitter: executionEmitter,
       );
     }
 
@@ -323,6 +350,7 @@ class AgentLoop {
             waitingMetadata: continuation.waitingMetadata,
             resumeToken: continuation.resumeToken,
           ),
+          executionEmitter: executionEmitter,
         );
       }
       if (_timedOut(startedAt, control)) {
@@ -340,6 +368,7 @@ class AgentLoop {
             waitingMetadata: continuation.waitingMetadata,
             resumeToken: continuation.resumeToken,
           ),
+          executionEmitter: executionEmitter,
         );
       }
       if (iterationCount > control.maxSteps ||
@@ -358,6 +387,7 @@ class AgentLoop {
             waitingMetadata: continuation.waitingMetadata,
             resumeToken: continuation.resumeToken,
           ),
+          executionEmitter: executionEmitter,
         );
       }
 
@@ -376,6 +406,7 @@ class AgentLoop {
             waitingMetadata: continuation.waitingMetadata,
             resumeToken: continuation.resumeToken,
           ),
+          executionEmitter: executionEmitter,
         );
       }
 
@@ -394,6 +425,7 @@ class AgentLoop {
             waitingMetadata: continuation.waitingMetadata,
             resumeToken: continuation.resumeToken,
           ),
+          executionEmitter: executionEmitter,
         );
       }
 
@@ -417,6 +449,7 @@ class AgentLoop {
           ),
           exceptionType: error.runtimeType.toString(),
           errorMessage: error.toString(),
+          executionEmitter: executionEmitter,
         );
       }
 
@@ -448,12 +481,14 @@ class AgentLoop {
           context,
           maxTokens: context.tokenBudget.outputReserve,
           emitter: transcriptEmitter,
+          executionEmitter: executionEmitter,
           messageId: _assistantMessageId(
             transcriptEmitter.requestId,
             currentStepIndex,
           ),
           phase: 'continuation',
           suppressVisibleText: true,
+          control: control,
         );
         final parserFailureResult = await recoverParserFailures('continuation');
         if (parserFailureResult != null) {
@@ -464,17 +499,7 @@ class AgentLoop {
       for (final toolCall in pendingToolCalls) {
         final cancellationBeforeTool = _checkCancelled(control);
         if (cancellationBeforeTool != null) {
-          final result = ToolResult.failure(
-            'Tool execution was cancelled.',
-            toolId: toolCall.toolId,
-            callId: toolCall.id,
-            status: ToolResultStatus.cancelled,
-            userVisibleMessage: 'Tool execution was cancelled.',
-            metadata: <String, Object?>{
-              'reason': cancellationBeforeTool,
-              'errorCode': 'tool_cancelled',
-            },
-          );
+          final result = _cancelledToolResult(toolCall, cancellationBeforeTool);
           toolsUsed.add(toolCall.toolId);
           toolResults.add(result);
           context = context.appendToolResult(toolCall.id, result);
@@ -489,6 +514,7 @@ class AgentLoop {
               waitingMetadata: continuation.waitingMetadata,
               resumeToken: continuation.resumeToken,
             ),
+            executionEmitter: executionEmitter,
           );
         }
 
@@ -507,6 +533,7 @@ class AgentLoop {
               waitingMetadata: continuation.waitingMetadata,
               resumeToken: continuation.resumeToken,
             ),
+            executionEmitter: executionEmitter,
           );
         }
 
@@ -515,6 +542,8 @@ class AgentLoop {
           validateArguments: true,
         );
         if (protocolFailure != null) {
+          await executionEmitter.emitToolCallStarted(toolCall);
+          await executionEmitter.emitToolCallFailed(toolCall, protocolFailure);
           failedToolCalls = true;
           unstableToolTurn = true;
           toolResults.add(protocolFailure);
@@ -548,6 +577,11 @@ class AgentLoop {
           status: 'running',
           summary: 'Tool ${toolCall.toolId} started.',
         );
+        await executionEmitter.emitStepStarted(
+          stepId: stepId,
+          label: displayLabelForToolId(toolCall.toolId),
+        );
+        await executionEmitter.emitToolCallStarted(toolCall);
         try {
           await transcriptEmitter.emit(
             kind: RuntimeTranscriptEventKind.toolStepUpdated,
@@ -557,13 +591,48 @@ class AgentLoop {
             status: 'running',
             summary: 'Dispatching through ToolRouter.',
           );
+          await executionEmitter.emitStepUpdated(
+            stepId: stepId,
+            status: 'running',
+          );
           _trace(
             'toolExecution.start tool=${toolCall.toolId} call=${toolCall.id}',
           );
           var result = await _toolRouter.dispatch(
             toolCall,
             sessionKey: sessionKey,
+            userMessage: userMessage,
+            cancellationSignal: control.cancellationSignal,
+            executionEmitter: executionEmitter,
           );
+          final cancellationAfterTool = _checkCancelled(control);
+          if (cancellationAfterTool != null) {
+            result = _cancelledToolResult(toolCall, cancellationAfterTool);
+            toolResults.add(result);
+            await transcriptEmitter.emit(
+              kind: RuntimeTranscriptEventKind.toolStepFinished,
+              stepId: stepId,
+              toolCallId: toolCall.id,
+              toolId: toolCall.toolId,
+              status: result.statusName,
+              summary: result.userVisibleMessage ?? result.summary,
+              toolResult: result,
+            );
+            await executionEmitter.emitToolCallFailed(toolCall, result);
+            return _cancelledResult(
+              cancellationAfterTool,
+              toolsUsed: toolsUsed,
+              toolResults: toolResults,
+              continuation: LoopContinuation(
+                currentStepIndex: currentStepIndex,
+                variables: variables,
+                waitingReason: continuation.waitingReason,
+                waitingMetadata: continuation.waitingMetadata,
+                resumeToken: continuation.resumeToken,
+              ),
+              executionEmitter: executionEmitter,
+            );
+          }
           result = _normalizeToolDispatchResult(
             toolCall,
             result,
@@ -582,6 +651,11 @@ class AgentLoop {
             summary: result.userVisibleMessage ?? result.summary,
             toolResult: result,
           );
+          if (result.isError) {
+            await executionEmitter.emitToolCallFailed(toolCall, result);
+          } else {
+            await executionEmitter.emitToolCallResult(toolCall, result);
+          }
           variables['lastToolId'] = toolCall.toolId;
           variables['lastToolStatus'] = result.statusName;
           variables['lastToolSummary'] = result.summary;
@@ -634,6 +708,7 @@ class AgentLoop {
                   waitingMetadata: continuation.waitingMetadata,
                   resumeToken: continuation.resumeToken,
                 ),
+                executionEmitter: executionEmitter,
               );
             }
           } else {
@@ -667,6 +742,7 @@ class AgentLoop {
             summary: result.userVisibleMessage ?? result.summary,
             toolResult: result,
           );
+          await executionEmitter.emitToolCallFailed(toolCall, result);
           context = context.appendToolResult(toolCall.id, result);
           if (typedToolTurn) {
             final appendFailure = await _appendTypedToolResponse(
@@ -705,6 +781,7 @@ class AgentLoop {
                 waitingMetadata: continuation.waitingMetadata,
                 resumeToken: continuation.resumeToken,
               ),
+              executionEmitter: executionEmitter,
             );
           }
         }
@@ -716,22 +793,26 @@ class AgentLoop {
                 toolResponseAdapter!,
                 maxTokens: context.tokenBudget.outputReserve,
                 emitter: transcriptEmitter,
+                executionEmitter: executionEmitter,
                 messageId: _assistantMessageId(
                   transcriptEmitter.requestId,
                   currentStepIndex,
                 ),
                 suppressVisibleText: unstableToolTurn,
+                control: control,
               )
             : await _generateAssistantResponse(
                 context,
                 maxTokens: context.tokenBudget.outputReserve,
                 emitter: transcriptEmitter,
+                executionEmitter: executionEmitter,
                 messageId: _assistantMessageId(
                   transcriptEmitter.requestId,
                   currentStepIndex,
                 ),
                 phase: 'continuation',
                 suppressVisibleText: unstableToolTurn,
+                control: control,
               );
         final parserFailureResult = await recoverParserFailures('continuation');
         if (parserFailureResult != null) {
@@ -750,6 +831,7 @@ class AgentLoop {
               waitingMetadata: continuation.waitingMetadata,
               resumeToken: continuation.resumeToken,
             ),
+            executionEmitter: executionEmitter,
           );
         }
       } catch (error, stackTrace) {
@@ -770,6 +852,7 @@ class AgentLoop {
           ),
           exceptionType: error.runtimeType.toString(),
           errorMessage: error.toString(),
+          executionEmitter: executionEmitter,
         );
       }
     }
@@ -792,6 +875,7 @@ class AgentLoop {
           resumeToken: continuation.resumeToken,
         ),
         skipMemoryFormation: true,
+        executionEmitter: executionEmitter,
       );
     }
     variables['lastResponseText'] = response.text;
@@ -806,6 +890,7 @@ class AgentLoop {
       skipMemoryFormation: unstableToolTurn,
     );
 
+    await executionEmitter.emitRunCompleted(reason: 'completed');
     return AgentLoopResult(
       sessionResult: SessionResult.completed,
       text: response.text,
@@ -835,7 +920,9 @@ class AgentLoop {
     String? exceptionType,
     String? errorMessage,
     bool skipMemoryFormation = false,
+    AgentExecutionEmitter? executionEmitter,
   }) async {
+    await executionEmitter?.emitRunFailed(reason: reason);
     if (skipMemoryFormation) {
       _trace(
         'memoryFormation.skip phase=after_turn reason=$reason persistenceAllowed=false',
@@ -877,27 +964,48 @@ class AgentLoop {
     AssembleResult context, {
     required int maxTokens,
     required RuntimeTranscriptEmitter emitter,
+    required AgentExecutionEmitter executionEmitter,
     required String messageId,
+    required LoopControl control,
     String phase = 'main_turn',
     bool suppressVisibleText = false,
   }) async {
     final buffer = StringBuffer();
     try {
+      final toolMode = _toolInvocationMode(context);
       _trace(
-        'modelGeneration.start phase=$phase tools=${context.selectedTools.length} supportsFunctionCalls=${context.selectedTools.isNotEmpty} maxTokens=$maxTokens',
+        'modelGeneration.start phase=$phase tools=${context.selectedTools.length} toolMode=${toolMode.name} supportsFunctionCalls=${toolMode == ToolInvocationMode.structuredFunctionCalls} maxTokens=$maxTokens',
       );
       final streamingAdapter = _modelAdapter;
       if (streamingAdapter is ToolResponseModelAdapter ||
           streamingAdapter is! StreamingAgentModelAdapter) {
-        final response = await _modelAdapter.generate(
-          context,
-          maxTokens: maxTokens,
+        final cancellationBeforeGeneration = _checkCancelled(control);
+        if (cancellationBeforeGeneration != null) {
+          await _cancelActiveModelGeneration(cancellationBeforeGeneration);
+          return const AgentResponse(text: '');
+        }
+        final response = await _awaitModelOrCancellation(
+          _modelAdapter.generate(context, maxTokens: maxTokens),
+          control,
         );
+        if (response == null) {
+          return const AgentResponse(text: '');
+        }
+        final cancellationAfterGeneration = _checkCancelled(control);
+        if (cancellationAfterGeneration != null) {
+          await _cancelActiveModelGeneration(cancellationAfterGeneration);
+          return const AgentResponse(text: '');
+        }
         if (suppressVisibleText) {
           _trace(
             'visibleEmission.suppressed phase=$phase parserStatus=${response.parserStatus.name} hasToolCall=${response.hasToolCall}',
           );
         } else {
+          await _emitTokenDeltaIfVisible(
+            response,
+            executionEmitter: executionEmitter,
+            messageId: messageId,
+          );
           await _emitVisibleAssistantResponse(
             response,
             emitter: emitter,
@@ -909,11 +1017,42 @@ class AgentLoop {
         );
         return response;
       }
+      var modelCancelRequested = false;
+      var streamActive = true;
+      Future<void> requestModelCancel(String reason) async {
+        if (modelCancelRequested || !streamActive) {
+          return;
+        }
+        modelCancelRequested = true;
+        await _cancelActiveModelGeneration(reason);
+      }
+
+      final cancellationSignal = control.cancellationSignal;
+      final cancellationWatcher = cancellationSignal?.whenCancelled.then((
+        reason,
+      ) async {
+        await requestModelCancel(reason);
+      });
+
       await for (final chunk in streamingAdapter.generateTextStream(
         context,
         maxTokens: maxTokens,
       )) {
+        final cancellation = _checkCancelled(control);
+        if (cancellation != null) {
+          await requestModelCancel(cancellation);
+          break;
+        }
         buffer.write(chunk);
+      }
+      streamActive = false;
+      final cancellationAfterStream = _checkCancelled(control);
+      if (cancellationAfterStream != null) {
+        streamActive = true;
+        await requestModelCancel(cancellationAfterStream);
+        streamActive = false;
+        await cancellationWatcher;
+        return AgentResponse(text: '', rawOutput: buffer.toString());
       }
       final rawOutput = buffer.toString();
       debugPrint(
@@ -928,6 +1067,11 @@ class AgentLoop {
           'visibleEmission.suppressed phase=$phase parserStatus=${response.parserStatus.name} hasToolCall=${response.hasToolCall}',
         );
       } else {
+        await _emitTokenDeltaIfVisible(
+          response,
+          executionEmitter: executionEmitter,
+          messageId: messageId,
+        );
         await _emitVisibleAssistantResponse(
           response,
           emitter: emitter,
@@ -945,31 +1089,65 @@ class AgentLoop {
         messageId: messageId,
         finalText: _generationFailureMessage(error),
         status: 'failed',
-        summary: error.toString(),
+        summary: _generationFailureMessage(error),
       );
       rethrow;
     }
+  }
+
+  ToolInvocationMode _toolInvocationMode(AssembleResult context) {
+    if (context.selectedTools.isEmpty) {
+      return ToolInvocationMode.none;
+    }
+    final adapter = _modelAdapter;
+    if (adapter is ToolInvocationModeReporter) {
+      return (adapter as ToolInvocationModeReporter).toolInvocationModeFor(
+        context,
+      );
+    }
+    return ToolInvocationMode.textProtocolFallback;
   }
 
   Future<AgentResponse> _continueAfterToolResponses(
     ToolResponseModelAdapter adapter, {
     required int maxTokens,
     required RuntimeTranscriptEmitter emitter,
+    required AgentExecutionEmitter executionEmitter,
     required String messageId,
+    required LoopControl control,
     bool suppressVisibleText = false,
   }) async {
     try {
       _trace(
         'modelGeneration.continueAfterToolResponses.start phase=continuation',
       );
-      final response = await adapter.continueAfterToolResponses(
-        maxTokens: maxTokens,
+      final cancellationBeforeGeneration = _checkCancelled(control);
+      if (cancellationBeforeGeneration != null) {
+        await _cancelActiveModelGeneration(cancellationBeforeGeneration);
+        return const AgentResponse(text: '');
+      }
+      final response = await _awaitModelOrCancellation(
+        adapter.continueAfterToolResponses(maxTokens: maxTokens),
+        control,
       );
+      if (response == null) {
+        return const AgentResponse(text: '');
+      }
+      final cancellationAfterGeneration = _checkCancelled(control);
+      if (cancellationAfterGeneration != null) {
+        await _cancelActiveModelGeneration(cancellationAfterGeneration);
+        return const AgentResponse(text: '');
+      }
       if (suppressVisibleText) {
         _trace(
           'visibleEmission.suppressed phase=continuation parserStatus=${response.parserStatus.name} hasToolCall=${response.hasToolCall}',
         );
       } else {
+        await _emitTokenDeltaIfVisible(
+          response,
+          executionEmitter: executionEmitter,
+          messageId: messageId,
+        );
         await _emitVisibleAssistantResponse(
           response,
           emitter: emitter,
@@ -991,7 +1169,7 @@ class AgentLoop {
         messageId: messageId,
         finalText: _generationFailureMessage(error),
         status: 'failed',
-        summary: error.toString(),
+        summary: _generationFailureMessage(error),
       );
       rethrow;
     }
@@ -1148,6 +1326,24 @@ class AgentLoop {
     );
   }
 
+  Future<void> _emitTokenDeltaIfVisible(
+    AgentResponse response, {
+    required AgentExecutionEmitter executionEmitter,
+    required String messageId,
+  }) async {
+    if (response.hasParserFailure || response.hasToolCall) {
+      return;
+    }
+    final visibleText = response.text.trim();
+    if (visibleText.isEmpty || _isProtocolOnlyAssistantText(visibleText)) {
+      return;
+    }
+    await executionEmitter.emitTokenDelta(
+      messageId: messageId,
+      delta: visibleText,
+    );
+  }
+
   bool _isProtocolOnlyAssistantText(String text) {
     final trimmed = text.trim();
     if (trimmed.isEmpty) {
@@ -1237,7 +1433,9 @@ class AgentLoop {
     required List<String> toolsUsed,
     required List<ToolResult> toolResults,
     required LoopContinuation continuation,
+    AgentExecutionEmitter? executionEmitter,
   }) async {
+    await executionEmitter?.emitRunFailed(reason: reason);
     await _freezeSession(sessionKey, reason: reason, body: body);
     await _memoryFormer.process(
       MemoryTurn(
@@ -1259,12 +1457,14 @@ class AgentLoop {
     );
   }
 
-  AgentLoopResult _cancelledResult(
+  Future<AgentLoopResult> _cancelledResult(
     String reason, {
     required List<String> toolsUsed,
     required List<ToolResult> toolResults,
     required LoopContinuation continuation,
-  }) {
+    AgentExecutionEmitter? executionEmitter,
+  }) async {
+    await executionEmitter?.emitRunCancelled(reason: reason);
     return AgentLoopResult(
       sessionResult: SessionResult.cancelled,
       text: '',
@@ -1274,6 +1474,58 @@ class AgentLoop {
       stepCount: continuation.currentStepIndex,
       toolCallCount: toolsUsed.length,
       continuation: continuation,
+    );
+  }
+
+  Future<T?> _awaitModelOrCancellation<T>(
+    Future<T> generation,
+    LoopControl control,
+  ) {
+    final cancellation = control.cancellationSignal;
+    if (cancellation == null) {
+      return generation;
+    }
+    if (cancellation.isCancelled) {
+      return _cancelActiveModelGeneration(
+        cancellation.reason ?? 'cancelled',
+      ).then((_) => null);
+    }
+    return Future.any(<Future<T?>>[
+      generation.then<T?>((value) => value),
+      cancellation.whenCancelled.then<T?>((reason) async {
+        await _cancelActiveModelGeneration(reason);
+        return null;
+      }),
+    ]);
+  }
+
+  Future<void> _cancelActiveModelGeneration(String reason) async {
+    final adapter = _modelAdapter;
+    if (adapter is! CancellableAgentModelAdapter) {
+      return;
+    }
+    try {
+      await (adapter as CancellableAgentModelAdapter).cancelGeneration();
+    } catch (error, stackTrace) {
+      _traceError(
+        'modelGeneration.cancelFailed reason=$reason',
+        error,
+        stackTrace,
+      );
+    }
+  }
+
+  ToolResult _cancelledToolResult(ToolCall toolCall, String reason) {
+    return ToolResult.failure(
+      'Tool execution was cancelled.',
+      toolId: toolCall.toolId,
+      callId: toolCall.id,
+      status: ToolResultStatus.cancelled,
+      userVisibleMessage: 'Tool execution was cancelled.',
+      metadata: <String, Object?>{
+        'reason': reason,
+        'errorCode': 'tool_cancelled',
+      },
     );
   }
 
@@ -1290,11 +1542,19 @@ class AgentLoop {
   }
 
   String _generationFailureMessage(Object error) {
-    return switch (error) {
-      LiteRtCrashShieldException() =>
-        'OpenReef paused generation to protect your phone. ${error.toString()}',
-      _ => 'LiteRT generation failed: $error',
-    };
+    if (error is LiteRtCrashShieldException) {
+      return 'OpenReef paused generation to protect your phone.';
+    }
+    if (_isModelClosedError(error)) {
+      return 'The local model session crashed. Restart the chat/model from Settings.';
+    }
+    return 'The local model failed while generating a response.';
+  }
+
+  bool _isModelClosedError(Object error) {
+    final message = error.toString().toLowerCase();
+    return message.contains('model is closed') ||
+        message.contains('bad state: model is closed');
   }
 
   Future<AssembleResult> _applyCompaction(AssembleResult context) async {

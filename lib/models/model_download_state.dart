@@ -1,20 +1,16 @@
-import 'package:flutter_gemma/flutter_gemma.dart';
 import 'package:openreef/models/litert_bridge.dart';
 import 'package:openreef/models/model_descriptor.dart';
 
 enum ModelCardLifecycle {
-  discoverable,
-  unavailable,
-  downloadable,
+  notInstalled,
+  authRequired,
   downloading,
   downloaded,
   initializing,
-  initialized,
+  ready,
   active,
-  failedDownload,
-  failedInitialization,
-  missingToken,
-  unsupported,
+  failed,
+  unsupportedDevice,
 }
 
 enum ModelDownloadStatus {
@@ -47,59 +43,50 @@ class ModelCardState {
 
   bool get isDownloaded => installedRecord != null;
   bool get isInitialized =>
-      lifecycle == ModelCardLifecycle.initialized ||
+      lifecycle == ModelCardLifecycle.ready ||
       lifecycle == ModelCardLifecycle.active;
   bool get isActive => lifecycle == ModelCardLifecycle.active;
   bool get showDownloadProgress => lifecycle == ModelCardLifecycle.downloading;
 
   bool get canRunPrimaryAction {
     return switch (lifecycle) {
-      ModelCardLifecycle.discoverable ||
-      ModelCardLifecycle.downloadable ||
+      ModelCardLifecycle.notInstalled ||
       ModelCardLifecycle.downloaded ||
-      ModelCardLifecycle.initialized ||
-      ModelCardLifecycle.failedDownload ||
-      ModelCardLifecycle.failedInitialization => true,
+      ModelCardLifecycle.ready ||
+      ModelCardLifecycle.failed ||
+      ModelCardLifecycle.authRequired => true,
       ModelCardLifecycle.downloading ||
       ModelCardLifecycle.initializing ||
       ModelCardLifecycle.active ||
-      ModelCardLifecycle.missingToken ||
-      ModelCardLifecycle.unsupported ||
-      ModelCardLifecycle.unavailable => false,
+      ModelCardLifecycle.unsupportedDevice => false,
     };
   }
 
   String get primaryLabel {
     return switch (lifecycle) {
-      ModelCardLifecycle.discoverable ||
-      ModelCardLifecycle.downloadable => 'Download',
+      ModelCardLifecycle.notInstalled => 'Download',
+      ModelCardLifecycle.authRequired => 'Add HF Token',
       ModelCardLifecycle.downloading => 'Downloading...',
       ModelCardLifecycle.downloaded => 'Initialize',
       ModelCardLifecycle.initializing => 'Initializing...',
-      ModelCardLifecycle.initialized => 'Set active',
+      ModelCardLifecycle.ready => 'Activate',
       ModelCardLifecycle.active => 'Active',
-      ModelCardLifecycle.failedDownload => 'Retry download',
-      ModelCardLifecycle.failedInitialization => 'Retry initialize',
-      ModelCardLifecycle.missingToken => 'Add token',
-      ModelCardLifecycle.unsupported ||
-      ModelCardLifecycle.unavailable => 'Unavailable',
+      ModelCardLifecycle.failed => 'Retry',
+      ModelCardLifecycle.unsupportedDevice => 'Unsupported',
     };
   }
 
   String get statusLabel {
     return switch (lifecycle) {
-      ModelCardLifecycle.discoverable ||
-      ModelCardLifecycle.downloadable => 'Available to download',
+      ModelCardLifecycle.notInstalled => 'Not installed',
+      ModelCardLifecycle.authRequired => 'Hugging Face token required',
       ModelCardLifecycle.downloading => 'Downloading',
       ModelCardLifecycle.downloaded => 'Downloaded',
       ModelCardLifecycle.initializing => 'Initializing',
-      ModelCardLifecycle.initialized => 'Initialized',
+      ModelCardLifecycle.ready => 'Ready',
       ModelCardLifecycle.active => 'Active',
-      ModelCardLifecycle.failedDownload => 'Download failed',
-      ModelCardLifecycle.failedInitialization => 'Initialization failed',
-      ModelCardLifecycle.missingToken => 'Token required',
-      ModelCardLifecycle.unsupported => 'Unsupported on this device',
-      ModelCardLifecycle.unavailable => 'Unavailable',
+      ModelCardLifecycle.failed => 'Failed',
+      ModelCardLifecycle.unsupportedDevice => 'Unsupported on this device',
     };
   }
 }
@@ -208,31 +195,17 @@ class ModelDownloadState {
     if (model.task != ReefModelTask.generation) {
       return ModelCardState(
         descriptor: model,
-        lifecycle: ModelCardLifecycle.unavailable,
+        lifecycle: ModelCardLifecycle.unsupportedDevice,
         installedRecord: installedRecord,
         capabilityLabels: capabilities,
         reason: 'This marketplace installs generation models only.',
       );
     }
 
-    if (selected &&
-        failedModelId == model.id &&
-        failureKind == ModelFailureKind.download) {
+    if (selected && failedModelId == model.id && failureKind != null) {
       return ModelCardState(
         descriptor: model,
-        lifecycle: ModelCardLifecycle.failedDownload,
-        installedRecord: installedRecord,
-        capabilityLabels: capabilities,
-        reason: errorMessage,
-      );
-    }
-
-    if (selected &&
-        failedModelId == model.id &&
-        failureKind == ModelFailureKind.initialization) {
-      return ModelCardState(
-        descriptor: model,
-        lifecycle: ModelCardLifecycle.failedInitialization,
+        lifecycle: ModelCardLifecycle.failed,
         installedRecord: installedRecord,
         capabilityLabels: capabilities,
         reason: errorMessage,
@@ -242,7 +215,7 @@ class ModelDownloadState {
     if (installedRecord == null && model.requiresHfToken && !hasHfToken) {
       return ModelCardState(
         descriptor: model,
-        lifecycle: ModelCardLifecycle.missingToken,
+        lifecycle: ModelCardLifecycle.authRequired,
         installedRecord: installedRecord,
         capabilityLabels: capabilities,
         reason: 'This gated Hugging Face model needs a saved access token.',
@@ -252,7 +225,7 @@ class ModelDownloadState {
     if (!isCompatible(model)) {
       return ModelCardState(
         descriptor: model,
-        lifecycle: ModelCardLifecycle.unsupported,
+        lifecycle: ModelCardLifecycle.unsupportedDevice,
         installedRecord: installedRecord,
         capabilityLabels: capabilities,
         reason:
@@ -283,7 +256,7 @@ class ModelDownloadState {
         descriptor: model,
         lifecycle: selectedAsActive
             ? ModelCardLifecycle.active
-            : ModelCardLifecycle.initialized,
+            : ModelCardLifecycle.ready,
         installedRecord: installedRecord,
         capabilityLabels: capabilities,
       );
@@ -300,7 +273,7 @@ class ModelDownloadState {
 
     return ModelCardState(
       descriptor: model,
-      lifecycle: ModelCardLifecycle.downloadable,
+      lifecycle: ModelCardLifecycle.notInstalled,
       capabilityLabels: capabilities,
     );
   }
@@ -353,22 +326,10 @@ class ModelDownloadState {
 
   static List<String> _capabilityLabelsFor(ModelDescriptor model) {
     final labels = <String>[];
-    if (model.task == ReefModelTask.generation) {
-      labels.add('Text');
-    }
-    if (model.task == ReefModelTask.embedding) {
-      labels.add('Embeddings');
-    }
-    if (model.modelType == ModelType.functionGemma) {
-      labels.add('Tool calling');
-    }
-    if (model.multilingual) {
-      labels.add('Multilingual');
-    }
-    if (model.task == ReefModelTask.generation ||
-        model.task == ReefModelTask.embedding) {
-      labels.add('On device');
-    }
+    labels.addAll(model.capabilityMetadata.badges);
+    if (model.task == ReefModelTask.embedding) labels.add('Embeddings');
+    if (model.multilingual) labels.add('Multilingual');
+    labels.add('On device');
     return labels;
   }
 }

@@ -37,6 +37,45 @@ void main() {
       expect(response.effectiveToolCalls.single.toolId, 'battery_info');
     });
 
+    test('protocol marker accepts unquoted argument keys', () {
+      final response = parser.parse(
+        '<|tool_call>call:web_search{query: "OpenAI news"}<tool_call|>',
+      );
+
+      expect(response.parserStatus, AgentResponseParserStatus.toolCall);
+      expect(response.effectiveToolCalls.single.toolId, 'web_search');
+      expect(
+        response.effectiveToolCalls.single.arguments['query'],
+        'OpenAI news',
+      );
+    });
+
+    test('bare call syntax parses as text-protocol tool call', () {
+      final response = parser.parse('call:volume_set{level: 100}');
+
+      expect(response.parserStatus, AgentResponseParserStatus.toolCall);
+      expect(response.effectiveToolCalls.single.toolId, 'volume_set');
+      expect(response.effectiveToolCalls.single.arguments['level'], 100);
+    });
+
+    test('bare call syntax accepts MCP-style tool ids', () {
+      final response = parser.parse('call:live-1/search_docs{query: "reef"}');
+
+      expect(response.parserStatus, AgentResponseParserStatus.toolCall);
+      expect(response.effectiveToolCalls.single.toolId, 'live-1/search_docs');
+      expect(response.effectiveToolCalls.single.arguments['query'], 'reef');
+    });
+
+    test('xml-style tool_call JSON parses as text-protocol tool call', () {
+      final response = parser.parse(
+        '<tool_call>{"tool":"volume_set","arguments":{"level":1}}</tool_call>',
+      );
+
+      expect(response.parserStatus, AgentResponseParserStatus.toolCall);
+      expect(response.effectiveToolCalls.single.toolId, 'volume_set');
+      expect(response.effectiveToolCalls.single.arguments['level'], 1);
+    });
+
     test('protocol control token leakage is rejected', () {
       final response = parser.parse('<|assistant|> hello');
 

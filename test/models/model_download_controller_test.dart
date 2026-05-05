@@ -108,6 +108,34 @@ void main() {
     expect(controller.isActive(_primary), isFalse);
   });
 
+  test('CTA mapping follows lifecycle contract', () async {
+    final controller = _controller(
+      registry: registry,
+      storage: storage,
+      settingsController: settingsController,
+      tokenStore: _FakeHuggingFaceTokenStore(),
+    );
+
+    await controller.initialize();
+
+    expect(controller.cardStateFor(_primary).primaryLabel, 'Download');
+    expect(controller.cardStateFor(_gated).primaryLabel, 'Add HF Token');
+
+    final file = await storage.getInstalledFile(_primary);
+    await file.parent.create(recursive: true);
+    await file.writeAsBytes(<int>[1, 2, 3, 4], flush: true);
+    await storage.recoverInstalledModel(_primary, file: file);
+    await controller.refreshInstalledModel();
+
+    expect(controller.cardStateFor(_primary).primaryLabel, 'Initialize');
+    controller.markInitializingModel();
+    expect(controller.cardStateFor(_primary).primaryLabel, 'Initializing...');
+    controller.markInitializedModel(_primary.storageFileName);
+    expect(controller.cardStateFor(_primary).primaryLabel, 'Activate');
+    await controller.activateSelectedModel();
+    expect(controller.cardStateFor(_primary).primaryLabel, 'Active');
+  });
+
   test(
     'existing file plus missing metadata initializes as downloaded',
     () async {
@@ -176,7 +204,7 @@ void main() {
       expect(bridge.initializedPaths, <String>[_primary.storageFileName]);
       expect(
         controller.cardStateFor(_primary).lifecycle,
-        ModelCardLifecycle.initialized,
+        ModelCardLifecycle.ready,
       );
       expect(settingsController.settings.generationModelId, isNull);
     },
@@ -231,6 +259,40 @@ void main() {
   });
 
   test(
+    'selected capability metadata is exposed only for active ready model',
+    () async {
+      final bridge = _FakeLiteRtBridge();
+      final secondary = await storage.getInstalledFile(_secondary);
+      await secondary.parent.create(recursive: true);
+      await secondary.writeAsBytes(<int>[1, 2], flush: true);
+      await storage.recoverInstalledModel(_secondary, file: secondary);
+      final controller = _controller(
+        registry: registry,
+        storage: storage,
+        settingsController: settingsController,
+        bridge: bridge,
+      );
+
+      await controller.initialize();
+      controller.selectModel(_secondary);
+
+      expect(
+        controller.selectedModelCapabilityMetadata.supportsFunctionCalling,
+        isFalse,
+      );
+
+      await controller.initializeSelectedModel();
+      await controller.activateSelectedModel();
+
+      final metadata = controller.selectedModelCapabilityMetadata;
+      expect(metadata.supportsFunctionCalling, isTrue);
+      expect(metadata.contextWindow, _secondary.contextWindow);
+      expect(metadata.ramEstimateGb, _secondary.minRamGb);
+      expect(metadata.input.supportsTextInput, isTrue);
+    },
+  );
+
+  test(
     'runtime initialization failure projects failedInitialization',
     () async {
       final file = await storage.getInstalledFile(_primary);
@@ -250,7 +312,7 @@ void main() {
       expect(initialized, isNull);
       expect(
         controller.cardStateFor(_primary).lifecycle,
-        ModelCardLifecycle.failedInitialization,
+        ModelCardLifecycle.failed,
       );
       expect(settingsController.settings.generationModelId, isNull);
     },
@@ -333,7 +395,7 @@ void main() {
     expect(downloader.downloadCount, 0);
     expect(
       controller.cardStateFor(_gated).lifecycle,
-      ModelCardLifecycle.missingToken,
+      ModelCardLifecycle.authRequired,
     );
   });
 
@@ -380,9 +442,9 @@ void main() {
     await controller.initialize();
 
     final card = controller.cardStateFor(_primary);
-    expect(card.lifecycle, ModelCardLifecycle.unsupported);
+    expect(card.lifecycle, ModelCardLifecycle.unsupportedDevice);
     expect(card.canRunPrimaryAction, isFalse);
-    expect(card.primaryLabel, 'Unavailable');
+    expect(card.primaryLabel, 'Unsupported');
   });
 }
 

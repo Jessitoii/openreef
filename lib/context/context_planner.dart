@@ -84,16 +84,29 @@ class ContextPlanner {
       executionMode: executionMode,
       retrievedCandidates: retrieved,
     );
+    final deterministicToolIds = _deterministicIntentToolIds(
+      userMessage: userMessage,
+      candidates: candidates,
+    );
+    if (deterministicToolIds.isNotEmpty) {
+      proposal = _prependDeterministicTools(proposal, deterministicToolIds);
+    }
     debugPrint(
       'OpenReef.ContextPlanner: selector.end primary=${proposal.primaryToolIds.length} fallback=${proposal.fallbackToolIds.length} skills=${proposal.selectedSkillIds.length} degraded=${proposal.degraded}',
     );
+    final gateRetrievedCandidates = deterministicToolIds.isEmpty
+        ? retrieved
+        : _mergeRetrievedCandidates(
+            retrieved,
+            _fallbackRetrievedCandidates(candidates),
+          );
     var gate =
         CapabilityPolicyGate(
           toolLimit: toolLimit,
           skillLimit: skillLimit,
         ).apply(
           proposal: proposal,
-          retrievedCandidates: retrieved,
+          retrievedCandidates: gateRetrievedCandidates,
           executionMode: executionMode,
           executionPolicy: executionPolicy,
           skillBudget: tokenAllocation.sectionBudgets['skills'] ?? 0,
@@ -180,6 +193,8 @@ class ContextPlanner {
           'semantic_retrieval_unavailable': semanticDegradationReason,
         if (deterministicFallbackReason.isNotEmpty)
           'deterministic_tool_fallback': deterministicFallbackReason,
+        for (final id in deterministicToolIds)
+          id: 'deterministic user intent tool',
       },
       selectorViolations: <String>[
         ...proposal.violations,
@@ -227,6 +242,242 @@ class ContextPlanner {
     );
   }
 
+  CandidateSelectionProposal _prependDeterministicTools(
+    CandidateSelectionProposal proposal,
+    List<String> toolIds,
+  ) {
+    final merged = <String>[
+      ...toolIds,
+      ...proposal.primaryToolIds.where((id) => !toolIds.contains(id)),
+    ].take(toolLimit).toList(growable: false);
+    return CandidateSelectionProposal(
+      primaryToolIds: merged,
+      fallbackToolIds: proposal.fallbackToolIds,
+      selectedSkillIds: proposal.selectedSkillIds,
+      rejected: proposal.rejected,
+      notes: <String>[
+        ...proposal.notes,
+        'Deterministic intent tools were prepended from registered tools.',
+      ],
+      degraded: proposal.degraded,
+      degradationReason: proposal.degradationReason,
+      violations: proposal.violations,
+    );
+  }
+
+  List<String> _deterministicIntentToolIds({
+    required String userMessage,
+    required List<CapabilityCandidate> candidates,
+  }) {
+    final lower = userMessage.toLowerCase();
+    final available = <String>{
+      for (final candidate in candidates)
+        if (candidate.kind != CapabilityKind.skill && candidate.enabled)
+          candidate.id,
+    };
+    final selected = <String>[];
+    void add(String id) {
+      if (available.contains(id) && !selected.contains(id)) {
+        selected.add(id);
+      }
+    }
+
+    if (_hasToggleIntent(lower, const <String>['bluetooth', 'blue tooth'])) {
+      add('bluetooth_toggle');
+    }
+    if (_hasToggleIntent(lower, const <String>['wifi', 'wi-fi'])) {
+      add('wifi_toggle');
+    }
+    if (_hasToggleIntent(lower, const <String>['flashlight', 'torch'])) {
+      add('flashlight_toggle');
+    }
+    if (_hasVolumeActionIntent(lower)) {
+      add('volume_set');
+    }
+    if (_hasBrightnessActionIntent(lower)) {
+      add('brightness_set');
+    }
+    if (_hasDndActionIntent(lower)) {
+      add('dnd_set');
+    }
+    if (_hasWebSearchIntent(lower)) {
+      add('web_search');
+      add('web_fetch');
+    }
+    if (_containsSmsIntent(lower)) {
+      add('contact_read');
+      add('sms_send');
+      add('sms_draft');
+    }
+    return selected.take(toolLimit).toList(growable: false);
+  }
+
+  List<CapabilityRetrievedCandidate> _mergeRetrievedCandidates(
+    List<CapabilityRetrievedCandidate> primary,
+    List<CapabilityRetrievedCandidate> fallback,
+  ) {
+    final merged = <String, CapabilityRetrievedCandidate>{
+      for (final entry in primary) entry.candidate.id: entry,
+    };
+    for (final entry in fallback) {
+      merged.putIfAbsent(entry.candidate.id, () => entry);
+    }
+    return merged.values.toList(growable: false);
+  }
+
+  bool _containsAny(String text, List<String> phrases) {
+    return phrases.any(text.contains);
+  }
+
+  bool _hasToggleIntent(String text, List<String> subjects) {
+    final subject = subjects.any(text.contains);
+    if (!subject) {
+      return false;
+    }
+    if (_containsAny(text, const <String>[
+      'enable ',
+      'disable ',
+      'activate ',
+      'deactivate ',
+      'turn on ',
+      'turn off ',
+      'turn ',
+      'switch on ',
+      'switch off ',
+      'switch ',
+      'set ',
+      'shut off ',
+    ])) {
+      return true;
+    }
+    final onOffPattern = RegExp(r'\b(on|off)\b');
+    return onOffPattern.hasMatch(text) &&
+        _containsAny(text, const <String>['turn', 'switch', 'set']);
+  }
+
+  bool _hasVolumeActionIntent(String text) {
+    if (RegExp(
+      r'\b(volume\s+of|sphere\s+volume|cylinder\s+volume)\b',
+    ).hasMatch(text)) {
+      return false;
+    }
+    if (_containsAny(text, const <String>[
+      'mute',
+      'unmute',
+      'louder',
+      'quieter',
+    ])) {
+      return true;
+    }
+    final mentionsAudio = _containsAny(text, const <String>[
+      'volume',
+      'sound',
+      'audio',
+    ]);
+    if (!mentionsAudio) {
+      return false;
+    }
+    return _containsAny(text, const <String>[
+      'turn ',
+      'set ',
+      'increase ',
+      'decrease ',
+      'raise ',
+      'lower ',
+      'all the way up',
+      'all the way down',
+      'halfway',
+      'half way',
+      'mute',
+      'max',
+      'maximum',
+      'minimum',
+    ]);
+  }
+
+  bool _hasBrightnessActionIntent(String text) {
+    if (!text.contains('brightness')) {
+      return false;
+    }
+    return _containsAny(text, const <String>[
+          'set ',
+          'turn ',
+          'increase ',
+          'decrease ',
+          'raise ',
+          'lower ',
+          'dim ',
+          'brighten ',
+          'half',
+          'max',
+          'minimum',
+        ]) ||
+        RegExp(r'\d+\s*%').hasMatch(text);
+  }
+
+  bool _hasDndActionIntent(String text) {
+    if (!_containsAny(text, const <String>['do not disturb', 'dnd'])) {
+      return false;
+    }
+    return _containsAny(text, const <String>[
+      'turn ',
+      'set ',
+      'enable ',
+      'disable ',
+      'activate ',
+      'deactivate ',
+      'switch ',
+    ]);
+  }
+
+  bool _containsSmsIntent(String text) {
+    return _containsAny(text, const <String>[
+          'send an sms',
+          'send a sms',
+          'send sms',
+          'send an text',
+          'send a text',
+          'send text',
+          'text message to',
+          'send a message',
+          'send message',
+        ]) ||
+        RegExp(r'\b(text|message)\s+\S+').hasMatch(text) &&
+            !text.contains('architecture') &&
+            !text.contains('docs');
+  }
+
+  bool _hasWebSearchIntent(String text) {
+    if (_containsAny(text, const <String>[
+      'search the web',
+      'web search',
+      'internet search',
+      'look up online',
+      'search online',
+      'search internet',
+      'online search',
+    ])) {
+      return true;
+    }
+    final hasSearchAction = _containsAny(text, const <String>[
+      'search ',
+      'look up ',
+      'find ',
+      'research ',
+    ]);
+    if (!hasSearchAction) {
+      return false;
+    }
+    return _containsAny(text, const <String>[
+      ' online',
+      ' internet',
+      ' web',
+      ' current',
+      ' latest',
+      ' news',
+    ]);
+  }
+
   CandidateSelectionProposal _deterministicToolFallbackProposal({
     required String userMessage,
     required List<CapabilityCandidate> candidates,
@@ -235,9 +486,17 @@ class ContextPlanner {
     if (userTokens.isEmpty) {
       return const CandidateSelectionProposal();
     }
+    final intentToolIds = _deterministicIntentToolIds(
+      userMessage: userMessage,
+      candidates: candidates,
+    ).toSet();
     final scored = <_ScoredCapability>[];
     for (final candidate in candidates) {
       if (candidate.kind == CapabilityKind.skill || !candidate.enabled) {
+        continue;
+      }
+      if (_intentGatedFallbackToolIds.contains(candidate.id) &&
+          !intentToolIds.contains(candidate.id)) {
         continue;
       }
       final score = _lexicalCapabilityScore(candidate, userTokens);
@@ -262,6 +521,19 @@ class ContextPlanner {
       ],
     );
   }
+
+  static const Set<String> _intentGatedFallbackToolIds = <String>{
+    'bluetooth_toggle',
+    'wifi_toggle',
+    'flashlight_toggle',
+    'volume_set',
+    'brightness_set',
+    'dnd_set',
+    'sms_send',
+    'sms_draft',
+    'web_search',
+    'web_fetch',
+  };
 
   List<CapabilityRetrievedCandidate> _fallbackRetrievedCandidates(
     List<CapabilityCandidate> candidates,

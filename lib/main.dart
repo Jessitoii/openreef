@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:openreef/agent/agent_loop.dart';
+import 'package:openreef/agent/agent_execution_event.dart';
 import 'package:openreef/agent/agent_model_adapter.dart';
 import 'package:openreef/agent/agent_models.dart';
 import 'package:openreef/agent/agent_notifier.dart';
@@ -158,9 +159,10 @@ List<double> _nativeToolEmbedding(String toolId) {
     case 'contact_read':
     case 'contact_create':
     case 'sms_draft':
+    case 'sms_send':
     case 'email_draft':
-    case 'communication_phone_call':
-    case 'communication_phone_dial':
+    case 'phone_call':
+    case 'phone_dial':
     case 'communication_whatsapp_draft':
     case 'communication_telegram_draft':
     case 'share':
@@ -183,6 +185,9 @@ List<double> _nativeToolEmbedding(String toolId) {
       return const <double>[1, 0, 0, 0, 1, 0, 0];
     case 'alarm_set':
       return const <double>[1, 0, 1, 0, 1, 0, 0];
+    case 'web_search':
+    case 'web_fetch':
+      return const <double>[0, 0, 1, 1, 0, 0, 0];
     default:
       return const <double>[0, 0, 0, 0, 1, 0, 0];
   }
@@ -449,6 +454,7 @@ class OpenReefBootstrap {
     final mailbox = AgentMailbox();
     final approvalController = MainAgentApprovalController(mailbox: mailbox);
     final chatSink = _DelegatingChatExecutionSink();
+    final executionEventSink = _DelegatingAgentExecutionEventSink();
     final executionLogStore = InMemoryExecutionLogStore();
     final agentLoop = AgentLoop(
       contextAssembler: contextAssembler,
@@ -472,6 +478,7 @@ class OpenReefBootstrap {
       executionLogStore: executionLogStore,
       chatSink: chatSink,
       backgroundSink: const _DebugBackgroundExecutionSink(),
+      executionEventSink: executionEventSink,
       runStateStore: SqliteRunStateStore(),
     );
     executionBridge.delegate = taskExecutor;
@@ -485,6 +492,7 @@ class OpenReefBootstrap {
       approvalController: approvalController,
     );
     chatSink.delegate = chatSession;
+    executionEventSink.delegate = chatSession;
 
     final triggerEventBridge = TriggerEventBridge();
     for (final trigger in await triggerRepository.loadAll()) {
@@ -619,6 +627,20 @@ class _DelegatingAgentTaskExecutor implements AgentTaskExecutor {
   AgentTaskExecutor? delegate;
 
   @override
+  Future<bool> cancelActiveRun({
+    String? runId,
+    String? sessionKey,
+    RunCancellationReason reason = RunCancellationReason.userRequested,
+  }) async {
+    return delegate?.cancelActiveRun(
+          runId: runId,
+          sessionKey: sessionKey,
+          reason: reason,
+        ) ??
+        false;
+  }
+
+  @override
   Future<ExecutionResult> execute(ExecutionRequest request) async {
     final activeDelegate = delegate;
     if (activeDelegate == null) {
@@ -665,6 +687,15 @@ class _DelegatingChatExecutionSink implements ChatExecutionSink {
     ExecutionResult result,
   ) async {
     await delegate?.appendExecutionResult(request, result);
+  }
+}
+
+class _DelegatingAgentExecutionEventSink implements AgentExecutionEventSink {
+  AgentExecutionEventSink? delegate;
+
+  @override
+  Future<void> applyAgentExecutionEvent(AgentExecutionEvent event) async {
+    await delegate?.applyAgentExecutionEvent(event);
   }
 }
 

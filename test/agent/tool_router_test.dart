@@ -5,8 +5,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:openreef/agent/agent_models.dart';
 import 'package:openreef/agent/mailbox.dart';
 import 'package:openreef/agent/tool_router.dart';
+import 'package:openreef/tools/ddgs_web_search_service.dart';
 import 'package:openreef/tools/mvp_native_tools.dart';
 import 'package:openreef/tools/native_tool_adapters.dart';
+import 'package:openreef/tools/system_native_tools.dart';
 import 'package:openreef/tools/tool_manifest.dart';
 import 'package:openreef/tools/tool_manifest_bridge.dart';
 import 'package:openreef/tools/tool_manifest_registry.dart';
@@ -128,6 +130,71 @@ void main() {
     expect(result.toolId, 'battery_info');
     expect(result.callId, 'call-1');
     expect(confirmCalls, 0);
+  });
+
+  test('cancellation while waiting for approval returns cancelled', () async {
+    var executed = false;
+    final approvalCompleter = Completer<bool>();
+    final cancellation = CancellationSignal();
+    final router = ToolRouter(
+      catalog: InMemoryToolCatalog(<ToolDefinition>[
+        ToolDefinition(
+          id: 'sms_send',
+          embedding: const <double>[1, 0, 0],
+          requiresConfirmation: true,
+          execute: (call) async {
+            executed = true;
+            return const ToolResult.success('sent');
+          },
+        ),
+      ]),
+      mailbox: AgentMailbox(),
+      confirmToolCall: (call) => approvalCompleter.future,
+    );
+
+    final resultFuture = router.dispatch(
+      const ToolCall(id: 'call-approval', toolId: 'sms_send'),
+      sessionKey: 'session-1',
+      cancellationSignal: cancellation,
+    );
+
+    await Future<void>.delayed(Duration.zero);
+    cancellation.cancel(RunCancellationReason.userRequested.code);
+    final result = await resultFuture;
+
+    expect(result.status, ToolResultStatus.cancelled);
+    expect(result.metadata['reason'], 'user_requested');
+    expect(executed, isFalse);
+  });
+
+  test('cancellation while tool executes discards late result', () async {
+    final toolCompleter = Completer<ToolResult>();
+    final cancellation = CancellationSignal();
+    final router = ToolRouter(
+      catalog: InMemoryToolCatalog(<ToolDefinition>[
+        ToolDefinition(
+          id: 'battery_info',
+          embedding: const <double>[1, 0, 0],
+          execute: (call) => toolCompleter.future,
+        ),
+      ]),
+      mailbox: AgentMailbox(),
+      confirmToolCall: (call) async => true,
+    );
+
+    final resultFuture = router.dispatch(
+      const ToolCall(id: 'call-tool', toolId: 'battery_info'),
+      sessionKey: 'session-1',
+      cancellationSignal: cancellation,
+    );
+
+    await Future<void>.delayed(Duration.zero);
+    cancellation.cancel(RunCancellationReason.userRequested.code);
+    toolCompleter.complete(const ToolResult.success('late success'));
+    final result = await resultFuture;
+
+    expect(result.status, ToolResultStatus.cancelled);
+    expect(result.content, isNot('late success'));
   });
 
   test('malformed request never reaches approval or execution', () async {
@@ -421,6 +488,84 @@ void main() {
     },
   );
 
+  test('normalizes Bluetooth on before native validation', () async {
+    late ToolCall approvedCall;
+    final router = _nativeRouterFor(
+      <NativeToolHandler>[BluetoothToggleToolHandler()],
+      confirmToolCall: (call) async {
+        approvedCall = call;
+        return true;
+      },
+    );
+
+    final result = await router.dispatch(
+      const ToolCall(id: 'call-bluetooth', toolId: 'bluetooth_toggle'),
+      sessionKey: 'session-1',
+      userMessage: 'set my Bluetooth on',
+    );
+
+    expect(result.status, ToolResultStatus.unavailable);
+    expect(result.summary, 'bluetooth_toggle_platform_restricted');
+    expect(approvedCall.arguments['enabled'], isTrue);
+  });
+
+  test('normalizes Bluetooth off before native validation', () async {
+    late ToolCall approvedCall;
+    final router = _nativeRouterFor(
+      <NativeToolHandler>[BluetoothToggleToolHandler()],
+      confirmToolCall: (call) async {
+        approvedCall = call;
+        return true;
+      },
+    );
+
+    final result = await router.dispatch(
+      const ToolCall(id: 'call-bluetooth', toolId: 'bluetooth_toggle'),
+      sessionKey: 'session-1',
+      userMessage: 'turn Bluetooth off',
+    );
+
+    expect(result.status, ToolResultStatus.unavailable);
+    expect(result.summary, 'bluetooth_toggle_platform_restricted');
+    expect(approvedCall.arguments['enabled'], isFalse);
+  });
+
+  test('normalizes max volume before native validation', () async {
+    final volumeAdapter = _RecordingVolumeAdapter();
+    final router = _nativeRouterFor(<NativeToolHandler>[
+      VolumeSetToolHandler(volumeAdapter),
+    ]);
+
+    final result = await router.dispatch(
+      const ToolCall(id: 'call-volume', toolId: 'volume_set'),
+      sessionKey: 'session-1',
+      userMessage: 'turn the volume all the way up',
+    );
+
+    expect(result.status, ToolResultStatus.success);
+    expect(volumeAdapter.lastLevel, 1);
+  });
+
+  test(
+    'missing required argument does not expose raw validation payload',
+    () async {
+      final router = _nativeRouterFor(<NativeToolHandler>[
+        BluetoothToggleToolHandler(),
+      ]);
+
+      final result = await router.dispatch(
+        const ToolCall(id: 'call-bluetooth', toolId: 'bluetooth_toggle'),
+        sessionKey: 'session-1',
+        userMessage: 'bluetooth',
+      );
+
+      expect(result.status, ToolResultStatus.validationError);
+      expect(result.summary, 'missing_argument:enabled');
+      expect(result.userVisibleMessage, isNot(contains('missing_argument')));
+      expect(result.userVisibleMessage, isNot(contains('enabled')));
+    },
+  );
+
   test(
     'production-style no-confirmation native tool bypasses approval',
     () async {
@@ -547,6 +692,99 @@ void main() {
     expect(result.status, ToolResultStatus.executionError);
     expect(result.metadata['errorCode'], 'invalid_status');
     expect(result.metadata['rawStatus'], 'banana');
+  });
+
+  test('legacy communication ids are routed to canonical tools only', () async {
+    final executedToolIds = <String>[];
+    final router = ToolRouter(
+      catalog: InMemoryToolCatalog(<ToolDefinition>[
+        ToolDefinition(
+          id: 'sms_send',
+          embedding: const <double>[1, 0, 0],
+          execute: (call) async {
+            executedToolIds.add(call.toolId);
+            return ToolResult.success(
+              'sent',
+              toolId: call.toolId,
+              callId: call.id,
+            );
+          },
+        ),
+        ToolDefinition(
+          id: 'phone_call',
+          embedding: const <double>[1, 0, 0],
+          execute: (call) async {
+            executedToolIds.add(call.toolId);
+            return ToolResult.success(
+              'called',
+              toolId: call.toolId,
+              callId: call.id,
+            );
+          },
+        ),
+        ToolDefinition(
+          id: 'phone_dial',
+          embedding: const <double>[1, 0, 0],
+          execute: (call) async {
+            executedToolIds.add(call.toolId);
+            return ToolResult.success(
+              'dialed',
+              toolId: call.toolId,
+              callId: call.id,
+            );
+          },
+        ),
+      ]),
+      mailbox: AgentMailbox(),
+      confirmToolCall: (call) async => true,
+    );
+
+    final sms = await router.dispatch(
+      const ToolCall(id: 'old-sms', toolId: 'communication_sms_send'),
+      sessionKey: 'session-1',
+    );
+    final call = await router.dispatch(
+      const ToolCall(id: 'old-call', toolId: 'communication_phone_call'),
+      sessionKey: 'session-1',
+    );
+    final dial = await router.dispatch(
+      const ToolCall(id: 'old-dial', toolId: 'communication_phone_dial'),
+      sessionKey: 'session-1',
+    );
+
+    expect(sms.toolId, 'sms_send');
+    expect(call.toolId, 'phone_call');
+    expect(dial.toolId, 'phone_dial');
+    expect(executedToolIds, <String>['sms_send', 'phone_call', 'phone_dial']);
+  });
+
+  test('DDGS stub backend reports web search as unavailable', () async {
+    final router = _nativeRouterFor(<NativeToolHandler>[
+      WebSearchToolHandler(DdgsWebSearchService()),
+      WebFetchToolHandler(DdgsWebSearchService()),
+    ]);
+
+    final searchResult = await router.dispatch(
+      const ToolCall(
+        id: 'search-1',
+        toolId: 'web_search',
+        arguments: <String, Object?>{'query': 'openreef'},
+      ),
+      sessionKey: 'session-1',
+    );
+    final fetchResult = await router.dispatch(
+      const ToolCall(
+        id: 'fetch-1',
+        toolId: 'web_fetch',
+        arguments: <String, Object?>{'url': 'https://example.com'},
+      ),
+      sessionKey: 'session-1',
+    );
+
+    expect(searchResult.status, ToolResultStatus.unavailable);
+    expect(searchResult.summary, DdgsWebSearchService.searchUnavailableMessage);
+    expect(fetchResult.status, ToolResultStatus.unavailable);
+    expect(fetchResult.summary, DdgsWebSearchService.fetchUnavailableMessage);
   });
 }
 

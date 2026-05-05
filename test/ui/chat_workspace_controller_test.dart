@@ -105,7 +105,7 @@ void main() {
 
     (controller.activeSession!.chatSession as _ExternallyMutableSession)
         .appendAssistantFinal('Runtime visible final.');
-    await Future<void>.delayed(const Duration(milliseconds: 20));
+    await _waitFor(() => observedPersistedFinal);
 
     expect(observedPersistedFinal, isTrue);
   });
@@ -136,6 +136,16 @@ void main() {
     expect(messages.last.text, 'Partial final');
     expect(messages.last.isStreaming, isFalse);
   });
+}
+
+Future<void> _waitFor(
+  bool Function() condition, {
+  Duration timeout = const Duration(seconds: 2),
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (!condition() && DateTime.now().isBefore(deadline)) {
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+  }
 }
 
 Future<ChatSessionRepository> _createRepository() async {

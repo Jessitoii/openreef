@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:openreef/memory/chat_session_record.dart';
 import 'package:openreef/memory/chat_session_repository.dart';
 import 'package:openreef/memory/memory_index.dart';
-import 'package:openreef/models/model_capabilities.dart';
 import 'package:openreef/ui/app_theme.dart';
 import 'package:openreef/ui/chat/attachment_runtime_support.dart';
 import 'package:openreef/ui/chat/composer_capability_resolver.dart';
@@ -267,15 +266,13 @@ class _AppShellState extends State<AppShell> {
           lastModified: activeSession.record.lastModified,
           onSendMessage: _workspaceController.sendMessage,
           onSendComposerSubmission: _workspaceController.sendComposerSubmission,
+          onCancelActiveRun: _workspaceController.cancelActiveRun,
           capabilityResolver: ComposerCapabilityResolver(
             modelCapabilityProvider: CallbackActiveModelCapabilityProvider(
-              () =>
-                  widget
-                      .modelDownloadController
-                      .state
-                      .selectedModel
-                      ?.inputCapabilities ??
-                  ModelInputCapabilities.textOnly,
+              () => widget
+                  .modelDownloadController
+                  .selectedModelCapabilityMetadata
+                  .input,
             ),
             runtimeSupport: const DefaultAttachmentRuntimeSupport(),
           ),

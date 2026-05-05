@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:openreef/models/hugging_face_token_store.dart';
 import 'package:openreef/models/litert_bridge.dart';
+import 'package:openreef/models/model_capabilities.dart';
 import 'package:openreef/models/model_descriptor.dart';
 import 'package:openreef/models/model_downloader.dart';
 import 'package:openreef/models/model_download_state.dart';
@@ -42,6 +43,22 @@ class ModelDownloadController extends ChangeNotifier {
 
   ModelDownloadState get state => _state;
   List<ModelDescriptor> get models => _registry.generationModels;
+  ModelCapabilityMetadata get selectedModelCapabilityMetadata {
+    final activeModelId = _settingsController.settings.generationModelId;
+    final activeModel = activeModelId == null
+        ? null
+        : _registry.findById(activeModelId);
+    final initializedModelId = _projectInitializedModelId(
+      _state.installedModels,
+    );
+    final activeRecord = activeModel == null
+        ? null
+        : _recordFor(_state.installedModels, activeModel);
+    if (activeRecord != null && activeRecord.modelId == initializedModelId) {
+      return activeModel!.capabilityMetadata;
+    }
+    return ModelInputCapabilities.textOnlyFallbackMetadata;
+  }
 
   Future<void> initialize() async {
     if (_initialized) {
@@ -172,6 +189,21 @@ class ModelDownloadController extends ChangeNotifier {
   }
 
   Future<InstalledModelRecord?> startDownload() => downloadSelectedModel();
+
+  Future<void> saveHfTokenForSelectedModel(String token) async {
+    final descriptor = _state.selectedModel;
+    if (descriptor == null || !descriptor.requiresHfToken) {
+      return;
+    }
+    final normalized = token.trim();
+    if (normalized.isEmpty) {
+      return;
+    }
+    await _hfTokenStore?.writeTokenForModel(descriptor.id, normalized);
+    _hfTokenAvailability[descriptor.id] = true;
+    _state = _state.copyWith(clearErrorMessage: true, clearFailure: true);
+    notifyListeners();
+  }
 
   Future<InstalledModelRecord?> downloadSelectedModel() async {
     final descriptor = _state.selectedModel;

@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:openreef/agent/agent_execution_event.dart' as execution_events;
 import 'package:openreef/agent/agent_loop.dart';
 import 'package:openreef/agent/agent_model_adapter.dart';
 import 'package:openreef/agent/agent_models.dart';
@@ -438,6 +441,157 @@ void main() {
             .map((event) => event.deltaText)
             .join(),
         allOf(isNot(contains('<|tool_call>')), isNot(contains('tool_call'))),
+      );
+    },
+  );
+
+  test(
+    'text-protocol volume call dispatches through ToolRouter then continues',
+    () async {
+      final sink = _RecordingTranscriptSink();
+      final seenLevels = <Object?>[];
+      final loop = _buildLoop(
+        memoryIndex: memoryIndex,
+        memoryFormer: memoryFormer,
+        modelAdapter: _StreamingQueueAdapter(<String>[
+          'call:volume_set{level: 100}',
+          'Volume is at maximum.',
+        ]),
+        toolCatalog: InMemoryToolCatalog(<ToolDefinition>[
+          ToolDefinition(
+            id: 'volume_set',
+            embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
+            argumentSchema: const <ToolArgumentSpec>[
+              ToolArgumentSpec(
+                name: 'level',
+                type: ToolArgumentType.doubleValue,
+              ),
+            ],
+            execute: (call) async {
+              seenLevels.add(call.arguments['level']);
+              return const ToolResult.success('volume_set applied');
+            },
+          ),
+        ]),
+        notifier: _RecordingNotifier(),
+      );
+
+      final result = await loop.run(
+        'turn the sound all the way up',
+        sessionKey: 'agent:main',
+        transcriptSink: sink,
+        requestId: 'request-volume-protocol',
+      );
+
+      expect(result.sessionResult, SessionResult.completed);
+      expect(result.text, 'Volume is at maximum.');
+      expect(result.toolsUsed, const <String>['volume_set']);
+      expect(seenLevels, const <Object?>[1.0]);
+      expect(
+        sink.events
+            .where(
+              (event) =>
+                  event.kind ==
+                  RuntimeTranscriptEventKind.assistantMessageDelta,
+            )
+            .map((event) => event.deltaText)
+            .join(),
+        isNot(contains('call:volume_set')),
+      );
+    },
+  );
+
+  test(
+    'text-protocol web search unavailable result gets honest final answer',
+    () async {
+      final loop = _buildLoop(
+        memoryIndex: memoryIndex,
+        memoryFormer: memoryFormer,
+        modelAdapter: _StreamingQueueAdapter(<String>[
+          '<|tool_call>call:web_search{query: "OpenAI news"}<tool_call|>',
+          'Web search is currently unavailable in this build.',
+        ]),
+        toolCatalog: InMemoryToolCatalog(<ToolDefinition>[
+          ToolDefinition(
+            id: 'web_search',
+            embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
+            argumentSchema: const <ToolArgumentSpec>[
+              ToolArgumentSpec(name: 'query', type: ToolArgumentType.string),
+            ],
+            execute: (call) async => const ToolResult.failure(
+              'web_search_backend_unavailable',
+              status: ToolResultStatus.unavailable,
+              userVisibleMessage:
+                  'Web search is currently unavailable in this build.',
+            ),
+          ),
+        ]),
+        notifier: _RecordingNotifier(),
+      );
+
+      final result = await loop.run(
+        'search the web for OpenAI news',
+        sessionKey: 'agent:main',
+      );
+
+      expect(result.sessionResult, SessionResult.completed);
+      expect(result.text, 'Web search is currently unavailable in this build.');
+      expect(result.toolsUsed, const <String>['web_search']);
+      expect(result.toolResults.single.status, ToolResultStatus.unavailable);
+    },
+  );
+
+  test(
+    'repeated malformed protocol calls end with clean final failure',
+    () async {
+      final sink = _RecordingTranscriptSink();
+      final memoryFormation = _RecordingMemoryFormationService();
+      final loop = _buildLoop(
+        memoryIndex: memoryIndex,
+        memoryFormer: memoryFormer,
+        memoryFormationService: memoryFormation,
+        modelAdapter: _StreamingQueueAdapter(<String>[
+          '<|tool_call>call:battery_info{"bad"<tool_call|>',
+          '<|tool_call>call:battery_info{"still_bad"<tool_call|>',
+        ]),
+        toolCatalog: InMemoryToolCatalog(<ToolDefinition>[
+          ToolDefinition(
+            id: 'battery_info',
+            embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
+            execute: _okExecute,
+          ),
+        ]),
+        notifier: _RecordingNotifier(),
+      );
+
+      final result = await loop.run(
+        'check battery',
+        sessionKey: 'agent:main',
+        transcriptSink: sink,
+        requestId: 'request-repeated-malformed-marker',
+      );
+
+      expect(result.sessionResult, SessionResult.failed);
+      expect(result.reason, 'malformed_tool_call');
+      expect(
+        result.text,
+        'I tried to call the tool but could not produce a valid tool call.',
+      );
+      expect(result.toolResults.length, 2);
+      expect(memoryFormation.turns, isEmpty);
+      expect(
+        sink.events
+            .where(
+              (event) =>
+                  event.kind ==
+                  RuntimeTranscriptEventKind.assistantMessageDelta,
+            )
+            .map((event) => event.deltaText)
+            .join(),
+        allOf(
+          isNot(contains('<|tool_call>')),
+          isNot(contains('parser_failure')),
+        ),
       );
     },
   );
@@ -914,6 +1068,244 @@ void main() {
     );
   });
 
+  test('simple text generation emits token and completion events', () async {
+    final transcriptSink = _RecordingTranscriptSink();
+    final executionSink = _RecordingExecutionEventSink();
+    final loop = _buildLoop(
+      memoryIndex: memoryIndex,
+      memoryFormer: memoryFormer,
+      modelAdapter: _StreamingQueueAdapter(<String>['Hello from the reef.']),
+      toolCatalog: InMemoryToolCatalog(const <ToolDefinition>[]),
+      notifier: _RecordingNotifier(),
+    );
+
+    final result = await loop.run(
+      'hello',
+      sessionKey: 'agent:main',
+      transcriptSink: transcriptSink,
+      executionEventSink: executionSink,
+      requestId: 'request-text',
+      runId: 'run-text',
+    );
+
+    expect(result.sessionResult, SessionResult.completed);
+    expect(result.text, 'Hello from the reef.');
+    expect(
+      executionSink.events
+          .whereType<execution_events.TokenDeltaEvent>()
+          .single
+          .delta,
+      'Hello from the reef.',
+    );
+    expect(
+      executionSink.events
+          .whereType<execution_events.RunCompletedEvent>()
+          .single
+          .reason,
+      'completed',
+    );
+    expect(
+      executionSink.events,
+      everyElement(
+        isA<execution_events.AgentExecutionEvent>()
+            .having((event) => event.requestId, 'requestId', 'request-text')
+            .having((event) => event.sessionId, 'sessionId', 'agent:main')
+            .having((event) => event.runId, 'runId', 'run-text'),
+      ),
+    );
+    expect(
+      transcriptSink.events
+          .where(
+            (event) =>
+                event.kind == RuntimeTranscriptEventKind.assistantMessageDelta,
+          )
+          .map((event) => event.deltaText)
+          .join(),
+      'Hello from the reef.',
+    );
+  });
+
+  test(
+    'successful tool call emits tool result and completion events',
+    () async {
+      final executionSink = _RecordingExecutionEventSink();
+      final loop = _buildLoop(
+        memoryIndex: memoryIndex,
+        memoryFormer: memoryFormer,
+        modelAdapter: _StreamingQueueAdapter(<String>[
+          'call:battery_info{}',
+          'Battery is available.',
+        ]),
+        toolCatalog: InMemoryToolCatalog(<ToolDefinition>[
+          ToolDefinition(
+            id: 'battery_info',
+            embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
+            execute: _okExecute,
+          ),
+        ]),
+        notifier: _RecordingNotifier(),
+      );
+
+      final result = await loop.run(
+        'check battery',
+        sessionKey: 'agent:main',
+        executionEventSink: executionSink,
+        requestId: 'request-tool-ok',
+        runId: 'run-tool-ok',
+      );
+
+      expect(result.sessionResult, SessionResult.completed);
+      final started = executionSink.events
+          .whereType<execution_events.ToolCallStartedEvent>()
+          .single;
+      expect(started.toolId, 'battery_info');
+      expect(started.callId, 'tool_call_marker');
+      expect(started.displayLabel, 'Battery Info');
+      expect(started.safeArgsPreview, isEmpty);
+      expect(
+        executionSink.events
+            .whereType<execution_events.ToolCallResultEvent>()
+            .single
+            .status,
+        'success',
+      );
+      expect(
+        executionSink.events.whereType<execution_events.RunCompletedEvent>(),
+        hasLength(1),
+      );
+    },
+  );
+
+  test('failed tool call emits failed event', () async {
+    final executionSink = _RecordingExecutionEventSink();
+    final loop = _buildLoop(
+      memoryIndex: memoryIndex,
+      memoryFormer: memoryFormer,
+      modelAdapter: _StreamingQueueAdapter(<String>[
+        'call:web_search{query: "OpenAI news"}',
+        'Web search is currently unavailable in this build.',
+      ]),
+      toolCatalog: InMemoryToolCatalog(<ToolDefinition>[
+        ToolDefinition(
+          id: 'web_search',
+          embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
+          argumentSchema: const <ToolArgumentSpec>[
+            ToolArgumentSpec(name: 'query', type: ToolArgumentType.string),
+          ],
+          execute: (call) async => const ToolResult.failure(
+            'web_search_backend_unavailable',
+            status: ToolResultStatus.unavailable,
+            userVisibleMessage:
+                'Web search is currently unavailable in this build.',
+          ),
+        ),
+      ]),
+      notifier: _RecordingNotifier(),
+    );
+
+    final result = await loop.run(
+      'search the web',
+      sessionKey: 'agent:main',
+      executionEventSink: executionSink,
+      requestId: 'request-tool-failed',
+    );
+
+    expect(result.sessionResult, SessionResult.completed);
+    final failed = executionSink.events
+        .whereType<execution_events.ToolCallFailedEvent>()
+        .single;
+    expect(failed.toolId, 'web_search');
+    expect(failed.callId, 'tool_call_marker');
+    expect(failed.displayLabel, 'Web Search');
+    expect(failed.status, 'unavailable');
+    expect(
+      failed.summary,
+      'Web search is currently unavailable in this build.',
+    );
+    expect(
+      executionSink.events.whereType<execution_events.RunCompletedEvent>(),
+      hasLength(1),
+    );
+  });
+
+  test('approval-required tool emits approval event', () async {
+    final executionSink = _RecordingExecutionEventSink();
+    final loop = _buildLoop(
+      memoryIndex: memoryIndex,
+      memoryFormer: memoryFormer,
+      modelAdapter: _StreamingQueueAdapter(<String>[
+        'call:send_message{body: "hello"}',
+        'Message sent.',
+      ]),
+      toolCatalog: InMemoryToolCatalog(<ToolDefinition>[
+        ToolDefinition(
+          id: 'send_message',
+          embedding: const <double>[1, 0, 0, 0, 0, 0, 0],
+          argumentSchema: const <ToolArgumentSpec>[
+            ToolArgumentSpec(name: 'body', type: ToolArgumentType.string),
+          ],
+          requiresConfirmation: true,
+          execute: _okExecute,
+        ),
+      ]),
+      notifier: _RecordingNotifier(),
+      confirmToolCall: (call) async => true,
+    );
+
+    final result = await loop.run(
+      'send hello',
+      sessionKey: 'agent:main',
+      executionEventSink: executionSink,
+      requestId: 'request-approval',
+    );
+
+    expect(result.sessionResult, SessionResult.completed);
+    final approval = executionSink.events
+        .whereType<execution_events.ApprovalRequiredEvent>()
+        .single;
+    expect(approval.toolId, 'send_message');
+    expect(approval.callId, 'tool_call_marker');
+    expect(approval.displayLabel, 'Send Message');
+    expect(approval.safeArgsPreview.single.name, 'body');
+    expect(approval.safeArgsPreview.single.displayValue, 'hello');
+    expect(
+      executionSink.events.whereType<execution_events.ToolCallResultEvent>(),
+      hasLength(1),
+    );
+  });
+
+  test('cancels during token streaming and skips long-term memory', () async {
+    final memoryFormation = _RecordingMemoryFormationService();
+    final adapter = _ControlledStreamingAdapter();
+    final cancellation = CancellationSignal();
+    final loop = _buildLoop(
+      memoryIndex: memoryIndex,
+      memoryFormer: memoryFormer,
+      memoryFormationService: memoryFormation,
+      modelAdapter: adapter,
+      toolCatalog: InMemoryToolCatalog(const <ToolDefinition>[]),
+      notifier: _RecordingNotifier(),
+    );
+
+    final resultFuture = loop.run(
+      'stream then stop',
+      sessionKey: 'agent:main',
+      control: LoopControl(cancellationSignal: cancellation),
+    );
+
+    await adapter.started;
+    adapter.add('partial ');
+    await Future<void>.delayed(Duration.zero);
+    cancellation.cancel(RunCancellationReason.userRequested.code);
+    adapter.add('ignored');
+    final result = await resultFuture;
+
+    expect(result.sessionResult, SessionResult.cancelled);
+    expect(result.reason, 'user_requested');
+    expect(adapter.cancelCalls, 1);
+    expect(memoryFormation.turns, isEmpty);
+  });
+
   test('typed call source bypasses parser and avoids double dispatch', () async {
     var dispatchCount = 0;
     final adapter = _TypedToolAdapter(
@@ -1041,7 +1433,7 @@ void main() {
 
     expect(result.sessionResult, SessionResult.failed);
     expect(result.reason, 'generation_failure');
-    expect(result.text, contains('Low free RAM detected.'));
+    expect(result.text, 'OpenReef paused generation to protect your phone.');
     expect(notifier.freezeCalls, 0);
   });
 
@@ -1238,6 +1630,46 @@ class _StreamingQueueAdapter implements StreamingAgentModelAdapter {
   }
 }
 
+class _ControlledStreamingAdapter
+    implements StreamingAgentModelAdapter, CancellableAgentModelAdapter {
+  _ControlledStreamingAdapter() {
+    _controller = StreamController<String>(onListen: _started.complete);
+  }
+
+  late final StreamController<String> _controller;
+  final Completer<void> _started = Completer<void>();
+  var cancelCalls = 0;
+
+  Future<void> get started => _started.future;
+
+  void add(String chunk) {
+    _controller.add(chunk);
+  }
+
+  @override
+  Future<bool> cancelGeneration() async {
+    cancelCalls += 1;
+    await _controller.close();
+    return true;
+  }
+
+  @override
+  Future<AgentResponse> generate(
+    AssembleResult context, {
+    required int maxTokens,
+  }) async {
+    return const AgentResponse(text: '');
+  }
+
+  @override
+  Stream<String> generateTextStream(
+    AssembleResult context, {
+    required int maxTokens,
+  }) {
+    return _controller.stream;
+  }
+}
+
 class _TypedToolAdapter implements ToolResponseModelAdapter {
   _TypedToolAdapter({
     required this.initialResponse,
@@ -1281,6 +1713,19 @@ class _RecordingTranscriptSink implements RuntimeTranscriptSink {
 
   @override
   Future<void> applyRuntimeTranscriptEvent(RuntimeTranscriptEvent event) async {
+    events.add(event);
+  }
+}
+
+class _RecordingExecutionEventSink
+    implements execution_events.AgentExecutionEventSink {
+  final List<execution_events.AgentExecutionEvent> events =
+      <execution_events.AgentExecutionEvent>[];
+
+  @override
+  Future<void> applyAgentExecutionEvent(
+    execution_events.AgentExecutionEvent event,
+  ) async {
     events.add(event);
   }
 }

@@ -36,14 +36,13 @@ class _ModelDownloadScreenState extends State<ModelDownloadScreen> {
 
     final card = widget.controller.cardStateFor(selectedModel);
     switch (card.lifecycle) {
-      case ModelCardLifecycle.discoverable:
-      case ModelCardLifecycle.downloadable:
-      case ModelCardLifecycle.failedDownload:
+      case ModelCardLifecycle.notInstalled:
         await widget.controller.downloadSelectedModel();
+      case ModelCardLifecycle.authRequired:
+        await _showHfTokenDialog();
       case ModelCardLifecycle.downloaded:
-      case ModelCardLifecycle.failedInitialization:
         await widget.controller.initializeSelectedModel();
-      case ModelCardLifecycle.initialized:
+      case ModelCardLifecycle.ready:
         final installedModel = await widget.controller.activateSelectedModel();
         if (installedModel == null || !mounted) return;
         _handlingCompletion = true;
@@ -52,14 +51,51 @@ class _ModelDownloadScreenState extends State<ModelDownloadScreen> {
         } finally {
           _handlingCompletion = false;
         }
+      case ModelCardLifecycle.failed:
+        if (widget.controller.state.failureKind == ModelFailureKind.download) {
+          await widget.controller.downloadSelectedModel();
+        } else {
+          await widget.controller.initializeSelectedModel();
+        }
       case ModelCardLifecycle.downloading:
       case ModelCardLifecycle.initializing:
       case ModelCardLifecycle.active:
-      case ModelCardLifecycle.missingToken:
-      case ModelCardLifecycle.unsupported:
-      case ModelCardLifecycle.unavailable:
+      case ModelCardLifecycle.unsupportedDevice:
         return;
     }
+  }
+
+  Future<void> _showHfTokenDialog() async {
+    final tokenController = TextEditingController();
+    final token = await showDialog<String>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Add Hugging Face token'),
+          content: TextField(
+            controller: tokenController,
+            autofocus: true,
+            obscureText: true,
+            decoration: const InputDecoration(labelText: 'HF token'),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(tokenController.text),
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      },
+    );
+    tokenController.dispose();
+    if (token == null || token.trim().isEmpty) {
+      return;
+    }
+    await widget.controller.saveHfTokenForSelectedModel(token);
   }
 
   @override
@@ -205,14 +241,12 @@ class _MarketplacePanel extends StatelessWidget {
 
   IconData _primaryIcon(ModelCardLifecycle lifecycle) {
     return switch (lifecycle) {
-      ModelCardLifecycle.downloaded ||
-      ModelCardLifecycle.failedInitialization => Icons.play_circle_outline,
-      ModelCardLifecycle.initialized => Icons.check_circle_outline,
+      ModelCardLifecycle.downloaded => Icons.play_circle_outline,
+      ModelCardLifecycle.ready => Icons.check_circle_outline,
       ModelCardLifecycle.active => Icons.verified,
-      ModelCardLifecycle.failedDownload => Icons.refresh,
-      ModelCardLifecycle.missingToken => Icons.key,
-      ModelCardLifecycle.unsupported ||
-      ModelCardLifecycle.unavailable => Icons.block,
+      ModelCardLifecycle.failed => Icons.refresh,
+      ModelCardLifecycle.authRequired => Icons.key,
+      ModelCardLifecycle.unsupportedDevice => Icons.block,
       ModelCardLifecycle.initializing => Icons.hourglass_bottom,
       _ => Icons.download,
     };
@@ -295,7 +329,8 @@ class _MarketplacePanel extends StatelessWidget {
                 selectedCard.reason!,
                 style: theme.textTheme.bodySmall?.copyWith(
                   color:
-                      selectedCard.lifecycle == ModelCardLifecycle.unsupported
+                      selectedCard.lifecycle ==
+                          ModelCardLifecycle.unsupportedDevice
                       ? Colors.amber.shade800
                       : theme.colorScheme.error,
                 ),
@@ -429,9 +464,8 @@ class _ModelListItem extends StatelessWidget {
               ],
             ),
           ),
-          if (card.lifecycle == ModelCardLifecycle.unsupported ||
-              card.lifecycle == ModelCardLifecycle.unavailable ||
-              card.lifecycle == ModelCardLifecycle.missingToken)
+          if (card.lifecycle == ModelCardLifecycle.unsupportedDevice ||
+              card.lifecycle == ModelCardLifecycle.authRequired)
             const Icon(Icons.info_outline, color: Colors.amber)
           else if (card.isActive)
             const Icon(Icons.verified, color: Colors.green)

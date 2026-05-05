@@ -2,16 +2,23 @@ import 'dart:async';
 import 'dart:collection';
 
 import 'package:flutter/foundation.dart';
+import 'package:openreef/agent/agent_execution_event.dart';
 import 'package:openreef/agent/agent_task_executor.dart';
 import 'package:openreef/agent/mailbox.dart';
 import 'package:openreef/agent/agent_models.dart';
 import 'package:openreef/agent/execution_request.dart';
 import 'package:openreef/agent/runtime_transcript_event.dart';
+import 'package:openreef/models/model_capabilities.dart';
+import 'package:openreef/ui/chat/attachment_runtime_support.dart';
+import 'package:openreef/ui/chat/composer_capability_resolver.dart';
 import 'package:openreef/ui/chat/composer_models.dart';
+import 'package:openreef/ui/chat/composer_submission_validator.dart';
 import 'package:openreef/ui/chat_session_port.dart';
 
 class MainAgentApprovalController extends ChangeNotifier {
-  MainAgentApprovalController({AgentMailbox? mailbox}) : _mailbox = mailbox {
+  MainAgentApprovalController({AgentMailbox? mailbox, DateTime Function()? now})
+    : _mailbox = mailbox,
+      _now = now ?? DateTime.now {
     _mailboxRequestSubscription = _mailbox?.approvalRequests.listen(
       _handleMailboxApprovalRequest,
     );
@@ -20,19 +27,29 @@ class MainAgentApprovalController extends ChangeNotifier {
     );
   }
 
+  static const Duration approvalTtl = Duration(minutes: 2);
+
   final AgentMailbox? _mailbox;
+  final DateTime Function() _now;
   final Queue<_PendingApprovalEntry> _approvalQueue =
       Queue<_PendingApprovalEntry>();
   _PendingApprovalEntry? _activeApproval;
   StreamSubscription<ApprovalRequest>? _mailboxRequestSubscription;
   StreamSubscription<ApprovalResolution>? _mailboxResolutionSubscription;
 
-  PendingToolApproval? get pendingApproval => _activeApproval?.presentation;
+  PendingToolApproval? get pendingApproval {
+    _expireActiveApprovalIfNeeded();
+    return _activeApproval?.presentation;
+  }
 
   Future<bool> confirmToolCall(ToolCall call) {
     final completer = Completer<bool>();
     _approvalQueue.add(
-      _PendingApprovalEntry.main(call: call, completer: completer),
+      _PendingApprovalEntry.main(
+        call: _canonicalizeApprovalCall(call),
+        completer: completer,
+        createdAt: _now(),
+      ),
     );
     _promoteNextApproval();
     return completer.future;
@@ -46,6 +63,14 @@ class MainAgentApprovalController extends ChangeNotifier {
     _resolveActiveApproval(approved: false);
   }
 
+  bool resolvePendingApprovalIntent(bool approved) {
+    if (_activeApproval == null) {
+      return false;
+    }
+    _resolveActiveApproval(approved: approved);
+    return true;
+  }
+
   @override
   void dispose() {
     _mailboxRequestSubscription?.cancel();
@@ -54,7 +79,13 @@ class MainAgentApprovalController extends ChangeNotifier {
   }
 
   void _handleMailboxApprovalRequest(ApprovalRequest request) {
-    _approvalQueue.add(_PendingApprovalEntry.mailbox(request));
+    _approvalQueue.add(
+      _PendingApprovalEntry.mailbox(
+        request,
+        createdAt: _now(),
+        call: _canonicalizeApprovalCall(request.call),
+      ),
+    );
     _promoteNextApproval();
   }
 
@@ -73,11 +104,45 @@ class MainAgentApprovalController extends ChangeNotifier {
   }
 
   void _resolveActiveApproval({required bool approved}) {
+    if (_expireActiveApprovalIfNeeded()) {
+      return;
+    }
     final entry = _activeApproval;
     if (entry == null) {
       return;
     }
 
+    _activeApproval = null;
+    notifyListeners();
+    _promoteNextApproval();
+    _completeEntry(
+      entry,
+      approved: approved,
+      rejectionReason: approved ? null : 'user_denied',
+    );
+  }
+
+  bool _expireActiveApprovalIfNeeded() {
+    final entry = _activeApproval;
+    if (entry == null || !_isExpired(entry)) {
+      return false;
+    }
+    _activeApproval = null;
+    notifyListeners();
+    _completeEntry(entry, approved: false, rejectionReason: 'approval_expired');
+    _promoteNextApproval();
+    return true;
+  }
+
+  bool _isExpired(_PendingApprovalEntry entry) {
+    return _now().difference(entry.presentation.createdAt) > approvalTtl;
+  }
+
+  void _completeEntry(
+    _PendingApprovalEntry entry, {
+    required bool approved,
+    String? rejectionReason,
+  }) {
     if (entry.isMailboxRequest) {
       final requestId = entry.requestId;
       if (requestId != null) {
@@ -85,7 +150,9 @@ class MainAgentApprovalController extends ChangeNotifier {
           requestId,
           approved
               ? const MailboxDecision.approved()
-              : const MailboxDecision.rejected(reason: 'user_denied'),
+              : MailboxDecision.rejected(
+                  reason: rejectionReason ?? 'user_denied',
+                ),
         );
       }
     } else {
@@ -94,19 +161,51 @@ class MainAgentApprovalController extends ChangeNotifier {
         completer.complete(approved);
       }
     }
-
-    _activeApproval = null;
-    notifyListeners();
-    _promoteNextApproval();
   }
 
   void _promoteNextApproval() {
-    if (_activeApproval != null || _approvalQueue.isEmpty) {
+    if (_activeApproval != null) {
       return;
     }
 
-    _activeApproval = _approvalQueue.removeFirst();
-    notifyListeners();
+    while (_approvalQueue.isNotEmpty) {
+      final next = _approvalQueue.removeFirst();
+      if (_isExpired(next)) {
+        _completeEntry(
+          next,
+          approved: false,
+          rejectionReason: 'approval_expired',
+        );
+        continue;
+      }
+      _activeApproval = next;
+      notifyListeners();
+      return;
+    }
+  }
+
+  ToolCall _canonicalizeApprovalCall(ToolCall call) {
+    final canonicalToolId = _canonicalToolId(call.toolId);
+    if (canonicalToolId == call.toolId) {
+      return call;
+    }
+    return ToolCall(
+      id: call.id,
+      toolId: canonicalToolId,
+      arguments: call.arguments,
+      rawArguments: call.rawArguments,
+      hasRawArguments: call.hasRawArguments,
+      source: call.source,
+    );
+  }
+
+  String _canonicalToolId(String toolId) {
+    return switch (toolId) {
+      'communication_sms_send' => 'sms_send',
+      'communication_phone_call' => 'phone_call',
+      'communication_phone_dial' => 'phone_dial',
+      _ => toolId,
+    };
   }
 }
 
@@ -114,22 +213,28 @@ class _PendingApprovalEntry {
   _PendingApprovalEntry.main({
     required ToolCall call,
     required Completer<bool> completer,
+    required DateTime createdAt,
   }) : presentation = PendingToolApproval(
          toolCallId: call.id,
          toolId: call.toolId,
          arguments: Map<String, Object?>.unmodifiable(call.arguments),
+         createdAt: createdAt,
        ),
        requestId = null,
        mainDecision = completer;
 
-  _PendingApprovalEntry.mailbox(ApprovalRequest request)
-    : presentation = PendingToolApproval(
-        toolCallId: request.call.id,
-        toolId: request.call.toolId,
-        arguments: Map<String, Object?>.unmodifiable(request.call.arguments),
-      ),
-      requestId = request.requestId,
-      mainDecision = null;
+  _PendingApprovalEntry.mailbox(
+    ApprovalRequest request, {
+    required DateTime createdAt,
+    required ToolCall call,
+  }) : presentation = PendingToolApproval(
+         toolCallId: call.id,
+         toolId: call.toolId,
+         arguments: Map<String, Object?>.unmodifiable(call.arguments),
+         createdAt: createdAt,
+       ),
+       requestId = request.requestId,
+       mainDecision = null;
 
   final PendingToolApproval presentation;
   final String? requestId;
@@ -150,6 +255,7 @@ class _RuntimeRequestProjection {
   bool isFinalized = false;
   bool hasVisibleAssistantText = false;
   int? lastSequence;
+  int? lastExecutionSequence;
 }
 
 class AgentLoopChatSession extends ChangeNotifier
@@ -159,27 +265,29 @@ class AgentLoopChatSession extends ChangeNotifier
         ApprovalCapableChatSession,
         ChatExecutionSink,
         RuntimeTranscriptSink,
+        AgentExecutionEventSink,
+        ExecutionTraceCapableChatSession,
         PersistentChatSession,
+        CancellableChatSession,
         SystemAssistantInjectableChatSession {
   AgentLoopChatSession({
     required AgentTaskExecutor taskExecutor,
     MainAgentApprovalController? approvalController,
+    ComposerCapabilityResolver? composerCapabilityResolver,
     this.sessionKey = 'agent:main',
     List<ChatTranscriptMessage> initialMessages =
         const <ChatTranscriptMessage>[],
   }) : _taskExecutor = taskExecutor,
        _approvalController = approvalController,
-       _messages = initialMessages.isEmpty
-           ? <ChatTranscriptMessage>[
-               ChatTranscriptMessage(
-                 id: 'boot-1',
-                 sender: ChatMessageSender.system,
-                 text:
-                     'OPENREEF READY\nOffline agent shell initialized. AgentLoop bridge is live.',
-                 timestamp: DateTime.now(),
-               ),
-             ]
-           : List<ChatTranscriptMessage>.from(initialMessages) {
+       _composerCapabilityResolver =
+           composerCapabilityResolver ??
+           const ComposerCapabilityResolver(
+             modelCapabilityProvider: StaticActiveModelCapabilityProvider(
+               ModelInputCapabilities.textOnly,
+             ),
+             runtimeSupport: DefaultAttachmentRuntimeSupport(),
+           ),
+       _messages = List<ChatTranscriptMessage>.from(initialMessages) {
     _approvalController?.addListener(_handleApprovalChanged);
     _conversationHistory.addAll(_buildConversationHistory(_messages));
     _nextId = _deriveNextId(_messages);
@@ -187,6 +295,9 @@ class AgentLoopChatSession extends ChangeNotifier
 
   final AgentTaskExecutor _taskExecutor;
   final MainAgentApprovalController? _approvalController;
+  final ComposerCapabilityResolver _composerCapabilityResolver;
+  final ComposerSubmissionValidator _composerSubmissionValidator =
+      const ComposerSubmissionValidator();
   final String sessionKey;
   final List<ChatTranscriptMessage> _messages;
   final List<AgentMessage> _conversationHistory = <AgentMessage>[];
@@ -199,9 +310,14 @@ class AgentLoopChatSession extends ChangeNotifier
   final Set<String> _runtimeMessageIds = <String>{};
   final Map<String, SubAgentActivity> _runtimeActivities =
       <String, SubAgentActivity>{};
+  final Set<String> _terminalExecutionRequestIds = <String>{};
   final Map<String, _RuntimeRequestProjection> _projectionsByRequestId =
       <String, _RuntimeRequestProjection>{};
+  final Map<String, ExecutionTraceStep> _executionTraceSteps =
+      <String, ExecutionTraceStep>{};
   ChatTranscriptPersistencePort? _persistencePort;
+  String? _activeRequestId;
+  ExecutionTrace? _executionTrace;
 
   @override
   List<SubAgentActivity> get activities =>
@@ -219,6 +335,9 @@ class AgentLoopChatSession extends ChangeNotifier
   ChatSessionStatus get status => _status;
 
   @override
+  ExecutionTrace? get executionTrace => _executionTrace;
+
+  @override
   void approvePendingApproval() {
     _approvalController?.approvePendingApproval();
   }
@@ -231,26 +350,24 @@ class AgentLoopChatSession extends ChangeNotifier
   @override
   Future<void> sendMessage(String message) async {
     final trimmed = message.trim();
-    if (trimmed.isEmpty || _isRunning) {
+    if (trimmed.isEmpty) {
+      return;
+    }
+    if (_resolvePendingApprovalFromText(trimmed)) {
+      _appendMessage(ChatMessageSender.user, trimmed);
+      return;
+    }
+    if (_isRunning) {
       return;
     }
 
     _isRunning = true;
     _runtimeActivities.clear();
+    _executionTraceSteps.clear();
+    _executionTrace = null;
     _appendMessage(ChatMessageSender.user, trimmed);
     _setStatus(ChatSessionStatus.planning);
-    _setActivities(<SubAgentActivity>[
-      SubAgentActivity(
-        id: 'agent-loop',
-        label: 'agent.loop',
-        summary: 'Assembling context and running the offline agent loop.',
-        details: <String>[
-          'Session key: $sessionKey',
-          'Prompt length: ${trimmed.length} chars',
-        ],
-        status: SubAgentActivityStatus.running,
-      ),
-    ]);
+    _setActivities(const <SubAgentActivity>[]);
 
     final userTurnNumber = _nextTurnNumber();
     _conversationHistory.add(
@@ -277,6 +394,7 @@ class AgentLoopChatSession extends ChangeNotifier
               .toList(growable: false),
         },
       );
+      _activeRequestId = request.id;
       final result = await _taskExecutor.execute(request);
       await appendExecutionResult(request, result);
 
@@ -308,7 +426,7 @@ class AgentLoopChatSession extends ChangeNotifier
         'OpenReef.AgentLoopChatSession: sendMessage.failed ${error.runtimeType}: $error',
       );
       debugPrintStack(stackTrace: stackTrace, label: 'chat sendMessage');
-      final failureText = 'AgentLoop failed: $error';
+      const failureText = 'The agent turn failed before completion.';
       _conversationHistory.add(
         AgentMessage(
           role: AgentMessageRole.assistant,
@@ -322,7 +440,7 @@ class AgentLoopChatSession extends ChangeNotifier
           id: 'agent-loop',
           label: 'agent.loop',
           summary: 'Agent loop execution failed.',
-          details: <String>[error.toString()],
+          details: const <String>['The runtime raised an internal error.'],
           status: SubAgentActivityStatus.failed,
         ),
       ]);
@@ -333,7 +451,25 @@ class AgentLoopChatSession extends ChangeNotifier
       _setStatus(ChatSessionStatus.failed);
     } finally {
       _isRunning = false;
+      _activeRequestId = null;
     }
+  }
+
+  @override
+  Future<bool> cancelActiveRun() async {
+    if (!_isRunning) {
+      return false;
+    }
+    rejectPendingApproval();
+    final cancelled = await _taskExecutor.cancelActiveRun(
+      runId: _activeRequestId,
+      sessionKey: sessionKey,
+      reason: RunCancellationReason.userRequested,
+    );
+    if (cancelled) {
+      _setStatus(ChatSessionStatus.cancelled);
+    }
+    return cancelled;
   }
 
   @override
@@ -342,23 +478,176 @@ class AgentLoopChatSession extends ChangeNotifier
       return sendMessage(submission.text);
     }
 
-    if (submission.text.trim().isNotEmpty) {
-      _appendMessage(
-        ChatMessageSender.system,
-        'Attachments are not available in this chat yet. Sending the text only.',
-      );
-      return sendMessage(submission.text);
+    final trimmed = submission.text.trim();
+    if (submission.isEmpty) {
+      return;
+    }
+    if (_isRunning) {
+      return;
     }
 
-    _appendMessage(
-      ChatMessageSender.system,
-      'Attachments are not available in this chat yet.',
+    final validation = _composerSubmissionValidator.validate(
+      submission,
+      _composerCapabilityResolver.resolve(),
     );
+    if (validation.hasRejectedAttachments) {
+      final rejected = validation.rejectedAttachments.first;
+      _appendMessage(
+        ChatMessageSender.system,
+        _unsupportedAttachmentMessage(
+          rejected.attachment.type,
+          rejected.availability,
+        ),
+      );
+      return;
+    }
+    if (validation.submission.attachments.isEmpty) {
+      return sendMessage(validation.submission.text);
+    }
+
+    _isRunning = true;
+    _runtimeActivities.clear();
+    _executionTraceSteps.clear();
+    _executionTrace = null;
+    _appendMessage(ChatMessageSender.user, trimmed);
+    _setStatus(ChatSessionStatus.planning);
+    _setActivities(const <SubAgentActivity>[]);
+
+    final userTurnNumber = _nextTurnNumber();
+    _conversationHistory.add(
+      AgentMessage(
+        role: AgentMessageRole.user,
+        content: trimmed,
+        turnNumber: userTurnNumber,
+      ),
+    );
+
+    try {
+      final request = ExecutionRequest.fromUserMessage(
+        sessionKey: sessionKey,
+        prompt: trimmed,
+        attachments: validation.submission.attachments
+            .map(_executionAttachmentFromComposer)
+            .toList(growable: false),
+        metadata: <String, dynamic>{
+          'conversationHistory': _conversationHistory
+              .map(
+                (message) => <String, Object?>{
+                  'role': message.role.name,
+                  'content': message.content,
+                  'turnNumber': message.turnNumber,
+                },
+              )
+              .toList(growable: false),
+        },
+      );
+      _activeRequestId = request.id;
+      final result = await _taskExecutor.execute(request);
+      await appendExecutionResult(request, result);
+
+      final loopResult = result.toAgentLoopResult();
+      final responseText = _normalizeResponse(loopResult);
+      if (_shouldTrackAssistantTurn(loopResult)) {
+        _conversationHistory.add(
+          AgentMessage(
+            role: AgentMessageRole.assistant,
+            content: responseText,
+            turnNumber: userTurnNumber,
+          ),
+        );
+      }
+      if (_runtimeActivities.isEmpty && loopResult.toolResults.isNotEmpty) {
+        _setActivities(
+          loopResult.toolResults.map(_activityFromToolResult).toList(),
+        );
+      } else if (_runtimeActivities.isEmpty) {
+        _setActivities(const <SubAgentActivity>[]);
+      }
+      await _emitTerminalStatus(
+        requestId: result.requestId,
+        status: _statusForResult(loopResult.sessionResult),
+      );
+    } catch (error, stackTrace) {
+      debugPrint(
+        'OpenReef.AgentLoopChatSession: sendComposerSubmission.failed ${error.runtimeType}: $error',
+      );
+      debugPrintStack(
+        stackTrace: stackTrace,
+        label: 'chat sendComposerSubmission',
+      );
+      const failureText = 'The agent turn failed before completion.';
+      _conversationHistory.add(
+        AgentMessage(
+          role: AgentMessageRole.assistant,
+          content: failureText,
+          turnNumber: userTurnNumber,
+        ),
+      );
+      _appendMessage(ChatMessageSender.system, failureText);
+      _setActivities(<SubAgentActivity>[
+        SubAgentActivity(
+          id: 'agent-loop',
+          label: 'agent.loop',
+          summary: 'Agent loop execution failed.',
+          details: const <String>['The runtime raised an internal error.'],
+          status: SubAgentActivityStatus.failed,
+        ),
+      ]);
+      await _persistBeforeTerminal(
+        requestId: 'local-exception-${DateTime.now().microsecondsSinceEpoch}',
+        terminalStatus: ChatSessionStatus.failed,
+      );
+      _setStatus(ChatSessionStatus.failed);
+    } finally {
+      _isRunning = false;
+      _activeRequestId = null;
+    }
+  }
+
+  ExecutionAttachment _executionAttachmentFromComposer(
+    ComposerAttachmentDescriptor attachment,
+  ) {
+    return ExecutionAttachment(
+      id: attachment.id,
+      type: switch (attachment.type) {
+        ComposerAttachmentType.image => ExecutionAttachmentType.image,
+        ComposerAttachmentType.audio => ExecutionAttachmentType.audio,
+        ComposerAttachmentType.document => ExecutionAttachmentType.document,
+        ComposerAttachmentType.voiceMessage =>
+          ExecutionAttachmentType.voiceMessage,
+      },
+      displayName: attachment.displayName,
+      sizeBytes: attachment.sizeBytes,
+      mimeType: attachment.mimeType,
+      sourceUri: attachment.sourceUri,
+    );
+  }
+
+  String _unsupportedAttachmentMessage(
+    ComposerAttachmentType type,
+    ComposerAttachmentAvailability availability,
+  ) {
+    final label = switch (type) {
+      ComposerAttachmentType.image => 'Image',
+      ComposerAttachmentType.audio => 'Audio',
+      ComposerAttachmentType.document => 'Document',
+      ComposerAttachmentType.voiceMessage => 'Voice message',
+    };
+    return switch (availability) {
+      ComposerAttachmentAvailability.unsupportedByModel =>
+        '$label attachments are not supported by the selected model.',
+      ComposerAttachmentAvailability.unsupportedByRuntime =>
+        '$label attachments are supported by the model, but the required runtime preprocessing is unavailable.',
+      ComposerAttachmentAvailability.unavailable =>
+        '$label attachments are unavailable for the selected model and current runtime.',
+      ComposerAttachmentAvailability.available =>
+        '$label attachments are unavailable.',
+    };
   }
 
   String _normalizeResponse(AgentLoopResult result) {
     final trimmedText = result.text.trim();
-    if (trimmedText.isNotEmpty && !_isProtocolOnlyAssistantText(trimmedText)) {
+    if (trimmedText.isNotEmpty && !_isInternalOnlyText(trimmedText)) {
       return trimmedText;
     }
     if (result.sessionResult == SessionResult.frozen) {
@@ -370,8 +659,12 @@ class AgentLoopChatSession extends ChangeNotifier
         _ => 'The agent session was frozen after repeated execution errors.',
       };
     }
+    if (result.sessionResult == SessionResult.cancelled) {
+      return 'Agent turn was cancelled.';
+    }
     if (result.sessionResult == SessionResult.failed) {
       if (kDebugMode &&
+          result.reason != 'generation_failure' &&
           (result.exceptionType != null || result.errorMessage != null)) {
         final details = <String>[
           if (result.reason != null) 'reason=${result.reason}',
@@ -428,7 +721,7 @@ class AgentLoopChatSession extends ChangeNotifier
 
   bool _shouldTrackAssistantTurn(AgentLoopResult result) {
     final responseText = _normalizeResponse(result);
-    if (_isProtocolOnlyAssistantText(responseText)) {
+    if (_isInternalOnlyText(responseText)) {
       return false;
     }
     if (_hasUnstableToolProtocolFailure(result)) {
@@ -455,6 +748,28 @@ class AgentLoopChatSession extends ChangeNotifier
         (parsed.hasToolCall && parsed.text.trim().isEmpty);
   }
 
+  bool _isInternalOnlyText(String text) {
+    final trimmed = text.trim();
+    if (_isProtocolOnlyAssistantText(trimmed)) {
+      return true;
+    }
+    if (trimmed.startsWith('[TOOL]') ||
+        trimmed.startsWith('[TOOL_ERROR]') ||
+        trimmed.startsWith('toolId:') ||
+        trimmed.startsWith('callId:') ||
+        trimmed.startsWith('status:') ||
+        trimmed.startsWith('summary:') ||
+        trimmed.startsWith('reason:') ||
+        trimmed.contains('\ntoolId:') ||
+        trimmed.contains('\ncallId:') ||
+        trimmed.contains('\nstatus:') ||
+        trimmed.contains('missing_argument:') ||
+        trimmed.contains('validation_error')) {
+      return true;
+    }
+    return false;
+  }
+
   bool _isProtectivePauseMessage(String text) {
     final lowered = text.toLowerCase();
     return lowered.contains('openreef paused generation') ||
@@ -476,8 +791,9 @@ class AgentLoopChatSession extends ChangeNotifier
     if (_isDisposed) {
       return;
     }
-    if (sender == ChatMessageSender.assistant &&
-        _isProtocolOnlyAssistantText(text)) {
+    if ((sender == ChatMessageSender.assistant ||
+            sender == ChatMessageSender.system) &&
+        _isInternalOnlyText(text)) {
       return;
     }
 
@@ -490,6 +806,56 @@ class AgentLoopChatSession extends ChangeNotifier
       ),
     );
     notifyListeners();
+  }
+
+  bool _resolvePendingApprovalFromText(String text) {
+    final controller = _approvalController;
+    final intent = _approvalIntentFor(text);
+    if (intent == null) {
+      return false;
+    }
+    if (controller == null) {
+      return false;
+    }
+    return controller.resolvePendingApprovalIntent(intent);
+  }
+
+  bool? _approvalIntentFor(String text) {
+    final normalized = text.toLowerCase().trim();
+    if (<String>{
+      'yes',
+      'y',
+      'yeah',
+      'yep',
+      'ok',
+      'okay',
+      'confirm',
+      'approved',
+      'approve',
+      'do it',
+      'send it',
+      'send it now',
+      'yes send it',
+      'yes send it now',
+      'go ahead',
+    }.contains(normalized)) {
+      return true;
+    }
+    if (<String>{
+      'no',
+      'n',
+      'nope',
+      'cancel',
+      'stop',
+      'reject',
+      'deny',
+      'do not',
+      "don't",
+      'dont',
+    }.contains(normalized)) {
+      return false;
+    }
+    return null;
   }
 
   void _upsertMessage(ChatTranscriptMessage message) {
@@ -583,17 +949,17 @@ class AgentLoopChatSession extends ChangeNotifier
       );
       return;
     }
-    if (responseText.trim().isEmpty ||
-        _isProtocolOnlyAssistantText(responseText)) {
+    if (responseText.trim().isEmpty || _isInternalOnlyText(responseText)) {
       return;
     }
-    final messageId = '${result.requestId}-assistant-final';
     final projection = _projectionsByRequestId[result.requestId];
     if (projection != null &&
         projection.isFinalized &&
         projection.hasVisibleAssistantText) {
       return;
     }
+    final messageId =
+        projection?.assistantMessageId ?? '${result.requestId}-assistant-final';
     final sequence = (projection?.lastSequence ?? -1) + 1;
     await applyRuntimeTranscriptEvent(
       RuntimeTranscriptEvent(
@@ -639,6 +1005,11 @@ class AgentLoopChatSession extends ChangeNotifier
         );
         _setStatus(ChatSessionStatus.streaming);
       case RuntimeTranscriptEventKind.assistantMessageDelta:
+        final deltaText = event.deltaText ?? '';
+        if (_isInternalOnlyText(deltaText)) {
+          _setStatus(ChatSessionStatus.streaming);
+          return;
+        }
         final messageId = event.messageId ?? '${event.requestId}-assistant';
         _runtimeMessageIds.add(messageId);
         projection.assistantMessageId = messageId;
@@ -647,7 +1018,7 @@ class AgentLoopChatSession extends ChangeNotifier
             ChatTranscriptMessage(
               id: messageId,
               sender: ChatMessageSender.assistant,
-              text: event.deltaText ?? '',
+              text: deltaText,
               timestamp: event.occurredAt.toLocal(),
               isStreaming: true,
             ),
@@ -656,7 +1027,7 @@ class AgentLoopChatSession extends ChangeNotifier
           _replaceMessage(
             messageId,
             (message) => message.copyWith(
-              text: '${message.text}${event.deltaText ?? ''}',
+              text: '${message.text}$deltaText',
               isStreaming: true,
             ),
           );
@@ -673,6 +1044,239 @@ class AgentLoopChatSession extends ChangeNotifier
     }
   }
 
+  @override
+  Future<void> applyAgentExecutionEvent(AgentExecutionEvent event) async {
+    if (event.sessionId != sessionKey || _isDisposed) {
+      return;
+    }
+    final projection = _projectionsByRequestId.putIfAbsent(
+      event.requestId,
+      () => _RuntimeRequestProjection(
+        requestId: event.requestId,
+        sessionKey: event.sessionId,
+      ),
+    );
+    if (_terminalExecutionRequestIds.contains(event.requestId)) {
+      return;
+    }
+    if (!_acceptExecutionSequence(projection, event.sequence)) {
+      return;
+    }
+
+    switch (event) {
+      case TokenDeltaEvent():
+        _applyTokenDeltaEvent(event);
+      case StepStartedEvent():
+        _upsertExecutionStep(
+          requestId: event.requestId,
+          status: ExecutionTraceStatus.running,
+          step: ExecutionTraceStep(
+            id: event.stepId,
+            kind: ExecutionStepKind.step,
+            title: event.label,
+            status: ExecutionStepStatus.running,
+            summary: 'Running',
+            timestamp: event.occurredAt.toLocal(),
+          ),
+        );
+        _setStatus(ChatSessionStatus.toolRouting);
+      case StepUpdatedEvent():
+        final existing = _executionTraceSteps[event.stepId];
+        _upsertExecutionStep(
+          requestId: event.requestId,
+          status: ExecutionTraceStatus.running,
+          step:
+              (existing ??
+                      ExecutionTraceStep(
+                        id: event.stepId,
+                        kind: ExecutionStepKind.step,
+                        title: 'Step',
+                        status: ExecutionStepStatus.running,
+                        summary: 'Running',
+                        timestamp: event.occurredAt.toLocal(),
+                      ))
+                  .copyWith(
+                    status: _stepStatusForRuntimeStatus(event.status),
+                    summary: _sentenceCaseStatus(event.status),
+                    timestamp: event.occurredAt.toLocal(),
+                  ),
+        );
+        _setStatus(ChatSessionStatus.toolRouting);
+      case ToolCallStartedEvent():
+        _upsertExecutionStep(
+          requestId: event.requestId,
+          status: ExecutionTraceStatus.running,
+          step: ExecutionTraceStep(
+            id: event.callId,
+            kind: ExecutionStepKind.tool,
+            title: event.displayLabel,
+            status: ExecutionStepStatus.running,
+            summary: 'Running ${event.toolId}',
+            details: _detailsFromPreview(event.safeArgsPreview),
+            timestamp: event.occurredAt.toLocal(),
+          ),
+        );
+        _setStatus(ChatSessionStatus.toolRouting);
+      case ToolCallResultEvent():
+        final existing = _executionTraceSteps[event.callId];
+        _upsertExecutionStep(
+          requestId: event.requestId,
+          status: ExecutionTraceStatus.running,
+          step:
+              (existing ??
+                      ExecutionTraceStep(
+                        id: event.callId,
+                        kind: ExecutionStepKind.tool,
+                        title: event.displayLabel,
+                        status: ExecutionStepStatus.running,
+                        summary: 'Running ${event.toolId}',
+                        timestamp: event.occurredAt.toLocal(),
+                      ))
+                  .copyWith(
+                    title: event.displayLabel,
+                    status: ExecutionStepStatus.completed,
+                    summary: event.summary.isEmpty ? 'Done' : event.summary,
+                    timestamp: event.occurredAt.toLocal(),
+                  ),
+        );
+      case ToolCallFailedEvent():
+        final existing = _executionTraceSteps[event.callId];
+        _upsertExecutionStep(
+          requestId: event.requestId,
+          status: ExecutionTraceStatus.running,
+          step:
+              (existing ??
+                      ExecutionTraceStep(
+                        id: event.callId,
+                        kind: ExecutionStepKind.tool,
+                        title: event.displayLabel,
+                        status: ExecutionStepStatus.running,
+                        summary: 'Running ${event.toolId}',
+                        timestamp: event.occurredAt.toLocal(),
+                      ))
+                  .copyWith(
+                    title: event.displayLabel,
+                    status: ExecutionStepStatus.failed,
+                    summary: event.summary.isEmpty
+                        ? 'This step could not finish.'
+                        : event.summary,
+                    timestamp: event.occurredAt.toLocal(),
+                  ),
+        );
+        _setStatus(ChatSessionStatus.toolRouting);
+      case ApprovalRequiredEvent():
+        _upsertExecutionStep(
+          requestId: event.requestId,
+          status: ExecutionTraceStatus.running,
+          step: ExecutionTraceStep(
+            id: event.callId,
+            kind: ExecutionStepKind.approval,
+            title: event.displayLabel,
+            status: ExecutionStepStatus.approvalRequired,
+            summary: 'Waiting for approval',
+            details: _detailsFromPreview(event.safeArgsPreview),
+            timestamp: event.occurredAt.toLocal(),
+          ),
+        );
+        _setStatus(ChatSessionStatus.toolRouting);
+      case RunCompletedEvent():
+        _terminalExecutionRequestIds.add(event.requestId);
+        _setExecutionTraceTerminal(
+          requestId: event.requestId,
+          status: ExecutionTraceStatus.completed,
+          summary: event.reason,
+        );
+      case RunFailedEvent():
+        _terminalExecutionRequestIds.add(event.requestId);
+        _setExecutionTraceTerminal(
+          requestId: event.requestId,
+          status: ExecutionTraceStatus.failed,
+          summary: event.reason,
+        );
+        _setStatus(ChatSessionStatus.failed);
+      case RunCancelledEvent():
+        _terminalExecutionRequestIds.add(event.requestId);
+        _setExecutionTraceTerminal(
+          requestId: event.requestId,
+          status: ExecutionTraceStatus.interrupted,
+          summary: event.reason,
+        );
+        _setStatus(ChatSessionStatus.cancelled);
+    }
+  }
+
+  void _applyTokenDeltaEvent(TokenDeltaEvent event) {
+    final projection = _projectionsByRequestId[event.requestId]!;
+    final messageId = event.messageId;
+    _runtimeMessageIds.add(messageId);
+    projection.assistantMessageId = messageId;
+    if (!_messages.any((message) => message.id == messageId)) {
+      _upsertMessage(
+        ChatTranscriptMessage(
+          id: messageId,
+          sender: ChatMessageSender.assistant,
+          text: event.delta,
+          timestamp: event.occurredAt.toLocal(),
+          isStreaming: true,
+        ),
+      );
+    } else {
+      _replaceMessage(
+        messageId,
+        (message) => message.copyWith(
+          text: '${message.text}${event.delta}',
+          isStreaming: true,
+        ),
+      );
+    }
+    _setStatus(ChatSessionStatus.streaming);
+  }
+
+  void _upsertExecutionStep({
+    required String requestId,
+    required ExecutionTraceStatus status,
+    required ExecutionTraceStep step,
+  }) {
+    _executionTraceSteps[step.id] = step;
+    _executionTrace = ExecutionTrace(
+      requestId: requestId,
+      status: status,
+      steps: List<ExecutionTraceStep>.unmodifiable(_executionTraceSteps.values),
+      summary: _executionTrace?.summary,
+    );
+    notifyListeners();
+  }
+
+  void _setExecutionTraceTerminal({
+    required String requestId,
+    required ExecutionTraceStatus status,
+    required String summary,
+  }) {
+    final currentSteps = _executionTraceSteps.map((id, step) {
+      if (step.status == ExecutionStepStatus.running &&
+          status == ExecutionTraceStatus.interrupted) {
+        return MapEntry(
+          id,
+          step.copyWith(
+            status: ExecutionStepStatus.failed,
+            summary: 'Interrupted before completion',
+          ),
+        );
+      }
+      return MapEntry(id, step);
+    });
+    _executionTraceSteps
+      ..clear()
+      ..addAll(currentSteps);
+    _executionTrace = ExecutionTrace(
+      requestId: requestId,
+      status: status,
+      steps: List<ExecutionTraceStep>.unmodifiable(_executionTraceSteps.values),
+      summary: summary.trim().isEmpty ? null : summary.trim(),
+    );
+    notifyListeners();
+  }
+
   Future<void> _finalizeRuntimeMessage(
     RuntimeTranscriptEvent event, {
     required bool failed,
@@ -680,7 +1284,7 @@ class AgentLoopChatSession extends ChangeNotifier
     final projection = _projectionsByRequestId[event.requestId]!;
     final messageId = event.messageId ?? '${event.requestId}-assistant';
     final normalizedText = (event.finalText ?? '').trim();
-    if (_isProtocolOnlyAssistantText(normalizedText)) {
+    if (_isInternalOnlyText(normalizedText)) {
       projection.isFinalized = true;
       projection.hasVisibleAssistantText = false;
       return;
@@ -782,6 +1386,51 @@ class AgentLoopChatSession extends ChangeNotifier
     return true;
   }
 
+  bool _acceptExecutionSequence(
+    _RuntimeRequestProjection projection,
+    int sequence,
+  ) {
+    final last = projection.lastExecutionSequence;
+    if (last != null && sequence <= last) {
+      return false;
+    }
+    projection.lastExecutionSequence = sequence;
+    return true;
+  }
+
+  List<ExecutionTraceDetail> _detailsFromPreview(
+    List<ToolArgumentPreview> preview,
+  ) {
+    return preview
+        .map(
+          (arg) =>
+              ExecutionTraceDetail(name: arg.name, value: arg.displayValue),
+        )
+        .toList(growable: false);
+  }
+
+  ExecutionStepStatus _stepStatusForRuntimeStatus(String status) {
+    final normalized = status.trim().toLowerCase();
+    if (normalized == 'completed' ||
+        normalized == 'complete' ||
+        normalized == 'success' ||
+        normalized == 'done') {
+      return ExecutionStepStatus.completed;
+    }
+    if (normalized == 'failed' || normalized == 'error') {
+      return ExecutionStepStatus.failed;
+    }
+    return ExecutionStepStatus.running;
+  }
+
+  String _sentenceCaseStatus(String status) {
+    final trimmed = status.trim();
+    if (trimmed.isEmpty) {
+      return 'Updated';
+    }
+    return '${trimmed[0].toUpperCase()}${trimmed.substring(1)}';
+  }
+
   String _fallbackTextForEvent(
     RuntimeTranscriptEvent event, {
     required bool failed,
@@ -877,8 +1526,15 @@ class AgentLoopChatSession extends ChangeNotifier
   }
 
   bool _hasUnstableToolProtocolFailure(AgentLoopResult result) {
-    if (result.reason == 'malformed_tool_call' ||
-        result.reason == 'post_tool_completion_missing') {
+    if (result.reason == 'malformed_tool_call') {
+      final responseText = _normalizeResponse(result);
+      if (responseText.trim().isNotEmpty &&
+          !_isInternalOnlyText(responseText)) {
+        return false;
+      }
+      return true;
+    }
+    if (result.reason == 'post_tool_completion_missing') {
       return true;
     }
     for (final toolResult in result.toolResults) {
@@ -909,6 +1565,7 @@ class AgentLoopChatSession extends ChangeNotifier
     return AgentLoopChatSession(
       taskExecutor: _taskExecutor,
       approvalController: _approvalController,
+      composerCapabilityResolver: _composerCapabilityResolver,
       sessionKey: sessionId,
       initialMessages: initialMessages,
     );
@@ -940,7 +1597,7 @@ class AgentLoopChatSession extends ChangeNotifier
       }
 
       if (message.sender == ChatMessageSender.assistant) {
-        if (_isProtocolOnlyAssistantText(message.text)) {
+        if (_isInternalOnlyText(message.text)) {
           continue;
         }
         final assistantTurn = turnNumber == 0 ? 1 : turnNumber;

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -99,6 +100,7 @@ class ToolCall {
       toolId:
           map['toolId'] as String? ??
           map['tool_id'] as String? ??
+          map['tool'] as String? ??
           map['name'] as String? ??
           '',
       arguments: rawArguments is Map<String, Object?>
@@ -428,17 +430,48 @@ class AgentResponse {
   }
 }
 
+enum RunCancellationReason { userRequested, replaceRunning, sessionClosed }
+
+extension RunCancellationReasonCode on RunCancellationReason {
+  String get code => switch (this) {
+    RunCancellationReason.userRequested => 'user_requested',
+    RunCancellationReason.replaceRunning => 'replace_running',
+    RunCancellationReason.sessionClosed => 'session_closed',
+  };
+}
+
+class CancellationController {
+  CancellationController() : signal = CancellationSignal();
+
+  final CancellationSignal signal;
+
+  bool get isCancelled => signal.isCancelled;
+
+  void cancel([
+    RunCancellationReason reason = RunCancellationReason.userRequested,
+  ]) {
+    signal.cancel(reason.code);
+  }
+}
+
 class CancellationSignal {
   var _isCancelled = false;
   String? _reason;
+  final Completer<String> _cancelled = Completer<String>();
 
   bool get isCancelled => _isCancelled;
 
   String? get reason => _reason;
 
+  Future<String> get whenCancelled => _cancelled.future;
+
   void cancel([String reason = 'cancelled']) {
+    if (_isCancelled) {
+      return;
+    }
     _isCancelled = true;
     _reason = reason;
+    _cancelled.complete(reason);
   }
 }
 
@@ -526,17 +559,18 @@ class AgentResponseParser {
       return AgentResponse(text: '', rawOutput: output);
     }
 
-    if (_containsProtocolToken(trimmed)) {
-      final markerToolCall = _parseToolCallMarker(trimmed);
-      if (markerToolCall == null) {
-        return _protocolFailure(output, 'malformed_tool_call');
-      }
+    final protocolToolCall = _parseToolProtocolCall(trimmed);
+    if (protocolToolCall != null) {
       return AgentResponse(
         text: '',
-        toolCall: markerToolCall,
+        toolCall: protocolToolCall,
         rawOutput: output,
         parserStatus: AgentResponseParserStatus.toolCall,
       );
+    }
+
+    if (_containsProtocolToken(trimmed)) {
+      return _protocolFailure(output, 'malformed_tool_call');
     }
 
     final decoded = _tryDecodeObject(trimmed);
@@ -587,40 +621,68 @@ class AgentResponseParser {
     return AgentResponse(text: trimmed, rawOutput: output);
   }
 
-  ToolCall? _parseToolCallMarker(String content) {
-    final match = RegExp(
-      r'^<\|tool_call\>call:([A-Za-z0-9_.-]+)(.*)<tool_call\|>$',
+  ToolCall? _parseToolProtocolCall(String content) {
+    final wrappedJson = RegExp(
+      r'^<tool_call>\s*(\{.*\})\s*</tool_call>$',
       dotAll: true,
     ).firstMatch(content);
-    if (match == null) {
+    if (wrappedJson != null) {
+      final decoded = _tryDecodeObject(wrappedJson.group(1)!.trim());
+      if (decoded == null) {
+        return null;
+      }
+      return ToolCall.fromMap(decoded);
+    }
+
+    final markerCall = RegExp(
+      r'^(?:<\|tool_call\>\s*)?call:([A-Za-z0-9_.\/-]+)\s*(\{.*\})?\s*(?:<tool_call\|>)?$',
+      dotAll: true,
+    ).firstMatch(content);
+    if (markerCall == null) {
       return null;
     }
-    final toolId = match.group(1) ?? '';
-    final rawArgs = (match.group(2) ?? '').trim();
-    Object? decodedArgs;
-    try {
-      decodedArgs = rawArgs.isEmpty ? <String, Object?>{} : jsonDecode(rawArgs);
-    } on FormatException {
-      return null;
-    }
-    if (decodedArgs is! Map<String, Object?> && decodedArgs is! Map) {
+    final rawArgs = (markerCall.group(2) ?? '{}').trim();
+    final decodedArgs = _decodeLenientArgumentMap(rawArgs);
+    if (decodedArgs == null) {
       return null;
     }
     return ToolCall(
       id: 'tool_call_marker',
-      toolId: toolId,
-      arguments: decodedArgs is Map<String, Object?>
-          ? decodedArgs
-          : decodedArgs is Map
-          ? Map<String, Object?>.from(decodedArgs)
-          : const <String, Object?>{},
+      toolId: markerCall.group(1) ?? '',
+      arguments: decodedArgs,
       rawArguments: decodedArgs,
       hasRawArguments: true,
     );
   }
 
+  Map<String, Object?>? _decodeLenientArgumentMap(String rawArgs) {
+    Object? decoded;
+    try {
+      decoded = jsonDecode(rawArgs);
+    } on FormatException {
+      final quotedKeys = rawArgs.replaceAllMapped(
+        RegExp(r'([,{]\s*)([A-Za-z_][A-Za-z0-9_]*)\s*:'),
+        (match) => '${match.group(1)}"${match.group(2)}":',
+      );
+      try {
+        decoded = jsonDecode(quotedKeys);
+      } on FormatException {
+        return null;
+      }
+    }
+    if (decoded is Map<String, Object?>) {
+      return decoded;
+    }
+    if (decoded is Map) {
+      return Map<String, Object?>.from(decoded);
+    }
+    return null;
+  }
+
   bool _containsProtocolToken(String content) {
     return content.contains('<|tool_call>') ||
+        content.contains('<tool_call>') ||
+        content.contains('</tool_call>') ||
         content.contains('<tool_call|>') ||
         content.contains('<|assistant|>') ||
         content.contains('<|user|>') ||

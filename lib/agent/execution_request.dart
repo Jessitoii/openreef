@@ -29,6 +29,37 @@ enum FailureExecutionPolicy { failRun, freezeRun }
 
 enum CompletionExecutionPolicy { emitChatResponse, stateOnly, both }
 
+enum ExecutionAttachmentType { image, audio, document, voiceMessage }
+
+class ExecutionAttachment {
+  const ExecutionAttachment({
+    required this.id,
+    required this.type,
+    required this.displayName,
+    this.sizeBytes,
+    this.mimeType,
+    this.sourceUri,
+  });
+
+  final String id;
+  final ExecutionAttachmentType type;
+  final String displayName;
+  final int? sizeBytes;
+  final String? mimeType;
+  final String? sourceUri;
+
+  Map<String, Object?> toJson() {
+    return <String, Object?>{
+      'id': id,
+      'type': type.name,
+      'displayName': displayName,
+      if (sizeBytes != null) 'sizeBytes': sizeBytes,
+      if (mimeType != null) 'mimeType': mimeType,
+      if (sourceUri != null) 'sourceUri': sourceUri,
+    };
+  }
+}
+
 class ExecutionClassifierOutput {
   const ExecutionClassifierOutput({
     required this.mode,
@@ -170,6 +201,7 @@ class ExecutionRequest {
     required this.createdAt,
     required this.classification,
     required this.policy,
+    this.attachments = const <ExecutionAttachment>[],
     this.metadata,
     this.runContext,
   });
@@ -183,6 +215,7 @@ class ExecutionRequest {
   final DateTime createdAt;
   final ExecutionClassifierOutput classification;
   final ExecutionPolicy policy;
+  final List<ExecutionAttachment> attachments;
   final RunContext? runContext;
 
   ExecutionLifecycleMode get mode => classification.mode;
@@ -191,6 +224,7 @@ class ExecutionRequest {
     required String sessionKey,
     required String prompt,
     Map<String, dynamic>? metadata,
+    List<ExecutionAttachment> attachments = const <ExecutionAttachment>[],
     String? id,
     DateTime? createdAt,
     ExecutionVisibility visibility = ExecutionVisibility.chat,
@@ -206,6 +240,7 @@ class ExecutionRequest {
       sessionKey: sessionKey,
       prompt: prompt,
       metadata: metadata == null ? null : Map<String, dynamic>.from(metadata),
+      attachments: List<ExecutionAttachment>.unmodifiable(attachments),
       visibility: visibility,
       createdAt: timestamp,
       classification: classification,

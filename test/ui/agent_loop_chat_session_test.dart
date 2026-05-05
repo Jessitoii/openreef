@@ -1,10 +1,17 @@
+import 'dart:async';
+import 'dart:collection';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:openreef/agent/agent_execution_event.dart';
 import 'package:openreef/agent/agent_task_executor.dart';
 import 'package:openreef/agent/agent_models.dart';
 import 'package:openreef/agent/execution_request.dart';
 import 'package:openreef/agent/mailbox.dart';
 import 'package:openreef/agent/runtime_transcript_event.dart';
+import 'package:openreef/models/model_capabilities.dart';
 import 'package:openreef/ui/agent_loop_chat_session.dart';
+import 'package:openreef/ui/chat/attachment_runtime_support.dart';
+import 'package:openreef/ui/chat/composer_capability_resolver.dart';
 import 'package:openreef/ui/chat/composer_models.dart';
 import 'package:openreef/ui/chat_session_port.dart';
 
@@ -42,6 +49,136 @@ void main() {
 
     await expectLater(approvalFuture, completion(isFalse));
     expect(controller.pendingApproval, isNull);
+  });
+
+  test('text approval resolves pending tool call without new turn', () async {
+    final controller = MainAgentApprovalController();
+    final executor = _RecordingTaskExecutor(
+      result: const AgentLoopResult(
+        sessionResult: SessionResult.completed,
+        text: 'should not run',
+        reason: 'completed',
+      ),
+    );
+    final session = AgentLoopChatSession(
+      taskExecutor: executor,
+      approvalController: controller,
+    );
+    final approvalFuture = controller.confirmToolCall(
+      const ToolCall(
+        id: 'sms-approval',
+        toolId: 'sms_send',
+        arguments: <String, Object?>{'number': '+15550100', 'message': 'hello'},
+      ),
+    );
+
+    await session.sendMessage('Yes send it now');
+
+    await expectLater(approvalFuture, completion(isTrue));
+    expect(controller.pendingApproval, isNull);
+    expect(executor.requests, isEmpty);
+    expect(session.messages.last.sender, ChatMessageSender.user);
+    expect(session.messages.last.text, 'Yes send it now');
+  });
+
+  test('text rejection cancels pending tool call without new turn', () async {
+    final controller = MainAgentApprovalController();
+    final executor = _RecordingTaskExecutor(
+      result: const AgentLoopResult(
+        sessionResult: SessionResult.completed,
+        text: 'should not run',
+        reason: 'completed',
+      ),
+    );
+    final session = AgentLoopChatSession(
+      taskExecutor: executor,
+      approvalController: controller,
+    );
+    final approvalFuture = controller.confirmToolCall(
+      const ToolCall(id: 'sms-approval', toolId: 'sms_send'),
+    );
+
+    await session.sendMessage('cancel');
+
+    await expectLater(approvalFuture, completion(isFalse));
+    expect(controller.pendingApproval, isNull);
+    expect(executor.requests, isEmpty);
+  });
+
+  test('expired text approval rejects pending tool without new turn', () async {
+    var now = DateTime(2026, 4, 12, 10);
+    final controller = MainAgentApprovalController(now: () => now);
+    final executor = _RecordingTaskExecutor(
+      result: const AgentLoopResult(
+        sessionResult: SessionResult.completed,
+        text: 'should not run',
+        reason: 'completed',
+      ),
+    );
+    final session = AgentLoopChatSession(
+      taskExecutor: executor,
+      approvalController: controller,
+    );
+    final approvalFuture = controller.confirmToolCall(
+      const ToolCall(id: 'sms-expired', toolId: 'sms_send'),
+    );
+
+    now = now
+        .add(MainAgentApprovalController.approvalTtl)
+        .add(const Duration(seconds: 1));
+    await session.sendMessage('yes');
+
+    await expectLater(approvalFuture, completion(isFalse));
+    expect(controller.pendingApproval, isNull);
+    expect(executor.requests, isEmpty);
+  });
+
+  test('one approval text resolves only the active queued approval', () async {
+    final controller = MainAgentApprovalController();
+    final executor = _RecordingTaskExecutor(
+      result: const AgentLoopResult(
+        sessionResult: SessionResult.completed,
+        text: 'should not run',
+        reason: 'completed',
+      ),
+    );
+    final session = AgentLoopChatSession(
+      taskExecutor: executor,
+      approvalController: controller,
+    );
+    final first = controller.confirmToolCall(
+      const ToolCall(id: 'sms-1', toolId: 'sms_send'),
+    );
+    var secondCompleted = false;
+    final second = controller
+        .confirmToolCall(const ToolCall(id: 'sms-2', toolId: 'sms_send'))
+        .then((value) {
+          secondCompleted = true;
+          return value;
+        });
+
+    await session.sendMessage('yes');
+
+    await expectLater(first, completion(isTrue));
+    await Future<void>.delayed(Duration.zero);
+    expect(secondCompleted, isFalse);
+    expect(controller.pendingApproval?.toolCallId, 'sms-2');
+
+    await session.sendMessage('cancel');
+    await expectLater(second, completion(isFalse));
+    expect(executor.requests, isEmpty);
+  });
+
+  test('legacy communication approval ids are presented canonically', () async {
+    final controller = MainAgentApprovalController();
+
+    final approvalFuture = controller.confirmToolCall(
+      const ToolCall(id: 'old-sms', toolId: 'communication_sms_send'),
+    );
+
+    expect(controller.pendingApproval?.toolId, 'sms_send');
+    controller.approvePendingApproval();
+    await expectLater(approvalFuture, completion(isTrue));
   });
 
   test(
@@ -210,6 +347,62 @@ void main() {
     );
   });
 
+  test('raw tool context block is not shown or persisted', () async {
+    const rawToolBlock =
+        '[TOOL] toolId: bluetooth_toggle\n'
+        'callId: tool_call_marker\n'
+        'status: validation_error\n'
+        'summary: missing_argument:enabled\n'
+        'reason: invalid_arguments';
+    final executor = _RecordingTaskExecutor(
+      result: const AgentLoopResult(
+        sessionResult: SessionResult.completed,
+        text: 'unused',
+        reason: 'completed',
+      ),
+    );
+    final persistence = _RecordingPersistencePort();
+    final session = AgentLoopChatSession(taskExecutor: executor);
+    session.attachTranscriptPersistencePort(persistence);
+
+    await session.appendExecutionResult(
+      ExecutionRequest.fromTrigger(
+        sessionKey: session.sessionKey,
+        prompt: 'set bluetooth on',
+        source: ExecutionSource.trigger,
+        visibility: ExecutionVisibility.chat,
+      ),
+      ExecutionResult(
+        requestId: 'raw-tool-block-1',
+        sessionKey: session.sessionKey,
+        source: ExecutionSource.trigger,
+        mode: ExecutionLifecycleMode.triggeredRequest,
+        terminalStatus: ExecutionLifecycleStatus.completed,
+        admissionOutcome: ExecutionAdmissionOutcome.admitted,
+        policyReason: 'completed',
+        visibility: ExecutionVisibility.chat,
+        loopResult: const AgentLoopResult(
+          sessionResult: SessionResult.completed,
+          text: rawToolBlock,
+          reason: 'completed',
+        ),
+      ),
+    );
+
+    expect(
+      session.messages.where(
+        (message) => message.text.contains('toolId: bluetooth_toggle'),
+      ),
+      isEmpty,
+    );
+    expect(
+      persistence.persistedMessages.where(
+        (message) => message.text.contains('missing_argument:enabled'),
+      ),
+      isEmpty,
+    );
+  });
+
   test('unstable malformed tool result is not shown or persisted', () async {
     const fallbackText = 'Fake successful fallback text.';
     final executor = _RecordingTaskExecutor(
@@ -327,12 +520,15 @@ void main() {
 
       expect(executor.requests, isEmpty);
       expect(session.messages.last.sender, ChatMessageSender.system);
-      expect(session.messages.last.text, contains('not available'));
+      expect(
+        session.messages.last.text,
+        contains('unavailable for the selected model and current runtime'),
+      );
     },
   );
 
   test(
-    'unsupported attachments are not packaged into execution metadata',
+    'unsupported attachments with text are blocked before execution',
     () async {
       final executor = _RecordingTaskExecutor(
         result: const AgentLoopResult(
@@ -356,14 +552,62 @@ void main() {
         ),
       );
 
-      expect(executor.requests, hasLength(1));
-      expect(executor.requests.single.prompt, 'hello');
+      expect(executor.requests, isEmpty);
+      expect(session.messages.last.sender, ChatMessageSender.system);
       expect(
-        executor.requests.single.metadata?.containsKey('attachments') ?? false,
-        isFalse,
+        session.messages.last.text,
+        contains('unavailable for the selected model and current runtime'),
       );
     },
   );
+
+  test('supported attachment reaches execution as structured data', () async {
+    final executor = _RecordingTaskExecutor(
+      result: const AgentLoopResult(
+        sessionResult: SessionResult.completed,
+        text: 'done',
+        reason: 'completed',
+      ),
+    );
+    final session = AgentLoopChatSession(
+      taskExecutor: executor,
+      composerCapabilityResolver: _composerResolver(
+        modelCapabilities: const ModelInputCapabilities(
+          supportsImageInput: true,
+        ),
+        runtimeSupport: const _RuntimeSupport(image: true),
+      ),
+    );
+
+    await session.sendComposerSubmission(
+      const ComposerSubmission(
+        text: 'what is in this image?',
+        attachments: <ComposerAttachmentDescriptor>[
+          ComposerAttachmentDescriptor(
+            id: 'image-1',
+            type: ComposerAttachmentType.image,
+            displayName: 'reef-photo.jpg',
+            sizeBytes: 2048,
+            mimeType: 'image/jpeg',
+            sourceUri: 'file:///tmp/reef-photo.jpg',
+          ),
+        ],
+      ),
+    );
+
+    expect(executor.requests, hasLength(1));
+    expect(executor.requests.single.prompt, 'what is in this image?');
+    expect(executor.requests.single.attachments, hasLength(1));
+    expect(executor.requests.single.attachments.single.id, 'image-1');
+    expect(
+      executor.requests.single.attachments.single.type,
+      ExecutionAttachmentType.image,
+    );
+    expect(
+      executor.requests.single.metadata?.containsKey('attachments') ?? false,
+      isFalse,
+    );
+  });
 
   test('failed result surfaces concrete exception details in debug', () async {
     final session = await _runSessionWithResult(
@@ -520,7 +764,7 @@ void main() {
       ),
     );
 
-    expect(session.messages.last.text, isNot('Background finished.'));
+    expect(session.messages, isEmpty);
     expect(
       session.messages.where(
         (message) => message.sender == ChatMessageSender.user,
@@ -615,6 +859,73 @@ void main() {
     expect(assistantMessages.single.isStreaming, isFalse);
   });
 
+  test('runtime protocol deltas are never shown or persisted', () async {
+    final executor = _RecordingTaskExecutor(
+      result: const AgentLoopResult(
+        sessionResult: SessionResult.completed,
+        text: 'done',
+        reason: 'completed',
+      ),
+    );
+    final persistence = _RecordingPersistencePort();
+    final session = AgentLoopChatSession(taskExecutor: executor);
+    session.attachTranscriptPersistencePort(persistence);
+
+    await session.applyRuntimeTranscriptEvent(
+      RuntimeTranscriptEvent(
+        kind: RuntimeTranscriptEventKind.assistantMessageStarted,
+        requestId: 'request-tool-delta',
+        sessionKey: session.sessionKey,
+        sequence: 0,
+        occurredAt: DateTime(2026, 4, 12, 10),
+        messageId: 'assistant-tool-delta',
+      ),
+    );
+    await session.applyRuntimeTranscriptEvent(
+      RuntimeTranscriptEvent(
+        kind: RuntimeTranscriptEventKind.assistantMessageDelta,
+        requestId: 'request-tool-delta',
+        sessionKey: session.sessionKey,
+        sequence: 1,
+        occurredAt: DateTime(2026, 4, 12, 10),
+        messageId: 'assistant-tool-delta',
+        deltaText:
+            '[TOOL] toolId: bluetooth_toggle\ncallId: tool_call_marker\n'
+            'status: validation_error\nsummary: missing_argument:enabled',
+      ),
+    );
+    await session.applyRuntimeTranscriptEvent(
+      RuntimeTranscriptEvent(
+        kind: RuntimeTranscriptEventKind.assistantMessageFinalized,
+        requestId: 'request-tool-delta',
+        sessionKey: session.sessionKey,
+        sequence: 2,
+        occurredAt: DateTime(2026, 4, 12, 10),
+        messageId: 'assistant-tool-delta',
+        finalText: 'Please say whether Bluetooth should be on or off.',
+      ),
+    );
+
+    expect(
+      session.messages.where((message) => message.text.contains('[TOOL]')),
+      isEmpty,
+    );
+    expect(
+      session.messages.where((message) => message.text.contains('toolId:')),
+      isEmpty,
+    );
+    expect(
+      persistence.persistedMessages.where(
+        (message) => message.text.contains('missing_argument:enabled'),
+      ),
+      isEmpty,
+    );
+    expect(
+      persistence.persistedMessages.last.text,
+      'Please say whether Bluetooth should be on or off.',
+    );
+  });
+
   test('runtime tool events drive structured activity state', () async {
     final executor = _RecordingTaskExecutor(
       result: const AgentLoopResult(
@@ -665,6 +976,362 @@ void main() {
     expect(
       session.activities.single.details,
       contains('Result: success: Battery at 42%.'),
+    );
+  });
+
+  test('TokenDeltaEvent updates assistant streaming bubble state', () async {
+    final session = AgentLoopChatSession(
+      taskExecutor: _RecordingTaskExecutor(
+        result: const AgentLoopResult(
+          sessionResult: SessionResult.completed,
+          text: 'done',
+          reason: 'completed',
+        ),
+      ),
+    );
+
+    await session.applyAgentExecutionEvent(
+      TokenDeltaEvent(
+        runId: 'run-1',
+        sessionId: session.sessionKey,
+        requestId: 'request-events',
+        sequence: 0,
+        occurredAt: DateTime.utc(2026, 4, 12, 10),
+        messageId: 'assistant-events',
+        delta: 'Hello',
+      ),
+    );
+    await session.applyAgentExecutionEvent(
+      TokenDeltaEvent(
+        runId: 'run-1',
+        sessionId: session.sessionKey,
+        requestId: 'request-events',
+        sequence: 1,
+        occurredAt: DateTime.utc(2026, 4, 12, 10),
+        messageId: 'assistant-events',
+        delta: ' reef',
+      ),
+    );
+
+    expect(session.messages.single.id, 'assistant-events');
+    expect(session.messages.single.text, 'Hello reef');
+    expect(session.messages.single.isStreaming, isTrue);
+    expect(session.status, ChatSessionStatus.streaming);
+  });
+
+  test(
+    'final assistant result transitions typed stream into normal bubble',
+    () async {
+      final session = AgentLoopChatSession(
+        taskExecutor: _RecordingTaskExecutor(
+          result: const AgentLoopResult(
+            sessionResult: SessionResult.completed,
+            text: 'Hello reef.',
+            reason: 'completed',
+          ),
+        ),
+      );
+      final request = ExecutionRequest.fromUserMessage(
+        sessionKey: session.sessionKey,
+        prompt: 'hello',
+      );
+
+      await session.applyAgentExecutionEvent(
+        TokenDeltaEvent(
+          runId: 'run-1',
+          sessionId: session.sessionKey,
+          requestId: request.id,
+          sequence: 0,
+          occurredAt: DateTime.utc(2026, 4, 12, 10),
+          messageId: 'assistant-stream',
+          delta: 'Hello',
+        ),
+      );
+      await session.appendExecutionResult(
+        request,
+        ExecutionResult(
+          requestId: request.id,
+          sessionKey: session.sessionKey,
+          source: request.source,
+          mode: request.mode,
+          terminalStatus: ExecutionLifecycleStatus.completed,
+          admissionOutcome: ExecutionAdmissionOutcome.admitted,
+          policyReason: 'completed',
+          visibility: request.visibility,
+          loopResult: const AgentLoopResult(
+            sessionResult: SessionResult.completed,
+            text: 'Hello reef.',
+            reason: 'completed',
+          ),
+        ),
+      );
+
+      expect(session.messages, hasLength(1));
+      expect(session.messages.single.id, 'assistant-stream');
+      expect(session.messages.single.text, 'Hello reef.');
+      expect(session.messages.single.isStreaming, isFalse);
+      expect(session.messages.single.sender, ChatMessageSender.assistant);
+    },
+  );
+
+  test('ToolCallStartedEvent shows running tool card', () async {
+    final session = AgentLoopChatSession(
+      taskExecutor: _RecordingTaskExecutor(
+        result: const AgentLoopResult(
+          sessionResult: SessionResult.completed,
+          text: 'done',
+          reason: 'completed',
+        ),
+      ),
+    );
+
+    await session.applyAgentExecutionEvent(
+      ToolCallStartedEvent(
+        runId: 'run-1',
+        sessionId: session.sessionKey,
+        requestId: 'request-tool',
+        sequence: 0,
+        occurredAt: DateTime.utc(2026, 4, 12, 10),
+        toolId: 'battery_info',
+        callId: 'call-1',
+        displayLabel: 'Battery Info',
+        safeArgsPreview: const <ToolArgumentPreview>[
+          ToolArgumentPreview(name: 'scope', displayValue: 'current'),
+        ],
+      ),
+    );
+
+    final trace = session.executionTrace!;
+    expect(trace.status, ExecutionTraceStatus.running);
+    expect(trace.steps.single.kind, ExecutionStepKind.tool);
+    expect(trace.steps.single.status, ExecutionStepStatus.running);
+    expect(trace.steps.single.title, 'Battery Info');
+    expect(trace.steps.single.details.single.value, 'current');
+  });
+
+  test('ToolCallResultEvent transitions card to done', () async {
+    final session = AgentLoopChatSession(
+      taskExecutor: _RecordingTaskExecutor(
+        result: const AgentLoopResult(
+          sessionResult: SessionResult.completed,
+          text: 'done',
+          reason: 'completed',
+        ),
+      ),
+    );
+
+    await session.applyAgentExecutionEvent(
+      ToolCallStartedEvent(
+        runId: 'run-1',
+        sessionId: session.sessionKey,
+        requestId: 'request-tool',
+        sequence: 0,
+        occurredAt: DateTime.utc(2026, 4, 12, 10),
+        toolId: 'battery_info',
+        callId: 'call-1',
+        displayLabel: 'Battery Info',
+        safeArgsPreview: const <ToolArgumentPreview>[],
+      ),
+    );
+    await session.applyAgentExecutionEvent(
+      ToolCallResultEvent(
+        runId: 'run-1',
+        sessionId: session.sessionKey,
+        requestId: 'request-tool',
+        sequence: 1,
+        occurredAt: DateTime.utc(2026, 4, 12, 10),
+        toolId: 'battery_info',
+        callId: 'call-1',
+        displayLabel: 'Battery Info',
+        status: 'success',
+        summary: 'Battery at 42%.',
+      ),
+    );
+
+    expect(
+      session.executionTrace!.steps.single.status,
+      ExecutionStepStatus.completed,
+    );
+    expect(session.executionTrace!.steps.single.summary, 'Battery at 42%.');
+  });
+
+  test('ToolCallFailedEvent shows calm failure state', () async {
+    final session = AgentLoopChatSession(
+      taskExecutor: _RecordingTaskExecutor(
+        result: const AgentLoopResult(
+          sessionResult: SessionResult.completed,
+          text: 'done',
+          reason: 'completed',
+        ),
+      ),
+    );
+
+    await session.applyAgentExecutionEvent(
+      ToolCallFailedEvent(
+        runId: 'run-1',
+        sessionId: session.sessionKey,
+        requestId: 'request-tool',
+        sequence: 0,
+        occurredAt: DateTime.utc(2026, 4, 12, 10),
+        toolId: 'battery_info',
+        callId: 'call-1',
+        displayLabel: 'Battery Info',
+        status: 'failed',
+        summary: 'Battery data was unavailable.',
+      ),
+    );
+
+    expect(
+      session.executionTrace!.steps.single.status,
+      ExecutionStepStatus.failed,
+    );
+    expect(
+      session.executionTrace!.steps.single.summary,
+      'Battery data was unavailable.',
+    );
+  });
+
+  test(
+    'ApprovalRequiredEvent renders approval card without raw args',
+    () async {
+      final session = AgentLoopChatSession(
+        taskExecutor: _RecordingTaskExecutor(
+          result: const AgentLoopResult(
+            sessionResult: SessionResult.completed,
+            text: 'done',
+            reason: 'completed',
+          ),
+        ),
+      );
+
+      await session.applyAgentExecutionEvent(
+        ApprovalRequiredEvent(
+          runId: 'run-1',
+          sessionId: session.sessionKey,
+          requestId: 'request-approval',
+          sequence: 0,
+          occurredAt: DateTime.utc(2026, 4, 12, 10),
+          toolId: 'sms_send',
+          callId: 'call-approval',
+          displayLabel: 'Sms Send',
+          safeArgsPreview: const <ToolArgumentPreview>[
+            ToolArgumentPreview(name: 'message', displayValue: '11 chars'),
+            ToolArgumentPreview(name: 'token', displayValue: 'redacted'),
+          ],
+        ),
+      );
+
+      final step = session.executionTrace!.steps.single;
+      expect(step.kind, ExecutionStepKind.approval);
+      expect(step.status, ExecutionStepStatus.approvalRequired);
+      expect(step.details.map((detail) => detail.value), contains('redacted'));
+      expect(
+        step.details.map((detail) => detail.value),
+        isNot(contains('super secret raw message')),
+      );
+    },
+  );
+
+  test('RunCancelledEvent renders interrupted state if available', () async {
+    final session = AgentLoopChatSession(
+      taskExecutor: _RecordingTaskExecutor(
+        result: const AgentLoopResult(
+          sessionResult: SessionResult.completed,
+          text: 'done',
+          reason: 'completed',
+        ),
+      ),
+    );
+
+    await session.applyAgentExecutionEvent(
+      ToolCallStartedEvent(
+        runId: 'run-1',
+        sessionId: session.sessionKey,
+        requestId: 'request-cancel',
+        sequence: 0,
+        occurredAt: DateTime.utc(2026, 4, 12, 10),
+        toolId: 'battery_info',
+        callId: 'call-1',
+        displayLabel: 'Battery Info',
+        safeArgsPreview: const <ToolArgumentPreview>[],
+      ),
+    );
+    await session.applyAgentExecutionEvent(
+      RunCancelledEvent(
+        runId: 'run-1',
+        sessionId: session.sessionKey,
+        requestId: 'request-cancel',
+        sequence: 1,
+        occurredAt: DateTime.utc(2026, 4, 12, 10),
+        reason: 'user_requested',
+      ),
+    );
+
+    expect(session.executionTrace!.status, ExecutionTraceStatus.interrupted);
+    expect(
+      session.executionTrace!.steps.single.status,
+      ExecutionStepStatus.failed,
+    );
+    expect(session.status, ChatSessionStatus.cancelled);
+  });
+
+  test('late tool result after RunCancelledEvent is ignored', () async {
+    final session = AgentLoopChatSession(
+      taskExecutor: _RecordingTaskExecutor(
+        result: const AgentLoopResult(
+          sessionResult: SessionResult.completed,
+          text: 'done',
+          reason: 'completed',
+        ),
+      ),
+    );
+
+    await session.applyAgentExecutionEvent(
+      ToolCallStartedEvent(
+        runId: 'run-1',
+        sessionId: session.sessionKey,
+        requestId: 'request-cancel',
+        sequence: 0,
+        occurredAt: DateTime.utc(2026, 4, 12, 10),
+        toolId: 'battery_info',
+        callId: 'call-1',
+        displayLabel: 'Battery Info',
+        safeArgsPreview: const <ToolArgumentPreview>[],
+      ),
+    );
+    await session.applyAgentExecutionEvent(
+      RunCancelledEvent(
+        runId: 'run-1',
+        sessionId: session.sessionKey,
+        requestId: 'request-cancel',
+        sequence: 1,
+        occurredAt: DateTime.utc(2026, 4, 12, 10),
+        reason: 'user_requested',
+      ),
+    );
+    await session.applyAgentExecutionEvent(
+      ToolCallResultEvent(
+        runId: 'run-1',
+        sessionId: session.sessionKey,
+        requestId: 'request-cancel',
+        sequence: 2,
+        occurredAt: DateTime.utc(2026, 4, 12, 10),
+        toolId: 'battery_info',
+        callId: 'call-1',
+        displayLabel: 'Battery Info',
+        status: 'success',
+        summary: 'Battery at 42%.',
+      ),
+    );
+
+    expect(session.executionTrace!.status, ExecutionTraceStatus.interrupted);
+    expect(
+      session.executionTrace!.steps.single.status,
+      ExecutionStepStatus.failed,
+    );
+    expect(
+      session.executionTrace!.steps.single.summary,
+      'Interrupted before completion',
     );
   });
 
@@ -806,6 +1473,44 @@ void main() {
       expect(session.messages.last.text, contains('could not save'));
     },
   );
+
+  test('cancelled session accepts a new user request', () async {
+    final executor = _CancelableTaskExecutor();
+    final session = AgentLoopChatSession(taskExecutor: executor);
+    executor.chatSink = session;
+
+    final firstSend = session.sendMessage('first');
+    await executor.waitForRequestCount(1);
+
+    expect(await session.cancelActiveRun(), isTrue);
+    executor.completeNext(
+      const AgentLoopResult(
+        sessionResult: SessionResult.cancelled,
+        text: '',
+        reason: 'user_requested',
+      ),
+    );
+    await firstSend;
+
+    expect(session.status, ChatSessionStatus.cancelled);
+    final secondSend = session.sendMessage('second');
+    await executor.waitForRequestCount(2);
+    executor.completeNext(
+      const AgentLoopResult(
+        sessionResult: SessionResult.completed,
+        text: 'second complete',
+        reason: 'completed',
+      ),
+    );
+    await secondSend;
+
+    expect(session.status, ChatSessionStatus.completed);
+    expect(executor.cancelCalls, 1);
+    expect(executor.requests.map((request) => request.prompt), <String>[
+      'first',
+      'second',
+    ]);
+  });
 }
 
 Future<AgentLoopChatSession> _runSessionWithResult(
@@ -826,6 +1531,15 @@ class _RecordingTaskExecutor implements AgentTaskExecutor {
   ChatExecutionSink? chatSink;
 
   @override
+  Future<bool> cancelActiveRun({
+    String? runId,
+    String? sessionKey,
+    RunCancellationReason reason = RunCancellationReason.userRequested,
+  }) async {
+    return false;
+  }
+
+  @override
   Future<ExecutionResult> execute(ExecutionRequest request) async {
     requests.add(request);
     final executionResult = ExecutionResult(
@@ -834,6 +1548,67 @@ class _RecordingTaskExecutor implements AgentTaskExecutor {
       source: request.source,
       mode: request.mode,
       terminalStatus: ExecutionLifecycleStatus.completed,
+      admissionOutcome: ExecutionAdmissionOutcome.admitted,
+      policyReason: result.reason ?? 'completed',
+      visibility: request.visibility,
+      loopResult: result,
+    );
+    await chatSink?.appendExecutionResult(request, executionResult);
+    return executionResult;
+  }
+
+  @override
+  Future<AgentTaskExecutionResult> executeTask(AgentTaskRequest request) async {
+    final loopResult = await execute(request.toExecutionRequest());
+    return AgentTaskExecutionResult.fromLoopResult(
+      loopResult.toAgentLoopResult(),
+    );
+  }
+}
+
+class _CancelableTaskExecutor implements AgentTaskExecutor {
+  final List<ExecutionRequest> requests = <ExecutionRequest>[];
+  final Queue<Completer<AgentLoopResult>> _pendingResults =
+      Queue<Completer<AgentLoopResult>>();
+  ChatExecutionSink? chatSink;
+  var cancelCalls = 0;
+
+  Future<void> waitForRequestCount(int count) async {
+    while (requests.length < count) {
+      await Future<void>.delayed(Duration.zero);
+    }
+  }
+
+  void completeNext(AgentLoopResult result) {
+    _pendingResults.removeFirst().complete(result);
+  }
+
+  @override
+  Future<bool> cancelActiveRun({
+    String? runId,
+    String? sessionKey,
+    RunCancellationReason reason = RunCancellationReason.userRequested,
+  }) async {
+    cancelCalls += 1;
+    return true;
+  }
+
+  @override
+  Future<ExecutionResult> execute(ExecutionRequest request) async {
+    requests.add(request);
+    final completer = Completer<AgentLoopResult>();
+    _pendingResults.add(completer);
+    final result = await completer.future;
+    final executionResult = ExecutionResult(
+      requestId: request.id,
+      sessionKey: request.sessionKey,
+      source: request.source,
+      mode: request.mode,
+      terminalStatus: switch (result.sessionResult) {
+        SessionResult.cancelled => ExecutionLifecycleStatus.cancelled,
+        SessionResult.completed => ExecutionLifecycleStatus.completed,
+        _ => ExecutionLifecycleStatus.failed,
+      },
       admissionOutcome: ExecutionAdmissionOutcome.admitted,
       policyReason: result.reason ?? 'completed',
       visibility: request.visibility,
@@ -874,4 +1649,37 @@ class _RecordingPersistencePort implements ChatTranscriptPersistencePort {
       persistedAt: DateTime(2026, 4, 12, 10),
     );
   }
+}
+
+ComposerCapabilityResolver _composerResolver({
+  required ModelInputCapabilities modelCapabilities,
+  required AttachmentRuntimeSupport runtimeSupport,
+}) {
+  return ComposerCapabilityResolver(
+    modelCapabilityProvider: StaticActiveModelCapabilityProvider(
+      modelCapabilities,
+    ),
+    runtimeSupport: runtimeSupport,
+  );
+}
+
+class _RuntimeSupport implements AttachmentRuntimeSupport {
+  const _RuntimeSupport({this.image = false});
+
+  final bool image;
+
+  @override
+  bool get textRuntimeAvailable => true;
+
+  @override
+  bool get imagePreprocessingAvailable => image;
+
+  @override
+  bool get audioPreprocessingAvailable => false;
+
+  @override
+  bool get documentPreprocessingAvailable => false;
+
+  @override
+  bool get speechToTextAvailable => false;
 }

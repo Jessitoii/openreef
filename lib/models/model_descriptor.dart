@@ -45,6 +45,15 @@ class ModelDescriptor {
   final String? tokenizerUrl;
   final String? iosTokenizerUrl;
   final ModelInputCapabilities inputCapabilities;
+
+  ModelCapabilityMetadata get capabilityMetadata {
+    return ModelCapabilityMetadata(
+      input: inputCapabilities,
+      supportsFunctionCalling: modelType == ModelType.functionGemma,
+      contextWindow: contextWindow,
+      ramEstimateGb: minRamGb,
+    );
+  }
 }
 
 class InstalledModelRecord {

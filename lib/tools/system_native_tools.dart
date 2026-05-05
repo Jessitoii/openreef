@@ -1,3 +1,4 @@
+import 'package:openreef/tools/tool_errors.dart';
 import 'package:openreef/tools/tool_execution_context.dart';
 import 'package:openreef/tools/tool_manifest.dart';
 
@@ -65,7 +66,15 @@ class BluetoothToggleToolHandler implements NativeToolHandler {
     ToolInvocation invocation,
     ToolExecutionContext context,
   ) async {
-    return NativeToolExecutionResult.success(content: 'Bluetooth toggled.');
+    return NativeToolExecutionResult.failure(
+      error: const ToolExecutionError(
+        code: ToolErrorCode.unsupported,
+        message: 'bluetooth_toggle_platform_restricted',
+      ),
+      metadata: <String, Object?>{
+        'requestedEnabled': invocation.arguments['enabled'],
+      },
+    );
   }
 }
 

@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:openreef/agent/agent_models.dart';
 import 'package:openreef/agent/agent_task_executor.dart';
 import 'package:openreef/agent/execution_request.dart';
 import 'package:openreef/triggers/mini_kairos.dart';
@@ -82,6 +83,15 @@ class _NoopIntervalBackend implements IntervalSchedulerBackend {
 }
 
 class _NoopTaskExecutor implements AgentTaskExecutor {
+  @override
+  Future<bool> cancelActiveRun({
+    String? runId,
+    String? sessionKey,
+    RunCancellationReason reason = RunCancellationReason.userRequested,
+  }) async {
+    return false;
+  }
+
   @override
   Future<ExecutionResult> execute(ExecutionRequest request) async {
     throw UnimplementedError();

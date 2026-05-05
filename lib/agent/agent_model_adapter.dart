@@ -26,8 +26,22 @@ abstract class ToolResponseModelAdapter implements AgentModelAdapter {
   Future<AgentResponse> continueAfterToolResponses({required int maxTokens});
 }
 
+abstract class CancellableAgentModelAdapter {
+  Future<bool> cancelGeneration();
+}
+
+enum ToolInvocationMode { none, structuredFunctionCalls, textProtocolFallback }
+
+abstract class ToolInvocationModeReporter {
+  ToolInvocationMode toolInvocationModeFor(AssembleResult context);
+}
+
 class LiteRtAgentModelAdapter
-    implements StreamingAgentModelAdapter, ToolResponseModelAdapter {
+    implements
+        StreamingAgentModelAdapter,
+        ToolResponseModelAdapter,
+        ToolInvocationModeReporter,
+        CancellableAgentModelAdapter {
   LiteRtAgentModelAdapter({
     required LiteRtBridge bridge,
     AgentResponseParser parser = const AgentResponseParser(),
@@ -67,18 +81,41 @@ class LiteRtAgentModelAdapter
   _continueStreamOverride;
 
   @override
+  ToolInvocationMode toolInvocationModeFor(AssembleResult context) {
+    if (context.selectedTools.isEmpty) {
+      return ToolInvocationMode.none;
+    }
+    if (_bridge.supportsTypedFunctionCallsFor(context.selectedTools)) {
+      return ToolInvocationMode.structuredFunctionCalls;
+    }
+    return ToolInvocationMode.textProtocolFallback;
+  }
+
+  @override
   Future<AgentResponse> generate(
     AssembleResult context, {
     required int maxTokens,
   }) async {
     final stream = _generateStreamOverride ?? _bridge.generateStream;
-    return _responseFromEvents(
-      stream(
-        context: context.toPrompt(),
-        maxTokens: maxTokens,
-        selectedTools: context.selectedTools,
-      ),
-    );
+    Future<AgentResponse> generateOnce() {
+      return _responseFromEvents(
+        stream(
+          context: context.toPrompt(),
+          maxTokens: maxTokens,
+          selectedTools: context.selectedTools,
+        ),
+      );
+    }
+
+    try {
+      return await generateOnce();
+    } catch (error) {
+      if (!_isModelClosedError(error)) {
+        rethrow;
+      }
+      await _bridge.recoverClosedModelSession();
+      return generateOnce();
+    }
   }
 
   Future<AgentResponse> _responseFromEvents(
@@ -120,16 +157,32 @@ class LiteRtAgentModelAdapter
     required int maxTokens,
   }) async* {
     final stream = _generateStreamOverride ?? _bridge.generateStream;
-    await for (final event in stream(
-      context: context.toPrompt(),
-      maxTokens: maxTokens,
-      selectedTools: context.selectedTools,
-    )) {
-      if (event.chunk.isNotEmpty) {
-        yield event.chunk;
-      }
-      if (event.isFinished) {
-        break;
+    Stream<LiteRtGenerationEvent> generateOnce() {
+      return stream(
+        context: context.toPrompt(),
+        maxTokens: maxTokens,
+        selectedTools: context.selectedTools,
+      );
+    }
+
+    var retried = false;
+    while (true) {
+      try {
+        await for (final event in generateOnce()) {
+          if (event.chunk.isNotEmpty) {
+            yield event.chunk;
+          }
+          if (event.isFinished) {
+            break;
+          }
+        }
+        return;
+      } catch (error) {
+        if (retried || !_isModelClosedError(error)) {
+          rethrow;
+        }
+        retried = true;
+        await _bridge.recoverClosedModelSession();
       }
     }
   }
@@ -147,8 +200,33 @@ class LiteRtAgentModelAdapter
   }
 
   @override
-  Future<AgentResponse> continueAfterToolResponses({required int maxTokens}) {
+  Future<AgentResponse> continueAfterToolResponses({
+    required int maxTokens,
+  }) async {
     final stream = _continueStreamOverride ?? _bridge.continueStream;
-    return _responseFromEvents(stream(maxTokens: maxTokens));
+    Future<AgentResponse> continueOnce() {
+      return _responseFromEvents(stream(maxTokens: maxTokens));
+    }
+
+    try {
+      return await continueOnce();
+    } catch (error) {
+      if (!_isModelClosedError(error)) {
+        rethrow;
+      }
+      await _bridge.recoverClosedModelSession();
+      return continueOnce();
+    }
+  }
+
+  @override
+  Future<bool> cancelGeneration() {
+    return _bridge.stopGeneration();
+  }
+
+  bool _isModelClosedError(Object error) {
+    final message = error.toString().toLowerCase();
+    return message.contains('model is closed') ||
+        message.contains('bad state: model is closed');
   }
 }

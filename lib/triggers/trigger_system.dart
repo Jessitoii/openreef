@@ -652,6 +652,7 @@ class TriggerSystem {
     return switch (status) {
       AgentTaskExecutionStatus.completed => TriggerExecutionStatus.completed,
       AgentTaskExecutionStatus.frozen => TriggerExecutionStatus.frozen,
+      AgentTaskExecutionStatus.cancelled => TriggerExecutionStatus.cancelled,
       AgentTaskExecutionStatus.failed ||
       AgentTaskExecutionStatus.rejected => TriggerExecutionStatus.failed,
     };
@@ -661,6 +662,7 @@ class TriggerSystem {
     return switch (status) {
       AgentTaskExecutionStatus.completed => TriggerRuntimeStatus.completed,
       AgentTaskExecutionStatus.frozen => TriggerRuntimeStatus.frozen,
+      AgentTaskExecutionStatus.cancelled => TriggerRuntimeStatus.cancelled,
       AgentTaskExecutionStatus.failed ||
       AgentTaskExecutionStatus.rejected => TriggerRuntimeStatus.failed,
     };

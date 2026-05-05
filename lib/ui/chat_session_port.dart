@@ -18,16 +18,87 @@ enum ChatSessionStatus {
 
 enum SubAgentActivityStatus { running, completed, failed }
 
+enum ExecutionTraceStatus { running, completed, failed, interrupted }
+
+enum ExecutionStepKind { step, tool, approval }
+
+enum ExecutionStepStatus { running, completed, failed, approvalRequired }
+
 class PendingToolApproval {
   const PendingToolApproval({
     required this.toolCallId,
     required this.toolId,
     required this.arguments,
+    required this.createdAt,
   });
 
   final String toolCallId;
   final String toolId;
   final Map<String, Object?> arguments;
+  final DateTime createdAt;
+}
+
+class ExecutionTraceDetail {
+  const ExecutionTraceDetail({required this.name, required this.value});
+
+  final String name;
+  final String value;
+}
+
+class ExecutionTraceStep {
+  const ExecutionTraceStep({
+    required this.id,
+    required this.kind,
+    required this.title,
+    required this.status,
+    required this.summary,
+    this.details = const <ExecutionTraceDetail>[],
+    this.timestamp,
+  });
+
+  final String id;
+  final ExecutionStepKind kind;
+  final String title;
+  final ExecutionStepStatus status;
+  final String summary;
+  final List<ExecutionTraceDetail> details;
+  final DateTime? timestamp;
+
+  ExecutionTraceStep copyWith({
+    String? id,
+    ExecutionStepKind? kind,
+    String? title,
+    ExecutionStepStatus? status,
+    String? summary,
+    List<ExecutionTraceDetail>? details,
+    DateTime? timestamp,
+  }) {
+    return ExecutionTraceStep(
+      id: id ?? this.id,
+      kind: kind ?? this.kind,
+      title: title ?? this.title,
+      status: status ?? this.status,
+      summary: summary ?? this.summary,
+      details: details ?? this.details,
+      timestamp: timestamp ?? this.timestamp,
+    );
+  }
+}
+
+class ExecutionTrace {
+  const ExecutionTrace({
+    required this.requestId,
+    required this.status,
+    required this.steps,
+    this.summary,
+  });
+
+  final String requestId;
+  final ExecutionTraceStatus status;
+  final List<ExecutionTraceStep> steps;
+  final String? summary;
+
+  bool get isEmpty => steps.isEmpty && (summary == null || summary!.isEmpty);
 }
 
 class ChatTranscriptMessage {
@@ -103,6 +174,10 @@ abstract class ChatSessionPort extends Listenable {
   Future<void> sendComposerSubmission(ComposerSubmission submission);
 }
 
+abstract class ExecutionTraceCapableChatSession {
+  ExecutionTrace? get executionTrace;
+}
+
 abstract class ChatSessionFactory {
   ChatSessionPort createSession({
     required String sessionId,
@@ -158,6 +233,10 @@ abstract class ApprovalCapableChatSession {
   void rejectPendingApproval();
 }
 
+abstract class CancellableChatSession {
+  Future<bool> cancelActiveRun();
+}
+
 abstract class SystemAssistantInjectableChatSession {
   void injectSystemAssistantEntry(String text);
 }
@@ -178,6 +257,13 @@ extension ChatSessionApprovalState on ChatSessionPort {
     if (this is ApprovalCapableChatSession) {
       (this as ApprovalCapableChatSession).rejectPendingApproval();
     }
+  }
+
+  Future<bool> cancelActiveRunIfSupported() {
+    if (this is CancellableChatSession) {
+      return (this as CancellableChatSession).cancelActiveRun();
+    }
+    return Future<bool>.value(false);
   }
 
   void injectSystemAssistantEntryIfSupported(String text) {

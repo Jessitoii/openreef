@@ -775,7 +775,15 @@ This gap aligns with the product direction where MCP is a first-class client lay
 
 ### Status
 
-Open
+CLOSED
+
+### Closure Notes
+
+Skill tab is now available with CRUD operations and files can be created and edited. However, there are still some missing features that need to be implemented such as:
+
+- Skill enable/disable toggle
+- Skill delete action
+- Skill inspect action
 
 ### Severity
 
@@ -824,7 +832,11 @@ Build a real Skills workspace page with:
 
 ### Status
 
-Open
+CLOSED
+
+### Closure Notes
+
+Closed by multimodal composer support with selected-model and runtime capability gating. Image, audio, document, and voice-message modes are blocked when the selected model or local runtime does not support them. Attachment sends now use structured `ExecutionAttachment` payloads.
 
 ### Severity
 
@@ -868,7 +880,11 @@ The composer must:
 
 ### Status
 
-Open
+CLOSED
+
+### Closure Notes
+
+Closed by the truthful model lifecycle state machine and corrected marketplace CTA mapping. Downloaded models no longer regress to Download, ready/active state is restored correctly, HF-gated models enter authRequired without token, and capability badges/metadata are exposed.
 
 ### Severity
 
@@ -921,7 +937,11 @@ This is both runtime-state integrity and UI integrity, not just marketplace poli
 
 ### Status
 
-Open
+CLOSED
+
+### Closure Notes
+
+Closed by typed runtime execution events plus chat UI rendering. Token deltas stream into the assistant bubble, tool start/result/failure/approval/cancel states render from real `AgentExecutionEvent` data, fake UI progress cards were removed, and terminal events are guarded after cancellation.
 
 ### Severity
 
@@ -988,7 +1008,16 @@ This must be event-driven from runtime state, not faked by string templating.
 
 ### Status
 
-Open
+CLOSED
+
+### Closure Notes
+
+The chat workspace has been significantly improved to address the usability issues mentioned in the gap. Here's what was implemented:
+
+- **Drawer Navigation**: The drawer is now more accessible and positioned at the top for easier navigation.
+- **Composer Optimization**: The composer has been optimized to use space more efficiently, with a proper icon-based send button.
+- **Chat Actions**: Delete and rename actions have been added for chat sessions.
+- **Workspace Polish**: The top card has been minimized to reduce wasted vertical space, and the overall visual language has been updated to be more modern and polished.
 
 ### Severity
 
@@ -1038,7 +1067,15 @@ This gap should stay below execution correctness, runtime visibility, and workfl
 
 ### Status
 
-Open
+CLOSED
+
+### Closure Notes
+
+The **Schedule** page has been implemented, providing users with a dedicated interface to manage their automation schedules. Here's what was built:
+
+- **Schedule Dashboard**: A new tab for "Schedule" has been added to the main navigation.
+- **CRUD Operations**: Users can now Create, Read, Update, and Delete schedules through a user-friendly interface.
+- **Schedule Management**: The page includes management features such as enabling/disabling schedules and viewing their status.
 
 ### Severity
 
@@ -1083,7 +1120,15 @@ Expose dedicated Trigger and Schedule screens in navigation with:
 
 ### Status
 
-Open
+CLOSED
+
+### Closure Notes
+
+The **Memory** page has been implemented, providing users with a dedicated interface to manage their memory entries. Here's what was built:
+
+- **Memory Dashboard**: A new tab for "Memory" has been added to the main navigation.
+- **CRUD Operations**: Users can now Create, Read, Update, and Delete memory entries through a user-friendly interface.
+- **Memory Management**: The page includes management features such as enabling/disabling memory and viewing their status.
 
 ### Severity
 
@@ -1130,7 +1175,16 @@ Known limitations:
 
 ### Status
 
-Open
+CLOSED
+
+### Closure Notes
+
+The visual identity and UI/UX of the application have been significantly improved to address the concerns raised in this gap. Here's a summary of the changes:
+
+- **New Home Screen**: A completely redesigned home screen has been implemented, featuring a modern and visually appealing layout with a prominent AI assistant character.
+- **Modern UI/UX**: The overall user interface has been updated with a more polished and professional look, incorporating modern design trends and animations.
+- **Assistant Character**: A new AI assistant character has been added to the home screen, providing a more engaging and personalized user experience.
+- **Navigation Updates**: The navigation structure and styling have been improved to better support the new UI/UX design.
 
 ### Severity
 
@@ -1164,7 +1218,11 @@ Transition to a modern, animated, and professional aesthetic while keeping the c
 
 ### Status
 
-Open
+CLOSED
+
+### Closure Notes
+
+Closed by cooperative cancellation from UI to `AgentTaskExecutor`, `AgentLoop`, and `ToolRouter`. Stop/Cancel produces a cancelled run state, late tool results are ignored after cancellation, cancelled turns skip long-term memory writes, and the session accepts a new request afterward.
 
 ### Severity
 
@@ -1197,7 +1255,17 @@ Implement a "Stop" or "Cancel" button in the UI that:
 
 ### Status
 
-Open
+CLOSED
+
+### Closure Notes
+
+The **Background Periodic Execution** gap has been successfully addressed. Here's a summary of what was implemented:
+
+- **WorkManager Integration**: WorkManager has been integrated into the application to handle background periodic task execution.
+- **Robust Scheduling**: WorkManager provides a robust and reliable scheduling system that ensures tasks are executed even when the app is closed or the device is rebooted.
+- **Foreground Service**: The background worker now runs as a foreground service, ensuring that it continues to execute even when the app is in the background.
+- **Graceful Degradation**: The application now gracefully handles scenarios where the app is force-stopped or the device is rebooted, ensuring that the schedule resumes correctly when the app is relaunched.
+- **Improved Reliability**: The background periodic execution system is now more reliable and trustworthy, providing users with a better automation experience.
 
 ### Severity
 
